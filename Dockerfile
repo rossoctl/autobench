@@ -28,6 +28,24 @@ RUN mkdir -p /etc/service/instances \
 
 # `image.source` is what links the GHCR package to this repository — without it the published
 # package shows no repo, no README and no license on its GHCR page.
+#
+# THESE LABELS ARE NOT ENOUGH ON THEIR OWN for a multi-arch push. A LABEL lands in each child
+# image's *config*, but GHCR reads `org.opencontainers.image.source` from the **index annotations**,
+# and it does not traverse the index to find the labels. Pushing a manifest list whose index has no
+# annotations leaves the package unlinked (observed: `repository: null` even with these labels
+# present and readable on both arches). So the build MUST also pass index-level annotations:
+#
+#   docker buildx build --builder multi --platform linux/amd64,linux/arm64 \
+#     --annotation "index:org.opencontainers.image.source=https://github.com/rossoctl/autobench" \
+#     --annotation "index:org.opencontainers.image.title=AutoBench" \
+#     --annotation "index:org.opencontainers.image.description=Automated benchmarking of agentic AI workloads on Rossoctl" \
+#     --annotation "index:org.opencontainers.image.licenses=Apache-2.0" \
+#     --output type=oci,dest=/tmp/autobench-oci.tar -t ghcr.io/rossoctl/autobench:<tag> .
+#   skopeo copy --all --retry-times 8 oci-archive:/tmp/autobench-oci.tar \
+#     docker://ghcr.io/rossoctl/autobench:<tag>
+#
+# (`--output type=oci` + `skopeo copy --all` rather than `--push` works around a buildkit 60s
+# push timeout; `skopeo --all` is what preserves the multi-arch index.)
 LABEL org.opencontainers.image.source="https://github.com/rossoctl/autobench" \
       org.opencontainers.image.title="AutoBench" \
       org.opencontainers.image.description="Automated benchmarking of agentic AI workloads on Rossoctl" \
