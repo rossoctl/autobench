@@ -65,6 +65,9 @@ db.sqlite3-journal
 instance/
 .webassets-cache
 
+# Per-tenant instance config (contains ROPC service credentials)
+instances/
+
 # Scrapy stuff:
 .scrapy
 
@@ -216,3 +219,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local benchmark result dumps (fetched via the API for review, not source)
+results/
+
+# Office lock/owner files: PowerPoint writes ~$<name>.pptx while a deck is open, and a plain
+# `git add -A` picks it up. It got committed three times that way.
+~$*
