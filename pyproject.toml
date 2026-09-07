@@ -1,0 +1,47 @@
+[project]
+# Distribution is `rossoctl-autobench`, not `autobench`: the short name is already taken on PyPI by an
+# unrelated benchmarking library, so `pip install autobench` would fetch the wrong package. The
+# importable package stays the short `autobench`.
+name = "rossoctl-autobench"
+version = "0.1.0"
+description = "Pure-Python AutoBench Service: caller-JWT attribution/routing, per-instance ROPC login to Rossoctl over httpx."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "httpx>=0.27",
+    "pyjwt[crypto]>=2.9",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "mcp>=1.26,<2",
+    "a2a-sdk>=0.3.0,<1.0",
+    "opentelemetry-api>=1.27",
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-http>=1.27",
+    "boto3>=1.34",
+    "pyarrow>=17",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "respx>=0.21",
+]
+
+[project.scripts]
+autobench-service = "autobench.__main__:main"
+# Client-side CLI for driving the Service over its HTTP API (stdlib-only).
+autobench-cli = "autobench.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/autobench"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

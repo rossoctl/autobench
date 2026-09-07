@@ -1,0 +1,346 @@
+import io
+import json
+
+import pytest
+
+from autobench import s3_export
+from autobench.models import MLflowTraceRecord, S3Config
+
+
+ISS = "https://keycloak-keycloak.apps.ykt2.hcp.res.ibm.com/realms/kagenti"
+
+
+class _FakeS3Client:
+    """Captures put_object calls; can be told to reject ACLs like a bucket with ACLs disabled."""
+
+    def __init__(self, reject_acl: bool = False):
+        self.puts: list[dict] = []
+        self.reject_acl = reject_acl
+
+    def put_object(self, **kwargs):
+        if self.reject_acl and "ACL" in kwargs:
+            raise RuntimeError("AccessControlListNotSupported")
+        self.puts.append(kwargs)
+
+
+def _install_client(monkeypatch, fake):
+    monkeypatch.setattr(s3_export, "_make_client", lambda cfg: fake)
+
+
+def _records(n=2):
+    return [
+        MLflowTraceRecord(
+            session_id=f"sess-{i}",
+            task_id=f"t{i}",
+            agent_name="exgentic-a2a-tool-calling-gsm8k",
+            benchmark_name="gsm8k",
+            model="openai/x",
+            num_parallel=1,
+            status="OK",
+            total_latency_s=1.5,
+            evaluation_result=True,
+            llm_input_tokens=100 + i,
+            llm_output_tokens=20 + i,
+        )
+        for i in range(n)
+    ]
+
+
+def test_source_key_strips_scheme_and_sanitizes():
+    assert (
+        s3_export.source_key(ISS)
+        == "keycloak-keycloak.apps.ykt2.hcp.res.ibm.com-realms-kagenti"
+    )
+
+
+def test_run_prefix_hierarchy_with_prefix():
+    cfg = S3Config(bucket="b", prefix="bench/")
+    prefix = s3_export.run_prefix(cfg, "alice", ISS, "gsm8k", "abc123")
+    assert prefix == (
+        "bench/alice/keycloak-keycloak.apps.ykt2.hcp.res.ibm.com-realms-kagenti/gsm8k/abc123"
+    )
+
+
+def test_run_prefix_no_prefix_and_sanitizes_username():
+    cfg = S3Config(bucket="b")
+    prefix = s3_export.run_prefix(cfg, "user@corp", ISS, "gsm8k", "r1")
+    assert prefix.startswith("user-corp/")
+    assert prefix.endswith("/gsm8k/r1")
+
+
+def test_object_url_custom_endpoint_and_aws():
+    minio = S3Config(bucket="bkt", endpoint_url="https://minio.local:9000/")
+    assert s3_export._object_url(minio, "a/b.json") == "https://minio.local:9000/bkt/a/b.json"
+    aws = S3Config(bucket="bkt", region="eu-west-1")
+    assert s3_export._object_url(aws, "a/b.json") == "https://bkt.s3.eu-west-1.amazonaws.com/a/b.json"
+
+
+def test_ndjson_bytes_roundtrip():
+    rows = [{"a": 1}, {"a": 2}]
+    lines = s3_export._ndjson_bytes(rows).decode().splitlines()
+    assert [json.loads(x) for x in lines] == rows
+
+
+def test_parquet_bytes_roundtrip():
+    import pyarrow.parquet as pq
+
+    rows = [{"session_id": "s1", "total_latency_s": 1.5}, {"session_id": "s2", "total_latency_s": 2.0}]
+    table = pq.read_table(io.BytesIO(s3_export._parquet_bytes(rows)))
+    assert table.column("session_id").to_pylist() == ["s1", "s2"]
+
+
+async def test_export_run_uploads_all_formats(monkeypatch):
+    fake = _FakeS3Client()
+    _install_client(monkeypatch, fake)
+    cfg = S3Config(bucket="bench-bkt", prefix="p")
+    artifacts = await s3_export.export_run(
+        cfg,
+        preferred_username="alice",
+        source_iss=ISS,
+        benchmark="gsm8k",
+        run_id="run-1",
+        records=_records(2),
+        run_summary={"run_id": "run-1", "status": "succeeded"},
+    )
+    names = {a.name for a in artifacts}
+    assert names == {
+        "run.json",
+        "report.ndjson",
+        "report.parquet",
+        "token_report.ndjson",
+        "token_report.parquet",
+        "manifest.json",
+    }
+    # Every object went under the expected hierarchical prefix, public-read.
+    for put in fake.puts:
+        assert put["Bucket"] == "bench-bkt"
+        assert put["Key"].startswith(
+            "p/alice/keycloak-keycloak.apps.ykt2.hcp.res.ibm.com-realms-kagenti/gsm8k/run-1/"
+        )
+        assert put["ACL"] == "public-read"
+    # NDJSON has one line per record.
+    ndjson = next(p["Body"] for p in fake.puts if p["Key"].endswith("report.ndjson"))
+    assert len(ndjson.decode().splitlines()) == 2
+    # Artifact refs carry a usable url + size.
+    parquet = next(a for a in artifacts if a.name == "report.parquet")
+    assert parquet.size_bytes > 0
+    assert parquet.url.endswith("/report.parquet")
+
+
+async def test_token_report_is_lean_per_task_view(monkeypatch):
+    fake = _FakeS3Client()
+    _install_client(monkeypatch, fake)
+    await s3_export.export_run(
+        S3Config(bucket="b"),
+        preferred_username="alice",
+        source_iss=ISS,
+        benchmark="gsm8k",
+        run_id="run-tok",
+        records=_records(2),
+        run_summary={"run_id": "run-tok"},
+    )
+    body = next(p["Body"] for p in fake.puts if p["Key"].endswith("token_report.ndjson"))
+    rows = [json.loads(x) for x in body.decode().splitlines()]
+    assert len(rows) == 2
+    r0 = rows[0]
+    # Keyed to the benchmark task, carries tokens (incl. computed total) + outcome, and stays lean.
+    assert r0["task_id"] == "t0"
+    assert r0["session_id"] == "sess-0"
+    assert r0["llm_input_tokens"] == 100
+    assert r0["llm_output_tokens"] == 20
+    assert r0["llm_total_tokens"] == 120
+    assert r0["passed"] is True
+    # The full-record-only fields (timing/infra) are projected away.
+    assert "total_latency_s" not in r0
+    assert "mcp_cpu_utilization_pct" not in r0
+
+
+async def test_manifest_indexes_every_data_object(monkeypatch):
+    fake = _FakeS3Client()
+    _install_client(monkeypatch, fake)
+    artifacts = await s3_export.export_run(
+        S3Config(bucket="b", prefix="p"),
+        preferred_username="alice",
+        source_iss=ISS,
+        benchmark="gsm8k",
+        run_id="run-man",
+        records=_records(2),
+        run_summary={"run_id": "run-man"},
+    )
+    body = next(p["Body"] for p in fake.puts if p["Key"].endswith("manifest.json"))
+    manifest = json.loads(body)
+    assert manifest["run_id"] == "run-man"
+    assert manifest["benchmark"] == "gsm8k"
+    assert manifest["prefix"].endswith("/gsm8k/run-man")
+    # The manifest indexes every data object with a usable key/url/size, but not itself.
+    listed = {a["name"] for a in manifest["artifacts"]}
+    assert listed == {
+        "run.json",
+        "report.ndjson",
+        "report.parquet",
+        "token_report.ndjson",
+        "token_report.parquet",
+    }
+    for a in manifest["artifacts"]:
+        assert a["key"] == f"{manifest['prefix']}/{a['name']}"
+        assert a["url"].endswith(f"/{a['name']}")
+        assert a["size_bytes"] > 0
+    # The manifest object itself is still returned as an artifact so a client can find it.
+    assert any(a.name == "manifest.json" for a in artifacts)
+
+
+async def test_export_run_skips_parquet_when_no_records(monkeypatch):
+    fake = _FakeS3Client()
+    _install_client(monkeypatch, fake)
+    artifacts = await s3_export.export_run(
+        S3Config(bucket="b"),
+        preferred_username="alice",
+        source_iss=ISS,
+        benchmark="gsm8k",
+        run_id="run-2",
+        records=[],
+        run_summary={"run_id": "run-2"},
+    )
+    names = {a.name for a in artifacts}
+    # No parquet without a schema; both NDJSON reports still export (empty), plus the manifest.
+    assert names == {"run.json", "report.ndjson", "token_report.ndjson", "manifest.json"}
+
+
+async def test_export_run_retries_without_acl_when_rejected(monkeypatch):
+    fake = _FakeS3Client(reject_acl=True)
+    _install_client(monkeypatch, fake)
+    artifacts = await s3_export.export_run(
+        S3Config(bucket="b", public_read=True),
+        preferred_username="alice",
+        source_iss=ISS,
+        benchmark="gsm8k",
+        run_id="run-3",
+        records=_records(1),
+        run_summary={"run_id": "run-3"},
+    )
+    assert len(artifacts) == 6
+    # The successful (retried) puts carry no ACL.
+    assert all("ACL" not in p for p in fake.puts)
+
+
+async def test_export_run_private_when_public_read_false(monkeypatch):
+    fake = _FakeS3Client()
+    _install_client(monkeypatch, fake)
+    await s3_export.export_run(
+        S3Config(bucket="b", public_read=False),
+        preferred_username="alice",
+        source_iss=ISS,
+        benchmark="gsm8k",
+        run_id="run-4",
+        records=_records(1),
+        run_summary={"run_id": "run-4"},
+    )
+    assert all("ACL" not in p for p in fake.puts)
+
+
+def _span_rows(n=2):
+    """Rows shaped like mlflow_report.span_rows output: one fixed key set, all scalars."""
+    return [
+        {
+            "task_id": f"t{i}",
+            "session_id": f"sess-{i}",
+            "trace_id": "tr1",
+            "span_id": f"s{i}",
+            "parent_span_id": "root",
+            "name": "chat gpt",
+            "kind": "chat",
+            "parent_name": "invoke_agent",
+            "depth": 3,
+            "start_time": "2026-09-01T00:00:00+00:00",
+            "latency_ms": 900.0,
+            "status_code": "OK",
+            "error_type": None,
+            "counted": True,
+            "input_tokens": 120,
+            "output_tokens": 45,
+            "request_model": "gpt-5-mini",
+            "request_max_tokens": None,
+            "finish_reasons": "tool_calls",
+        }
+        for i in range(n)
+    ]
+
+
+async def test_export_run_adds_span_report_when_spans_present(monkeypatch):
+    fake = _FakeS3Client()
+    _install_client(monkeypatch, fake)
+    artifacts = await s3_export.export_run(
+        S3Config(bucket="b"),
+        preferred_username="alice",
+        source_iss=ISS,
+        benchmark="gsm8k",
+        run_id="run-sp",
+        records=_records(2),
+        run_summary={"run_id": "run-sp"},
+        span_dicts=_span_rows(2),
+    )
+    names = {a.name for a in artifacts}
+    assert names == {
+        "run.json",
+        "report.ndjson",
+        "report.parquet",
+        "token_report.ndjson",
+        "token_report.parquet",
+        "span_report.ndjson",
+        "span_report.parquet",
+        "manifest.json",
+    }
+    # The manifest indexes the span artifacts too (it still omits only itself).
+    body = next(p["Body"] for p in fake.puts if p["Key"].endswith("manifest.json"))
+    listed = {a["name"] for a in json.loads(body)["artifacts"]}
+    assert "span_report.ndjson" in listed and "span_report.parquet" in listed
+    assert "manifest.json" not in listed
+    # NDJSON round-trips one line per span.
+    ndjson = next(p["Body"] for p in fake.puts if p["Key"].endswith("span_report.ndjson"))
+    rows = [json.loads(line) for line in ndjson.decode().splitlines()]
+    assert [r["span_id"] for r in rows] == ["s0", "s1"]
+
+
+async def test_export_run_omits_span_artifacts_when_no_spans(monkeypatch):
+    """Backwards compatible: a run with no span inventory exports exactly the previous 6 objects."""
+    fake = _FakeS3Client()
+    _install_client(monkeypatch, fake)
+    artifacts = await s3_export.export_run(
+        S3Config(bucket="b"),
+        preferred_username="alice",
+        source_iss=ISS,
+        benchmark="gsm8k",
+        run_id="run-nosp",
+        records=_records(1),
+        run_summary={"run_id": "run-nosp"},
+    )
+    assert len(artifacts) == 6
+    assert not any(a.name.startswith("span_report") for a in artifacts)
+
+
+async def test_export_run_survives_unparquetable_span_rows(monkeypatch):
+    """A bad span value must cost us only span_report.parquet — never the whole export.
+
+    Everything is serialized before any upload, so an unhandled pyarrow error here would take
+    report/token/summary down with it over a secondary artifact.
+    """
+    fake = _FakeS3Client()
+    _install_client(monkeypatch, fake)
+    rows = _span_rows(2)
+    rows[1]["latency_ms"] = {"not": "a scalar"}  # mixed type -> pyarrow raises
+
+    artifacts = await s3_export.export_run(
+        S3Config(bucket="b"),
+        preferred_username="alice",
+        source_iss=ISS,
+        benchmark="gsm8k",
+        run_id="run-bad",
+        records=_records(1),
+        run_summary={"run_id": "run-bad"},
+        span_dicts=rows,
+    )
+    names = {a.name for a in artifacts}
+    assert "span_report.parquet" not in names          # the only casualty
+    assert "span_report.ndjson" in names               # NDJSON still carries the evidence
+    assert {"run.json", "report.ndjson", "report.parquet", "token_report.ndjson",
+            "token_report.parquet", "manifest.json"} <= names

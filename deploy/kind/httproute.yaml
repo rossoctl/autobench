@@ -1,0 +1,29 @@
+# kind ONLY (dev/test). Exposes the in-cluster Service to the host client at
+# http://autobench.localtest.me:8080 via the shared istio gateway — the same
+# client contract (hostname + bearer token) as a real off-cluster deployment.
+# In production the Service runs off-cluster behind its own ingress/route/LB and
+# does NOT attach to the target cluster's gateway.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: autobench
+  namespace: rossoctl-system
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: http
+      namespace: rossoctl-system
+  hostnames:
+    - autobench.localtest.me
+  rules:
+    - backendRefs:
+        - group: ""
+          kind: Service
+          name: autobench-service
+          port: 8080
+          weight: 1
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
