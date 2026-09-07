@@ -77,4 +77,7 @@ def instance_dict() -> dict:
             "password": "s3cr3t",
         },
         "mlflow": {"tracking_url": "http://mlflow.rossoctl-system.svc.cluster.local:5000"},
+        # Required for a deploy: there is no built-in LLM gateway default, so an instance that
+        # names none is rejected with 422. Tests that assert that rejection drop this key.
+        "workload_llm": {"api_base": "https://ete-litellm.example.vpc-int/v1"},
     }

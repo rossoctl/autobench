@@ -3,9 +3,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..benchmarks.registry import (
     BENCHMARKS,
     BenchmarkDefinition,
+    LLMConfigError,
     agent_name,
     build_agent_request,
     build_tool_request,
+    require_llm_base,
     tool_name,
 )
 from ..context import RequestContext
@@ -82,6 +84,12 @@ async def deploy_benchmark(
                 "sidecar must be injected for its plugin pipeline to take effect."
             ),
         )
+    # Reject a missing LLM gateway here rather than letting the workload deploy and then die on an
+    # opaque model-health timeout inside the agent. There is no default base by design.
+    try:
+        require_llm_base(ctx.instance.workload_llm)
+    except LLMConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     tool_req = build_tool_request(defn, req.namespace, req.model, ctx.instance.workload_llm)
     agent_req = build_agent_request(
         defn,
