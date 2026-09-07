@@ -22,11 +22,37 @@ from ..models import (
 )
 
 
-_LITELLM_BASE_URL = "https://litemaas.rhoai.rh-aiservices-bu.com/v1"
-
-# Env names whose LLM-base value the instance override replaces (dropped then re-injected, so an
-# override wins cleanly instead of duplicating the name k8s would warn/drop on).
+# There is deliberately NO built-in default LLM gateway. Every deployment target reaches a different
+# one and they are not interchangeable: ykt2/ykt3 use external endpoints, while KinD must use ETE's
+# *internal* VPC endpoint (`…vpc-int…`), which the external clusters cannot reach and vice versa. A
+# baked-in default is therefore wrong for every instance while still looking plausible — and a
+# wrong-but-syntactically-valid default is worse than none, because the workload then fails deep
+# inside the agent with an opaque model-health timeout instead of at deploy time. So
+# `workload_llm.api_base` is REQUIRED per instance, and its absence is rejected up front.
+#
+# Env names carrying the LLM base. They are dropped then re-injected from the instance config so an
+# instance value wins cleanly instead of duplicating a name k8s would warn about or drop.
 _LLM_BASE_ENV = ("OPENAI_API_BASE", "LLM_API_BASE")
+
+
+class LLMConfigError(ValueError):
+    """The instance handling this deploy has no `workload_llm.api_base`."""
+
+
+def require_llm_base(llm: WorkloadLLMConfig | None) -> None:
+    """Reject a deploy whose instance names no LLM gateway.
+
+    Called at the deploy boundary rather than inside the env builders, so that constructing a
+    request object does not require inventing a gateway, while a real deploy can never proceed
+    without one and silently inherit whatever the agent image happens to default to.
+    """
+    if llm is None or not llm.api_base:
+        raise LLMConfigError(
+            "instance config is missing workload_llm.api_base: the LLM gateway must be set per "
+            "instance because no default is correct for every cluster (ykt2/ykt3 use external "
+            "endpoints, KinD needs ETE's internal vpc-int endpoint, and neither can reach the "
+            "other). Set workload_llm.api_base in the instance file, then restart the Service."
+        )
 
 
 def _secret_env(name: str, secret: str, key: str) -> EnvVar:
@@ -54,15 +80,20 @@ def _resolve_model(
 def _apply_llm(
     env_vars: list[EnvVar], llm: WorkloadLLMConfig | None, *, agent: bool
 ) -> list[EnvVar]:
-    """Override the LLM-base (and, for the agent, proxy) env from a per-instance config.
+    """Inject the LLM base (and, for the agent, proxy) env from the per-instance config.
 
-    When `llm` is None the env is returned unchanged (default path). Otherwise any existing
-    OPENAI_API_BASE/LLM_API_BASE are dropped and re-injected from the effective base so there are no
-    duplicate env names; the agent also gets egress-proxy-bypass env when configured.
+    Any existing OPENAI_API_BASE/LLM_API_BASE are dropped and re-injected from the instance's
+    `api_base` so there are no duplicate env names; the agent also gets egress-proxy-bypass env when
+    configured.
+
+    With no configured `api_base` the base env is **omitted entirely** rather than defaulted — see
+    the note on `_LLM_BASE_ENV` above. Deploys reject that case up front via
+    `require_llm_base`; this builder stays permissive so callers can construct request objects
+    without inventing a gateway.
     """
-    if llm is None:
-        return env_vars
-    base = llm.api_base or _LITELLM_BASE_URL
+    if llm is None or not llm.api_base:
+        return [e for e in env_vars if e.name not in _LLM_BASE_ENV]
+    base = llm.api_base
     out = [e for e in env_vars if e.name not in _LLM_BASE_ENV]
     out.append(EnvVar(name="OPENAI_API_BASE", value=base))
     if agent:
@@ -279,7 +310,6 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
         tool_env=[
             EnvVar(name="BENCHMARK_NAME", value="gsm8k"),
             _secret_env("HF_TOKEN", "hf-secret", "hf-token"),
-            EnvVar(name="OPENAI_API_BASE", value=_LITELLM_BASE_URL),
             # deploy-benchmark.sh appends this for gsm8k specifically.
             EnvVar(name="EXGENTIC_SET_BENCHMARK_RUNNER", value="direct"),
         ],
@@ -289,8 +319,6 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
                 container_image="ghcr.io/exgentic/exgentic-a2a-tool_calling:latest",
                 extra_env=[
                     _secret_env("OPENAI_API_KEY", "openai-secret", "apikey"),
-                    EnvVar(name="OPENAI_API_BASE", value=_LITELLM_BASE_URL),
-                    EnvVar(name="LLM_API_BASE", value=_LITELLM_BASE_URL),
                     EnvVar(name="EXGENTIC_SET_AGENT_ENABLE_TOOL_SHORTLISTING", value="true"),
                     # `service`, not `direct`/`thread`: exgentic's OTEL trace context lives in a
                     # ContextVar, and litellm fires its success callback on its own logging thread
@@ -314,7 +342,6 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
         tool_env=[
             EnvVar(name="BENCHMARK_NAME", value="tau2"),
             _secret_env("OPENAI_API_KEY", "openai-secret", "apikey"),
-            EnvVar(name="OPENAI_API_BASE", value=_LITELLM_BASE_URL),
             # deploy-benchmark.sh appends this for tau* benchmarks.
             EnvVar(name="EXGENTIC_SET_BENCHMARK_ACTION_TIMEOUT", value="1000"),
         ],
@@ -333,8 +360,6 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
                 container_image="ghcr.io/exgentic/exgentic-a2a-tool_calling:latest",
                 extra_env=[
                     _secret_env("OPENAI_API_KEY", "openai-secret", "apikey"),
-                    EnvVar(name="OPENAI_API_BASE", value=_LITELLM_BASE_URL),
-                    EnvVar(name="LLM_API_BASE", value=_LITELLM_BASE_URL),
                     EnvVar(name="EXGENTIC_SET_AGENT_ENABLE_TOOL_SHORTLISTING", value="true"),
                     # `service`, not `direct`/`thread`: exgentic's OTEL trace context lives in a
                     # ContextVar, and litellm fires its success callback on its own logging thread
@@ -374,7 +399,6 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
         # runner (gsm8k-only), no action timeout (rejected by appworld).
         tool_env=[
             EnvVar(name="BENCHMARK_NAME", value="appworld"),
-            EnvVar(name="OPENAI_API_BASE", value=_LITELLM_BASE_URL),
         ],
         tool_resources=_TOOL_RESOURCES,
         agents={
@@ -384,8 +408,6 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
                 container_image="ghcr.io/exgentic/exgentic-a2a-tool_calling:latest",
                 extra_env=[
                     _secret_env("OPENAI_API_KEY", "openai-secret", "apikey"),
-                    EnvVar(name="OPENAI_API_BASE", value=_LITELLM_BASE_URL),
-                    EnvVar(name="LLM_API_BASE", value=_LITELLM_BASE_URL),
                     EnvVar(name="EXGENTIC_SET_AGENT_ENABLE_TOOL_SHORTLISTING", value="true"),
                     # `service`, not `direct`/`thread`: exgentic's OTEL trace context lives in a
                     # ContextVar, and litellm fires its success callback on its own logging thread

@@ -196,17 +196,51 @@ def test_agent_authbridge_enabled_flows_to_wire():
     assert agent.to_rossoctl_body()["authBridgeEnabled"] is True
 
 
-def test_agent_default_llm_base_not_duplicated():
-    # No workload_llm: the registry's built-in LiteLLM base is used and appears exactly once each.
+def test_no_builtin_llm_base_default():
+    """With no instance `workload_llm` the base env is OMITTED, never defaulted.
+
+    There is deliberately no built-in gateway: ykt2/ykt3 reach external endpoints while KinD needs
+    ETE's internal `vpc-int` endpoint, and neither can reach the other, so any baked-in value is
+    wrong somewhere. A plausible-looking default is worse than none — it surfaces as an opaque
+    model-health timeout deep inside the agent instead of a deploy-time rejection.
+    """
     defn = registry.BENCHMARKS["gsm8k"]
     agent = registry.build_agent_request(defn, "tool_calling", "team1", None, "default")
+    names = [e.name for e in agent.env_vars]
+    assert "OPENAI_API_BASE" not in names
+    assert "LLM_API_BASE" not in names
+    tool = registry.build_tool_request(defn, "team1", None, None)
+    assert "OPENAI_API_BASE" not in [e.name for e in tool.env_vars]
+    assert not hasattr(registry, "_LITELLM_BASE_URL"), "the LiteMaaS default must stay removed"
+
+
+def test_deploy_requires_instance_llm_base():
+    """A real deploy with no configured gateway is rejected up front, not silently accepted."""
+    with pytest.raises(registry.LLMConfigError, match="workload_llm.api_base"):
+        registry.require_llm_base(None)
+    from autobench.models import WorkloadLLMConfig
+
+    with pytest.raises(registry.LLMConfigError, match="workload_llm.api_base"):
+        registry.require_llm_base(WorkloadLLMConfig(default_model="m"))  # present but no api_base
+    registry.require_llm_base(WorkloadLLMConfig(api_base="https://x.vpc-int/v1"))  # no raise
+
+
+def test_agent_llm_base_not_duplicated():
+    """With a base configured, each base env name appears exactly once (no dup with extra_env)."""
+    from autobench.models import WorkloadLLMConfig
+
+    defn = registry.BENCHMARKS["gsm8k"]
+    llm = WorkloadLLMConfig(api_base="https://ete-litellm.example.vpc-int/v1")
+    agent = registry.build_agent_request(
+        defn, "tool_calling", "team1", None, "default", None, False, llm
+    )
     names = [e.name for e in agent.env_vars]
     assert names.count("OPENAI_API_BASE") == 1
     assert names.count("LLM_API_BASE") == 1
     env = {e.name: e.value for e in agent.env_vars if e.value is not None}
-    assert env["OPENAI_API_BASE"] == registry._LITELLM_BASE_URL
-    assert env["LLM_API_BASE"] == registry._LITELLM_BASE_URL
-    # No proxy env on the default path.
+    assert env["OPENAI_API_BASE"] == "https://ete-litellm.example.vpc-int/v1"
+    assert env["LLM_API_BASE"] == "https://ete-litellm.example.vpc-int/v1"
+    # No proxy env unless the instance asked for it.
     assert not any(n in {"HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"} for n in names)
 
 
@@ -519,6 +553,31 @@ def test_deploy_default_sidecar_off(client, make_token, jwks_doc):
     assert r.status_code == 201, r.text
     agent_body = json.loads(agent_route.calls.last.request.content)
     assert agent_body["authBridgeEnabled"] is False
+
+
+@respx.mock
+def test_deploy_rejects_instance_without_llm_base(
+    tmp_path, instance_dict, monkeypatch, make_token, jwks_doc
+):
+    """422 before any Rossoctl call when the instance names no LLM gateway.
+
+    Guards the decision to have no built-in default: without this, such a deploy would succeed and
+    the agent would later die on an opaque model-health timeout against whatever base its image
+    happens to carry.
+    """
+    instance_dict.pop("workload_llm", None)
+    (tmp_path / "kc.json").write_text(json.dumps(instance_dict))
+    monkeypatch.setattr(settings, "instances_dir", str(tmp_path))
+    _mock_auth(jwks_doc)
+    tool_route = respx.post(f"{ROSSOCTL_URL}/api/v1/tools").mock(
+        return_value=httpx.Response(201, json={})
+    )
+    with TestClient(create_app()) as c:
+        r = c.post("/benchmarks/gsm8k/deploy", headers=_auth(make_token), json={})
+    assert r.status_code == 422, r.text
+    assert "workload_llm.api_base" in r.json()["detail"]
+    # Rejected up front: nothing was deployed.
+    assert not tool_route.called
 
 
 @respx.mock

@@ -28,7 +28,7 @@ set +x  # never trace: keeps secrets out of the terminal
 # --- config (env-overridable) ---
 REFERENCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BENCH_REPO="${BENCH_REPO:-$(cd "$REFERENCE_DIR/.." && pwd)}"
-IMAGE="${IMAGE:-ghcr.io/rossoctl/autobench:v1.25}"
+IMAGE="${IMAGE:-ghcr.io/rossoctl/autobench:v1.26}"
 CLUSTER="${CLUSTER:-rossoctl}"
 CTX="${KUBE_CONTEXT:-kind-${CLUSTER}}"
 REALM="${REALM:-rossoctl}"

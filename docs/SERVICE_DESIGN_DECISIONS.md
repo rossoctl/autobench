@@ -210,7 +210,7 @@ supported:
   `hf-secret/hf-token` (dataset access) and `EXGENTIC_SET_BENCHMARK_RUNNER=direct`.
 - **`appworld`** — the simplest catalog entry to declare: its upstream `.env.appworld` is empty, so
   the MCP tool takes no dataset secret and no simulator. Its `tool_env` is just
-  `BENCHMARK_NAME=appworld` + `OPENAI_API_BASE` (LiteLLM) — **no** `HF_TOKEN` (gsm8k-only), **no**
+  `BENCHMARK_NAME=appworld` + `OPENAI_API_BASE` (from `workload_llm.api_base`) — **no** `HF_TOKEN` (gsm8k-only), **no**
   simulator model (tau*-only), **no** `direct` runner (gsm8k-only), and — unlike gsm8k/tau2 — **no**
   `EXGENTIC_SET_BENCHMARK_ACTION_TIMEOUT`. The upstream `deploy-benchmark.sh` blanket-injects that
   action-timeout env for every benchmark, but the published `exgentic-mcp-appworld` image does **not**
@@ -252,8 +252,8 @@ When the same benchmark is run on two matrices, the artifact *set and schema are
 lives in the Service and is cluster-agnostic. Per-run **content** still differs run-to-run, and a per-task pass/fail can flip
 between clusters — but that is usually **not** a cluster/wiring/model difference. Both the agent
 model and the tau2 user-simulator resolve to the *same* `default_model` (`openai/Qwen3.6-35B-A3B`)
-against the *same shared external LiteLLM base* (`_LITELLM_BASE_URL` in `registry.py`, not a
-per-cluster in-cluster LLM). So identical inputs hit an identical model regardless of cluster; the
+against the same gateway the instance names in `workload_llm.api_base` (there is no built-in
+default, and no per-cluster in-cluster LLM). So identical inputs hit an identical model regardless of cluster; the
 divergence is **stochastic** — sampling nondeterminism across the multi-turn agent + simulator
 generations (plus provider-side batching), which flips borderline tasks. Observed concretely: a tau2
 `max_tasks=2` run scored 1.0 on kind but 0.5 on a remote cluster, and two runs on the *same* remote
@@ -417,13 +417,24 @@ already injects makes those spans nest under `Agent.Session`, filling the LLM/to
 this is *agent-side* config living in the instance file, distinct from `PUT /config`, which only
 manages the Service's own MLflow/S3.
 
-**Targeting a custom LLM endpoint (optional `workload_llm`).** The benchmark registry bakes a default
-LiteLLM base URL (`_LITELLM_BASE_URL`) and default model into every tool/agent env. That is fine when
-the instance's workloads reach the shared LiteLLM, but some instances must call a *different* gateway —
-e.g. an internal VPC LiteLLM that is not internet-routed. Because the Service owns the tool/agent spec
-and recreates it on every deploy, pointing the workloads elsewhere has to be **config, not a manual
-`oc set env`** (which any redeploy would wipe). Set `workload_llm` in the instance file to override, at
-deploy time:
+**Targeting the LLM endpoint (required `workload_llm.api_base`).** There is deliberately **no built-in
+default LLM gateway**. Every deployment target reaches a different one and they are not
+interchangeable: ykt2/ykt3 use *external* endpoints, while KinD must use ETE's *internal* VPC endpoint
+`https://ete-litellm.ai-models.vpc-int.res.ibm.com` — note **`vpc-int`**, not `vpc`. The external
+clusters cannot reach the internal host, and the internal host is only routable where the VPN carries
+the internal `9.x` range (the `vpc` form resolves into IBM Cloud ranges the split tunnel does not
+route, so it fails from a laptop and from KinD alike).
+
+A baked-in default was removed because it is wrong for every instance while still looking plausible,
+and a wrong-but-syntactically-valid base is *worse* than none: the workload deploys happily and then
+dies deep inside the agent with an opaque `HealthCheckError: Model … is not accessible:
+TimeoutError()`, which reads like a model or cluster fault rather than a config one. A deploy whose
+instance names no gateway is therefore **rejected with 422 up front** (`require_llm_base`), before any
+Rossoctl call; the env builders inject nothing rather than substituting a fallback.
+
+Because the Service owns the tool/agent spec and recreates it on every deploy, pointing the workloads
+at a gateway has to be **config, not a manual `oc set env`** (which any redeploy would wipe). Set
+`workload_llm` in the instance file:
 
 - `api_base` — replaces `OPENAI_API_BASE` (tool + agent) and `LLM_API_BASE` (agent). `build_tool_request`/
   `build_agent_request` **drop** the registry's static base entries and re-inject from this value, so
