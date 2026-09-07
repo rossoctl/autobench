@@ -36,6 +36,21 @@ The canonical 12 runs are the upstream harness's `deploy-and-evaluate` compariso
 **Tally:** 4 pass e2e with real numbers (#1, 2, 3, 7) · 1 path-validated (#4) · 3 rejected-by-design 422
 (#5, 6, 8) · 2 fail on tau2 MCP infra (#9, 10) · 2 externally blocked (#11, 12).
 
+> **Update (2026-09-07): the appworld block on #11/#12 above is superseded — appworld runs e2e on
+> both platforms.** Two separate causes were resolved. First, the arm64-only manifest: upstream
+> `ghcr.io/exgentic/exgentic-mcp-appworld:latest` now publishes a genuine `linux/amd64` +
+> `linux/arm64` index, so there is no `Exec format error` on ykt2's amd64 nodes. Second — and this
+> was the deeper one — the original blocker was the **wrong MCP surface** rather than the
+> architecture: the image must come from the exgentic `exgentic_benchmarks` framework and expose the
+> `list_tasks`/`create_session`/`evaluate_session`/`delete_session` orchestration contract (verified
+> live: 168 tasks). On the v1.26 12-run matrices both legs reach terminal `succeeded` with bounded
+> per-task verdicts on **both** OpenShift and KinD. `pass_rate` is **0.0 by design** — gemini-2.5-pro
+> driving the generic `tool_calling` agent solves no appworld tasks; the acceptance gate is that the
+> pipeline runs tasks to completion and scores them honestly, which it does. Also note the tau2
+> failures in #9/#10 above are long since fixed (per-task timeouts + a 4Gi MCP): those legs now score
+> 0.75-0.9. Everything in this file is the 2026-08-10/11 snapshot; see `SERVICE_DESIGN_DECISIONS.md`
+> and the generated `results/12run-report-v1.26-*.md` for current numbers.
+
 ## Elaboration
 
 **#1–3 (gsm8k) — full path verified.** ykt3 Service → ykt2 agent + MCP over `apps.ykt2` routes → RH
