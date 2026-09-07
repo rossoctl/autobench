@@ -549,9 +549,12 @@ def dash(sp):
 
 
 # Shared LLM gateway across the top: the agent, the tau2 user simulator and the IBAC judge all
-# call it, so drawing it once as a bar keeps three flows short and non-crossing.
+# call it, so drawing it once as a bar keeps three flows short and non-crossing. Which gateway is
+# per-instance config (workload_llm.api_base) with no default: OCP reaches an external ete-litellm,
+# KinD must reach the internal (vpc-int) one, and they have separate API-key tables.
 gw = box(s, inch(0.45), inch(1.20), inch(12.4), inch(0.6),
-         "shared LLM gateway   ·   ete-litellm / litemaas   (external)", STORE, STORE,
+         "LLM gateway (per instance)   ·   ete-litellm   ·   external for OCP / internal vpc-int for KinD",
+         STORE, STORE,
          font=12.5, font_color=WHITE, shape=MSO_SHAPE.ROUNDED_RECTANGLE)
 
 # Left column. The judge sits ABOVE the Service deliberately: the sidecar that calls it is in the
