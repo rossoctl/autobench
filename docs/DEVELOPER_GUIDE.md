@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-03T03:37:35Z
+**Last modified:** 2026-09-07T02:57:41Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
