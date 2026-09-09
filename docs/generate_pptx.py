@@ -1091,20 +1091,35 @@ box(s, inch(1.6), inch(5.75), inch(10.1), inch(0.75),
     LTGRAY, STORE, font=12.5, bold=True, font_color=INK)
 
 # ---- page numbers ----------------------------------------------------------
-# Stamped in a final pass rather than per slide, so the numbering survives any
-# reordering and cannot drift from the slide it labels.
+# Stamped in a final pass rather than per slide, so the numbering follows the real
+# order and cannot drift when slides are added or reordered.
 #
-# Position: the RIGHT END OF THE TITLE BAND, not a bottom corner. Body content on
-# slides 4/5/6/9/10/11/12 spans nearly the full width and reaches down to 7.28" of a
-# 7.5" slide, so both bottom corners collide; the band is dark navy on every slide
-# (including the title slide's full-bleed background) and its right end is empty,
-# because the longest title only reaches ~9.8".
+# LOWER RIGHT, in the right-hand gutter. Measured first: content in the bottom strip
+# reaches at most x=12.90" and y=7.28" on a 13.33 x 7.5" slide, so the 0.43" gutter to
+# the right of x=12.90 is free on every slide. Starting at 12.95 clears the widest
+# content by 0.05" even where that content runs down to 7.28.
 #
-# White and 16pt bold on purpose: a first attempt used the subtitle's light blue at
-# 12pt, which was present in the file but effectively invisible on screen.
+# Colour follows the slide: the title slide has a full-bleed navy background and needs
+# white, every other slide has a light body and needs ink. Detected rather than
+# hardcoded so a future dark slide is handled automatically.
+def _has_dark_body(slide):
+    for sh in slide.shapes:
+        if sh.width is None or sh.height is None:
+            continue
+        if sh.width >= SW * 0.98 and sh.height >= SH * 0.9:
+            try:
+                rgb = sh.fill.fore_color.rgb
+            except Exception:
+                continue
+            if 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2] < 128:
+                return True
+    return False
+
+
 for _i, _s in enumerate(prs.slides, 1):
-    textbox(_s, inch(12.15), inch(0.28), inch(0.9), inch(0.44),
-            [(str(_i), 16, True, WHITE)],
+    _col = WHITE if _has_dark_body(_s) else RGBColor(0x6B, 0x6B, 0x6B)
+    textbox(_s, inch(12.95), inch(7.06), inch(0.30), inch(0.30),
+            [(str(_i), 12, False, _col)],
             align=PP_ALIGN.RIGHT, anchor=MSO_ANCHOR.MIDDLE)
 
 out = "docs/AutoBench.pptx"
