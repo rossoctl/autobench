@@ -21,6 +21,8 @@ in step when adding or reordering slides. Page numbers are stamped in a final pa
 prs.slides, so they follow the real order automatically.
 """
 
+import datetime as _dt
+
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE
@@ -212,6 +214,9 @@ textbox(s, inch(0.9), inch(3.5), inch(11.5), inch(0.8),
 textbox(s, inch(0.9), inch(4.7), inch(11.5), inch(1.4),
         [("A pure-Python, HTTP-only service that deploys and evaluates agent benchmarks", 16, False, RGBColor(0xD8, 0xE3, 0xF0)),
          ("across multiple cluster-specific Rossoctl instances.", 16, False, RGBColor(0xD8, 0xE3, 0xF0))])
+textbox(s, inch(0.9), inch(6.25), inch(11.5), inch(0.4),
+        [(f"Last modified {_dt.datetime.now().astimezone().strftime('%Y-%m-%d %H:%M %Z')}",
+          12, False, RGBColor(0x9A, 0xB4, 0xD0))])
 
 # ================================================================ SLIDE 2: AGENDA
 s = prs.slides.add_slide(BLANK)
@@ -1094,10 +1099,13 @@ box(s, inch(1.6), inch(5.75), inch(10.1), inch(0.75),
 # 7.5" slide, so both bottom corners collide; the band is dark navy on every slide
 # (including the title slide's full-bleed background) and its right end is empty,
 # because the longest title only reaches ~9.8".
+#
+# White and 16pt bold on purpose: a first attempt used the subtitle's light blue at
+# 12pt, which was present in the file but effectively invisible on screen.
 for _i, _s in enumerate(prs.slides, 1):
-    textbox(_s, inch(12.35), inch(0.34), inch(0.7), inch(0.34),
-            [(str(_i), 12, False, RGBColor(0xC9, 0xD9, 0xEC))],
-            align=PP_ALIGN.RIGHT)
+    textbox(_s, inch(12.15), inch(0.28), inch(0.9), inch(0.44),
+            [(str(_i), 16, True, WHITE)],
+            align=PP_ALIGN.RIGHT, anchor=MSO_ANCHOR.MIDDLE)
 
 out = "docs/AutoBench.pptx"
 prs.save(out)
