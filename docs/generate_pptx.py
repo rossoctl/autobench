@@ -1118,9 +1118,16 @@ def _has_dark_body(slide):
 
 for _i, _s in enumerate(prs.slides, 1):
     _col = WHITE if _has_dark_body(_s) else RGBColor(0x6B, 0x6B, 0x6B)
-    textbox(_s, inch(12.95), inch(7.06), inch(0.30), inch(0.30),
-            [(str(_i), 12, False, _col)],
-            align=PP_ALIGN.RIGHT, anchor=MSO_ANCHOR.MIDDLE)
+    _n = textbox(_s, inch(12.90), inch(7.04), inch(0.35), inch(0.34),
+                 [(str(_i), 12, False, _col)],
+                 align=PP_ALIGN.RIGHT, anchor=MSO_ANCHOR.MIDDLE)
+    # textbox() defaults to word_wrap=True and python-pptx adds 0.1" side margins, so a
+    # 0.30" box left only ~0.10" of usable width -- enough for one digit, which put every
+    # two-digit number on two lines. Zero the margins and forbid wrapping outright.
+    _tf = _n.text_frame
+    _tf.word_wrap = False
+    _tf.margin_left = _tf.margin_right = 0
+    _tf.margin_top = _tf.margin_bottom = 0
 
 out = "docs/AutoBench.pptx"
 prs.save(out)
