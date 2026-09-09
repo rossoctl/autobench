@@ -17,7 +17,8 @@ benchmark slides over rows with intact telemetry, the results slides from the v1
 mirrored artifacts -- not from the benchmarks' published papers.
 
 Slide titles carry their agenda number, so keep the agenda list and the title_band() prefixes
-in step when adding or reordering slides.
+in step when adding or reordering slides. Page numbers are stamped in a final pass over
+prs.slides, so they follow the real order automatically.
 """
 
 from pptx import Presentation
@@ -1083,6 +1084,20 @@ box(s, inch(1.6), inch(5.75), inch(10.1), inch(0.75),
     "Cluster-agnostic by construction: works on kind / vanilla k8s / OpenShift; "
     "cross-cluster runs use per-instance route templates + a reachable internal issuer.",
     LTGRAY, STORE, font=12.5, bold=True, font_color=INK)
+
+# ---- page numbers ----------------------------------------------------------
+# Stamped in a final pass rather than per slide, so the numbering survives any
+# reordering and cannot drift from the slide it labels.
+#
+# Position: the RIGHT END OF THE TITLE BAND, not a bottom corner. Body content on
+# slides 4/5/6/9/10/11/12 spans nearly the full width and reaches down to 7.28" of a
+# 7.5" slide, so both bottom corners collide; the band is dark navy on every slide
+# (including the title slide's full-bleed background) and its right end is empty,
+# because the longest title only reaches ~9.8".
+for _i, _s in enumerate(prs.slides, 1):
+    textbox(_s, inch(12.35), inch(0.34), inch(0.7), inch(0.34),
+            [(str(_i), 12, False, RGBColor(0xC9, 0xD9, 0xEC))],
+            align=PP_ALIGN.RIGHT)
 
 out = "docs/AutoBench.pptx"
 prs.save(out)
