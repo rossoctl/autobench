@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-07T04:03:00Z
+**Last modified:** 2026-09-10T16:16:19Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -45,8 +45,9 @@ multi-turn) on the `ykt3` and `kind-rossoctl` clusters.
   - [What you need on the client side](#what-you-need-on-the-client-side)
   - [6.0 Run #1 start to finish, on the ykt3 Service driving ykt2 workloads](#60-run-1-start-to-finish-on-the-ykt3-service-driving-ykt2-workloads)
   - [6.1 The same thing in one command (`autobench-cli`)](#61-the-same-thing-in-one-command-autobench-cli)
-  - [6.2 Other validated flows](#62-other-validated-flows)
-  - [6.3 The whole 12-run matrix in one command (`reference/run-12.py`)](#63-the-whole-12-run-matrix-in-one-command-referencerun-12py)
+  - [6.2 `autobench-cli` options](#62-autobench-cli-options)
+  - [6.3 Other validated flows](#63-other-validated-flows)
+  - [6.4 The whole 12-run matrix in one command (`reference/run-12.py`)](#64-the-whole-12-run-matrix-in-one-command-referencerun-12py)
 - [7. Known limits & error codes](#7-known-limits--error-codes)
 - [8. Extending the catalog (adding or changing a benchmark)](#8-extending-the-catalog-adding-or-changing-a-benchmark)
   - [8.1 What a definition holds](#81-what-a-definition-holds)
@@ -782,10 +783,7 @@ No install? It runs straight from a checkout too — `python -m autobench.cli al
 (the module imports nothing beyond the standard library, so the server's dependencies are not
 needed to drive the API).
 
-Useful options: `--parallel` (`max_parallel_sessions`), `--task-timeout`, `--model` for a
-deploy-time swap, `--preset auth-only|ibac-only|full` and repeatable `--plugin ibac:observe` for
-AuthBridge, `--no-deploy` to reuse a deployment, `--teardown` to clean up afterwards. Switching to
-KinD needs only three lines:
+Every option is catalogued in §6.2. Switching to KinD needs only three lines:
 
 ```bash
 export BM_BASE="http://autobench.localtest.me:8080"
@@ -793,10 +791,108 @@ export BM_ISS="http://keycloak.localtest.me:8080/realms/rossoctl"
 export BM_PASSWORD_FILE="$HOME/.rossoctl-kind/benchmarker.pass"; unset BM_INSECURE BM_CARD_TEMPLATE
 ```
 
-> For the full 12-run matrix use `reference/run-12.py` instead — see §6.3. It implements the same
+> For the full 12-run matrix use `reference/run-12.py` instead — see §6.4. It implements the same
 > gates independently; consolidating both behind `autobench.cli` is a known follow-up.
 
-### 6.2 Other validated flows
+### 6.2 `autobench-cli` options
+
+`autobench-cli <command> [options]`. The **command is positional** and required; everything else
+is a flag. Defaults below are the real argparse defaults, so a bare
+`autobench-cli all` runs one gsm8k task in `team1` with a 300s budget.
+
+**Commands.** `all` runs the whole lifecycle; the rest are the individual steps, so the same
+tool serves "just run it" and "show me one HTTP call".
+
+| Command | Does |
+|---|---|
+| `all` | pre-clean → deploy → wait → run → poll → artifacts → summary (→ teardown if asked) |
+| `whoami` | `GET /hello` — proves the token and shows which instance you routed to |
+| `list` | `GET /benchmarks` |
+| `deploy` / `teardown` | create / delete the MCP tool + A2A agent |
+| `wait` | block on the readiness-stability and agent-card gates |
+| `run` | `POST …/runs`, prints the `run_id` |
+| `poll` | follow one run to a terminal status |
+| `report` | `GET …/report` (needs MLflow configured, else empty) |
+| `artifacts` | list the run's S3 objects, and mirror them with `--mirror` |
+
+**What to run, and how much of it.**
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--benchmark` | `gsm8k` | `gsm8k` \| `tau2` \| `appworld` |
+| `--tasks N` | `1` | `max_tasks` — **how many** benchmark problems to attempt |
+| `--parallel N` | `1` | `max_parallel_sessions` — **how many at once** |
+| `--timeout S` | `300` | `timeout_seconds` — wall budget for the **whole run** |
+| `--task-timeout S` | *unset* | `task_timeout_seconds` — ceiling for **one** task, clamped to `--timeout` |
+
+`--tasks` and `--parallel` are independent: `--tasks 50 --parallel 4` is fifty problems, four
+concurrently. Task selection is **deterministic**, so `--tasks 1` runs the *same* problem every
+time — which is why it is the standard smoke test (a 1-task gsm8k run reproduces 320 input / 87
+output tokens). Set `--task-timeout` on multi-turn work: without it one wedged task can consume the
+entire `--timeout`, which is why the canonical matrix gives tau2 600s per task under a 2100s wall.
+
+**Where it goes.** `--namespace` (`team1`), `--agent` (`tool_calling`), `--experiment` (`default`)
+form the scope that `deploy`/`wait`/`teardown` address.
+
+**Deploy-time only** — these bake into the workload, so they need a (re)deploy to take effect; a
+run cannot re-point them.
+
+| Option | Meaning |
+|---|---|
+| `--model` | override the agent's LLM, e.g. `openai/Azure/gpt-4.1` |
+| `--preset` | AuthBridge `plugin_preset`: `auth-only` \| `ibac-only` \| `full` |
+| `--plugin NAME:POLICY` | repeatable per-plugin override, e.g. `--plugin ibac:observe` |
+| `--on-error` | chain-default policy: `enforce` \| `observe` \| `off` |
+
+**`all` modifiers.**
+
+| Option | Effect |
+|---|---|
+| `--no-deploy` | skip the pre-clean **and** the deploy; reuse what is already there |
+| `--teardown` | delete the deployment when finished |
+
+Note the asymmetry: `all` **pre-cleans by default** (an unconditional `DELETE` before deploying, so
+it is repeatable) but **does not tear down** — the deployment is left warm unless you ask.
+
+**Readiness gates.** These exist because Service-reported readiness is not sufficient: on
+OpenShift the Route 502s for ~10s after the Service says Ready, and an agent whose MCP is not yet
+serving flaps Ready → CrashLoopBackOff → Ready.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--stable N` | `4` | consecutive ready polls required before proceeding |
+| `--settle S` | `15`, or `45` with `--preset`/`--plugin` | pause after ready; longer when a sidecar is injected |
+| `--poll-interval S` | `10` | gap between status polls |
+| `--wait-timeout S` | `1800` | give up waiting for readiness |
+
+**Results.** `--run RUN_ID` selects the run for `poll`/`report`/`artifacts`. `--mirror DIR`
+downloads every artifact under `DIR` and lists them — the artifact URLs are public, so no AWS
+credentials are involved.
+
+**Connection and auth.** Each of these takes a flag or an environment variable; the env form is
+usually easier because the same values drive `reference/run-12.py`.
+
+| Flag | Env | Default |
+|---|---|---|
+| `--base` | `BM_BASE` | *(required)* Service base URL |
+| `--iss` | `BM_ISS` | *(required)* the instance's **own** issuer — for a cross-cluster setup this is the **workload** cluster's Keycloak, not the Service's |
+| `--user` | `BM_USER` | `benchmarker` |
+| `--client` | `BM_CLIENT` | `rossoctl` |
+| `--insecure` | `BM_INSECURE=1` | off — set it for OpenShift's self-signed edge routes |
+
+Two settings are **environment-only**, with no flag:
+
+- **`BM_PASSWORD_FILE`** (a `chmod 600` file) or `BM_PASSWORD`. One is mandatory; the CLI exits
+  rather than prompting. Prefer the file so the secret never reaches your shell history.
+- **`BM_CARD_TEMPLATE`** — when set, `wait` additionally polls the agent card until it returns 200.
+  Needed for cross-cluster runs where the agent is reachable only via an edge Route.
+
+**Exit codes.** `0` success · `7` the run reached a terminal state that was **not** `succeeded` ·
+`6` a teardown that returned neither 204 nor 404 · `1` a usage or configuration error. A run that
+legitimately scores `pass_rate 0.0` still exits `0` if its status is `succeeded` — appworld does
+this by design, so do not treat exit 0 as "the agent solved it".
+
+### 6.3 Other validated flows
 
 These map to the canonical parameterized runs and were validated on `ykt3` with S3 export.
 
@@ -824,7 +920,7 @@ curl -s -X POST "$SVC/benchmarks/tau2/runs" -H "Authorization: Bearer $TOKEN" \
   -d '{"max_tasks": 20, "max_parallel_sessions": 4, "timeout_seconds": 1800}'
 ```
 
-### 6.3 The whole 12-run matrix in one command (`reference/run-12.py`)
+### 6.4 The whole 12-run matrix in one command (`reference/run-12.py`)
 
 Same idea as §6.1, one level up: instead of a single benchmark run, this drives all **12 canonical
 parameterized runs** — gsm8k at three sizes, a model swap, the four AuthBridge presets, tau2 at two
