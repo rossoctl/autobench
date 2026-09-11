@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-10T16:16:19Z
+**Last modified:** 2026-09-11T19:36:35Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -48,6 +48,7 @@ multi-turn) on the `ykt3` and `kind-rossoctl` clusters.
   - [6.2 `autobench-cli` options](#62-autobench-cli-options)
   - [6.3 Other validated flows](#63-other-validated-flows)
   - [6.4 The whole 12-run matrix in one command (`reference/run-12.py`)](#64-the-whole-12-run-matrix-in-one-command-referencerun-12py)
+  - [6.5 The 12 legs as individual `autobench-cli` commands](#65-the-12-legs-as-individual-autobench-cli-commands)
 - [7. Known limits & error codes](#7-known-limits--error-codes)
 - [8. Extending the catalog (adding or changing a benchmark)](#8-extending-the-catalog-adding-or-changing-a-benchmark)
   - [8.1 What a definition holds](#81-what-a-definition-holds)
@@ -792,7 +793,8 @@ export BM_PASSWORD_FILE="$HOME/.rossoctl-kind/benchmarker.pass"; unset BM_INSECU
 ```
 
 > For the full 12-run matrix use `reference/run-12.py` instead — see §6.4. It implements the same
-> gates independently; consolidating both behind `autobench.cli` is a known follow-up.
+> gates independently; consolidating both behind `autobench.cli` is a known follow-up. If you want
+> the 12 legs as 12 individual commands in the shape of the line above, they are tabulated in §6.5.
 
 ### 6.2 `autobench-cli` options
 
@@ -928,7 +930,8 @@ sizes, appworld at two — deploying each leg fresh, mirroring every artifact, a
 file the report generators read.
 
 Unlike `autobench-cli`, this one **is** repo-only: it is a matrix driver tied to
-`run12_specs.json`, not something you install. Clone first.
+`run12_specs.json`, not something you install. Clone first. (For the same 12 legs written out as 12
+separate one-line commands, see §6.5.)
 
 ```bash
 git clone https://github.com/rossoctl/autobench && cd autobench
@@ -1006,6 +1009,49 @@ Other knobs, all optional:
 `BM_ONLY` is how you repair a matrix without redoing it: a leg that failed to deploy can be re-run
 on its own and merged into the state file, which is exactly what happened to leg #7 of the v1.24
 OCP matrix (a transient `DELETE -> 500` left a stale tool behind and the deploy hit `409`).
+
+### 6.5 The 12 legs as individual `autobench-cli` commands
+
+Each leg of §6.4's matrix is also one `autobench-cli all` line, in the shape of the §6.1 example.
+Use these to re-run a single leg, to bisect a failure, or to read the matrix as parameters rather
+than as JSON. Export the same five variables as §6.1 first; every line then needs nothing else.
+
+| # | One-line command | What it varies |
+|---|---|---|
+| 1 | `autobench-cli all --benchmark gsm8k --tasks 1 --timeout 120 --mirror /tmp/autobench` | baseline — the smoke test |
+| 2 | `autobench-cli all --benchmark gsm8k --tasks 10 --timeout 300 --mirror /tmp/autobench` | volume, still serial |
+| 3 | `autobench-cli all --benchmark gsm8k --tasks 50 --parallel 4 --timeout 400 --mirror /tmp/autobench` | volume + concurrency |
+| 4 | `autobench-cli all --benchmark gsm8k --model openai/Azure/gpt-4.1 --tasks 5 --parallel 4 --timeout 300 --task-timeout 120 --mirror /tmp/autobench` | model swap |
+| 5 | `autobench-cli all --benchmark gsm8k --preset auth-only --tasks 5 --parallel 4 --timeout 300 --task-timeout 120 --mirror /tmp/autobench` | AuthBridge: auth-only |
+| 6 | `autobench-cli all --benchmark gsm8k --preset ibac-only --tasks 5 --parallel 4 --timeout 300 --task-timeout 120 --mirror /tmp/autobench` | AuthBridge: ibac-only |
+| 7 | `autobench-cli all --benchmark gsm8k --preset full --tasks 5 --parallel 4 --timeout 300 --task-timeout 120 --mirror /tmp/autobench` | AuthBridge: full (enforce) |
+| 8 | `autobench-cli all --benchmark gsm8k --preset full --plugin ibac:observe --tasks 5 --parallel 4 --timeout 300 --task-timeout 120 --mirror /tmp/autobench` | full + per-plugin override |
+| 9 | `autobench-cli all --benchmark tau2 --tasks 10 --timeout 2100 --task-timeout 600 --mirror /tmp/autobench` | multi-turn + user simulator |
+| 10 | `autobench-cli all --benchmark tau2 --tasks 20 --parallel 4 --timeout 2400 --task-timeout 600 --mirror /tmp/autobench` | multi-turn under concurrency |
+| 11 | `autobench-cli all --benchmark appworld --model openai/gemini-2.5-pro --tasks 5 --timeout 3300 --task-timeout 600 --mirror /tmp/autobench` | long-horizon |
+| 12 | `autobench-cli all --benchmark appworld --model openai/gemini-2.5-pro --tasks 20 --parallel 4 --timeout 3600 --task-timeout 600 --mirror /tmp/autobench` | long-horizon under concurrency |
+
+These are generated from `reference/run12_specs.json`, not transcribed: each line's run body
+round-trips to the spec's `run` object field for field, and `--model` / `--preset` / `--plugin`
+reproduce the spec's deploy body as well (`--preset` implies `authbridge_enabled: true`; the CLI
+also sends `experiment: "default"`, which is the server's default anyway). Leg #1 is the §6.1
+example unchanged. Two details the table encodes silently:
+
+- **Every line is a fresh deploy.** `all` pre-cleans with `DELETE …/deploy` before deploying, which
+  is what the matrix requires — reusing a warm agent drops the usage-bearing span and under-reports
+  tokens. That is also why `--no-deploy` has no place here.
+- **`--settle` needs no value.** It defaults to 45 s when `--preset` or `--plugin` is present and
+  15 s otherwise, matching `BM_SETTLE_SIDECAR` / `BM_SETTLE_PLAIN` in §6.4.
+
+**Run them one at a time, in order.** Legs sharing a benchmark share one deployment slot, so two of
+these in parallel will fight over it; and legs #3 and #5–#8 are only comparable because they execute
+byte-identical work, which a concurrent gateway load would spoil. Each exits `0` on `succeeded` and
+`7` otherwise (§6.2), so `&&` chaining stops at the first bad leg.
+
+> These do **not** replace `reference/run-12.py`. The driver writes
+> `/tmp/autobench/run12-<BM_LABEL>.json`, and that state file is the only input the three report
+> generators accept — run the legs by hand and you get the artifacts but none of the documents. Use
+> §6.4 for a real matrix; use this table to re-run or inspect one leg of it.
 
 ---
 
