@@ -13,7 +13,7 @@ enact/report boundaries.
 
 Content is sourced from docs/SERVICE_DESIGN_DECISIONS.md, docs/BENCHMARKS_PRIMER.md and the
 generated results/12run-*.md documents. Every measured figure comes from our own runs -- the
-benchmark slides over rows with intact telemetry, the results slides from the v1.24 matrices'
+benchmark slides over rows with intact telemetry, the results slides from the v1.26 matrices'
 mirrored artifacts -- not from the benchmarks' published papers.
 
 Slide titles carry their agenda number, so keep the agenda list and the title_band() prefixes
@@ -648,8 +648,8 @@ textbox(s, inch(0.62), inch(5.46), inch(7.0), inch(0.28),
 COLS = ((inch(0.62), inch(1.15)), (inch(1.80), inch(2.50)),
         (inch(4.35), inch(2.15)), (inch(6.55), inch(1.15)))
 ROWS = [
-    # tool-call figures are MEDIANS per task, measured over the v1.24 matrices on both platforms
-    # (gsm8k n=172 → 1, tau2 n=60 → 11, appworld n=41 → 13; appworld's spread is wide, 5–29).
+    # tool-call figures are MEDIANS per task, measured over the v1.26 matrices on both platforms
+    # (gsm8k n=172 → 1, tau2 n=60 → 11, appworld n=39 → 13; appworld's spread is wide).
     ("benchmark", "MCP tool image", "LLMs per task", "tool calls"),
     ("gsm8k", "exgentic-mcp-gsm8k", "1  (agent)", "~1"),
     ("tau2", "exgentic-mcp-tau2", "2  (+ user simulator)", "~11"),
@@ -761,28 +761,28 @@ connector(s, inch(6.72), inch(2.1), inch(6.72), inch(6.4), color=ACCENT, width=1
 
 
 # ================================ SLIDES 8-10: THE THREE BENCHMARKS (from BENCHMARKS_PRIMER.md)
-# Every figure is measured from our own v1.24/v1.23 runs, over rows with intact telemetry -- not
-# quoted from the benchmarks' published papers.
+# Every figure is measured from our own v1.26 runs (both platforms pooled, 271 task rows, none with
+# lost telemetry) -- not quoted from the benchmarks' published papers.
 s = prs.slides.add_slide(BLANK)
 title_band(s, "7.1  The Three Benchmarks — a Difficulty Ladder",
            "Not interchangeable suites: each costs ~an order of magnitude more than the last")
 grid(s, inch(0.45), inch(1.30), inch(12.4), inch(4.35), [
     ("", "gsm8k", "tau2", "appworld"),
     ("What it tests", "multi-step arithmetic", "multi-turn dialogue + tools", "long-horizon app automation"),
-    ("Tasks measured", "172", "60 (50 clean)", "40 (35 clean)"),
-    ("Pass rate", "0.98", "0.83", "0.00"),
-    ("Input tokens / task", "343", "82,966", "210,792"),
-    ("Output tokens / task", "205", "1,955", "21,499"),
-    ("LLM calls / task", "2.1", "11.4", "23.6"),
-    ("Tool calls / task", "1.1", "11.2", "13.4"),
-    ("Median task latency", "5.3 s", "92 s", "232 s"),
-    ("Slowest task seen", "62 s", "425 s", "581 s"),
+    ("Tasks measured", "172 (all clean)", "60 (all clean)", "39 (all clean)"),
+    ("Pass rate", "0.99", "0.82", "0.00"),
+    ("Input tokens / task", "341", "82,957", "254,243"),
+    ("Output tokens / task", "192", "1,969", "24,157"),
+    ("LLM calls / task", "2.1", "11.1", "28.3"),
+    ("Tool calls / task", "1.1", "11.2", "13.6"),
+    ("Median task latency", "7.7 s", "97 s", "290 s"),
+    ("Slowest task seen", "29 s", "181 s", "596 s"),
     ("Model we use", "gpt-5-mini", "claude-sonnet-5", "gemini-2.5-pro"),
     ("Task pool", "8.5K (HuggingFace)", "114 (retail domain)", "grouped scenarios"),
 ], col_w=[inch(2.5), inch(3.3), inch(3.3), inch(3.3)], font=11)
 _ban = box(s, inch(0.45), inch(6.05), inch(12.4), inch(0.95),
-    "The scale gap is the headline: a tau2 task costs ~240x the input tokens of a gsm8k task, an "
-    "appworld task ~615x. A 50-task gsm8k run is minutes; a 20-task appworld run is half an hour "
+    "The scale gap is the headline: a tau2 task costs ~245x the input tokens of a gsm8k task, an "
+    "appworld task ~745x. A 50-task gsm8k run is minutes; a 20-task appworld run is half an hour "
     "and millions of tokens. Budget by benchmark, not by task count.",
     LTGRAY, STORE, font=12.5, bold=True, font_color=INK)
 _ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
@@ -812,11 +812,11 @@ cards = [
     ]),
     ("appworld", "the stress test", KC, LTORANGE, [
         "Realistic chores across simulated apps: discover APIs, chain many calls.",
-        "~24 LLM calls, ~13 tool calls, ~211k input, ~4 min per task.",
+        "~28 LLM calls, ~14 tool calls, ~254k input, ~5 min per task.",
         "Evaluation is PROGRAMMATIC unit tests over final app state — no LLM judge.",
         "Pass rate 0.0 is honest, not broken: runs complete and tokens record —"
         " the agent just does not finish the job.",
-        "~94% of tasks call finish: it believes it is done and the assertions"
+        "~92% of tasks call finish: it believes it is done and the assertions"
         " disagree. No verification pass.",
         "Its job here is pipeline stress: long contexts, big traces, real timeouts.",
     ]),
@@ -890,7 +890,7 @@ for i, (head, body_text) in enumerate(traps, 1):
 
 
 # ============================ SLIDES 12-15: THE 12-RUN MATRIX AND WHAT IT SHOWED
-# Every figure is read from the v1.24 matrices' own mirrored artifacts (results/12run-*.md).
+# Every figure is read from the v1.26 matrices' own mirrored artifacts (results/12run-*.md).
 s = prs.slides.add_slide(BLANK)
 title_band(s, "8.1  The Canonical 12-Run Matrix",
            "One fixed set of 12 request bodies — the same on every platform, every version")
@@ -914,7 +914,7 @@ _m = box(s, inch(0.45), inch(5.45), inch(12.4), inch(1.55),
     "Why a FIXED matrix: task selection is deterministic, so the same leg run anywhere executes the "
     "same tasks in the same order. That is what makes a difference attributable to the platform "
     "rather than to the workload — and it is why every leg deploys fresh, since reusing a warm agent "
-    "silently loses telemetry. Driven by one command (reference/run-12.py, ~1h55m); the three "
+    "silently loses telemetry. Driven by one command (reference/run-12.py, ~1h50m); the three "
     "generated documents in results/ derive every number from the mirrored artifacts.",
     LTGRAY, STORE, font=12, bold=False, font_color=INK)
 _m.text_frame.margin_left = _m.text_frame.margin_right = Pt(18)
@@ -922,34 +922,34 @@ _m.text_frame.margin_left = _m.text_frame.margin_right = Pt(18)
 # ---- 7.2 what it measured ----
 s = prs.slides.add_slide(BLANK)
 title_band(s, "8.2  What the 12 Runs Measured",
-           "v1.24 on OpenShift (Service on ykt3, workloads on ykt2) — 138 tasks, all 12 legs succeeded")
+           "v1.26 on OpenShift (Service on ykt3, workloads on ykt2) — 136 tasks, all 12 legs succeeded")
 grid(s, inch(0.45), inch(1.30), inch(6.05), inch(4.15), [
     ("#", "bench", "pass", "wall", "input tokens"),
-    ("1", "gsm8k", "1.00", "9 s", "320"),
-    ("2", "gsm8k", "1.00", "42 s", "3,166"),
-    ("3", "gsm8k", "1.00", "97 s", "15,684"),
-    ("4", "gsm8k", "0.80", "26 s", "3,613"),
-    ("5", "gsm8k", "1.00", "31 s", "1,564"),
-    ("6", "gsm8k", "1.00", "35 s", "1,564"),
-    ("7", "gsm8k", "1.00", "32 s", "1,564"),
+    ("1", "gsm8k", "1.00", "4 s", "320"),
+    ("2", "gsm8k", "1.00", "63 s", "3,166"),
+    ("3", "gsm8k", "1.00", "89 s", "15,684"),
+    ("4", "gsm8k", "1.00", "11 s", "4,213"),
+    ("5", "gsm8k", "1.00", "28 s", "1,564"),
+    ("6", "gsm8k", "1.00", "32 s", "1,564"),
+    ("7", "gsm8k", "1.00", "25 s", "1,564"),
     ("8", "gsm8k", "1.00", "30 s", "1,564"),
-    ("9", "tau2", "0.70", "780 s", "852,240"),
-    ("10", "tau2", "0.85", "425 s", "1,550,718"),
-    ("11", "appworld", "0.00", "2164 s", "1,988,986"),
-    ("12", "appworld", "0.00", "1769 s", "4,009,033"),
+    ("9", "tau2", "0.80", "802 s", "863,927"),
+    ("10", "tau2", "0.85", "483 s", "1,656,724"),
+    ("11", "appworld", "0.00", "1619 s", "868,819"),
+    ("12", "appworld", "0.00", "1804 s", "3,598,730"),
 ], col_w=[inch(0.6), inch(1.5), inch(1.0), inch(1.15), inch(1.8)], font=10.5,
    first_col_bold=False)
 notes = [
-    ("All eight gsm8k legs pass", "1.00 everywhere except #4, where ONE task of five fails on the "
-     "gpt-4.1 swap. The four AuthBridge presets do not change the result — only the latency."),
-    ("tau2 is the only leg that moves", "0.70 and 0.85. Across six samples of the same 10 tasks, four "
-     "flip: at n=10 one task is worth 0.10, so this cannot resolve less than that."),
+    ("All eight gsm8k legs pass 1.00", "Including #4's gpt-4.1 swap, which cost one task of five on "
+     "the previous matrix. The four AuthBridge presets do not change the result — only the latency."),
+    ("tau2 is the only leg that moves", "0.80 and 0.85 here, 0.90 and 0.75 on KinD. Across samples of "
+     "the same 10 tasks some flip: at n=10 one task is worth 0.10, so it cannot resolve less."),
     ("appworld 0.00 is the honest result", "Runs complete, tokens record, evaluation says the goal "
-     "was not met. ~94% of tasks self-declare finish."),
-    ("Token attribution complete: 0 of 138 rows lost", "The previous matrix had 15 damaged rows that a "
+     "was not met. ~92% of tasks self-declare finish."),
+    ("Token attribution complete: 0 of 136 rows lost", "An earlier matrix had 15 damaged rows that a "
      "tokens == 0 check reported as clean. Fresh deploy per leg, plus a structural detector."),
-    ("8.4M input / 674k output tokens", "over 5,438 s of wall time — appworld alone is 71% of the "
-     "input, on 25 of 138 tasks."),
+    ("7.0M input / 513k output tokens", "over 4,990 s of wall time — appworld alone is 64% of the "
+     "input, on 20 of 136 rows."),
 ]
 y = inch(1.30)
 for head, body_text in notes:
@@ -973,26 +973,26 @@ grid(s, inch(0.45), inch(1.30), inch(7.55), inch(4.20), [
     ("1", "gsm8k", "1.00", "1.00", "320", "320", "identical"),
     ("2", "gsm8k", "1.00", "1.00", "3,166", "3,166", "identical"),
     ("3", "gsm8k", "1.00", "1.00", "15,684", "15,684", "identical"),
-    ("4", "gsm8k", "0.80", "0.80", "3,613", "4,184", ""),
+    ("4", "gsm8k", "1.00", "0.80", "4,213", "3,642", ""),
     ("5", "gsm8k", "1.00", "1.00", "1,564", "1,564", "identical"),
     ("6", "gsm8k", "1.00", "1.00", "1,564", "1,564", "identical"),
     ("7", "gsm8k", "1.00", "1.00", "1,564", "1,564", "identical"),
     ("8", "gsm8k", "1.00", "1.00", "1,564", "1,564", "identical"),
-    ("9", "tau2", "0.70", "0.70", "852,240", "847,530", ""),
-    ("10", "tau2", "0.85", "0.80", "1,550,718", "1,552,641", ""),
-    ("11", "appworld", "0.00", "0.00", "1,988,986", "1,150,541", ""),
-    ("12", "appworld", "0.00", "0.00", "4,009,033", "3,646,292", ""),
+    ("9", "tau2", "0.80", "0.90", "863,927", "910,744", ""),
+    ("10", "tau2", "0.85", "0.75", "1,656,724", "1,546,050", ""),
+    ("11", "appworld", "0.00", "0.00", "868,819", "1,071,356", ""),
+    ("12", "appworld", "0.00", "0.00", "3,598,730", "4,376,562", ""),
 ], col_w=[inch(0.55), inch(1.25), inch(0.95), inch(1.0), inch(1.35), inch(1.35), inch(1.1)],
    font=10, first_col_bold=False)
 find = [
-    ("11 of 12 pass rates identical", "Only #10 differs, by one task of twenty (0.85 vs 0.80) — and "
-     "tau2 is the leg we know flips run to run on either platform."),
+    ("9 of 12 pass rates identical", "The three that differ are #4 (one gsm8k task of five) and both "
+     "tau2 legs — and tau2 is the leg we know flips run to run on either platform."),
     ("7 legs byte-identical on input tokens", "320 / 3,166 / 15,684 / 1,564 x4. Deterministic task "
      "selection plus the same model means identical work — the strongest available proof this is a "
      "like-for-like comparison, not merely a similar one."),
-    ("Wall time is a dead heat", "5,438 s on OpenShift vs 5,429 s on a single KinD node — 0.2% apart "
-     "in total, though individual legs differ by up to 8x."),
-    ("0 lost-attribution rows on both sides", "138 OCP tasks, 135 KinD tasks."),
+    ("Wall time: 4,990 s OCP vs 5,986 s KinD", "The single node is 20% slower overall, and individual "
+     "legs differ by up to 3.4x in either direction — appworld dominates the total."),
+    ("0 lost-attribution rows on both sides", "136 OCP rows, 135 KinD rows."),
     ("So the platform is not the variable", "Where the two differ it traces to episode "
      "nondeterminism (tau2), small samples (#4 = one task), or appworld task timeouts — not to "
      "OpenShift vs KinD."),
@@ -1015,29 +1015,32 @@ title_band(s, "9.2  What AuthBridge Costs",
            "Legs #3 and #5–8 ran byte-identical work, so latency differences are the plugin config")
 grid(s, inch(0.45), inch(1.30), inch(6.35), inch(1.90), [
     ("component", "cost", "measured from"),
-    ("Sidecar present at all", "~+9.5 s / task (OCP)", "flat across all four presets"),
-    ("Tool call, sidecar but unjudged", "+0.50 s", "auth-only"),
-    ("Tool call, judged", "+1.96 s on top", "full + observe (all 5 judged)"),
+    ("Sidecar present at all", "+12.6 s / task (OCP)", "flat-ish across all four presets"),
+    ("", "+1.0 s / task (KinD)", "same legs, single node"),
+    ("Tool call, sidecar but unjudged", "+1.56 s (OCP)", "auth-only; +0 ms on KinD"),
+    ("Tool call, judged", "not isolable", "no leg judged all 5 calls"),
 ], col_w=[inch(2.6), inch(1.85), inch(1.90)], font=10.5)
-grid(s, inch(0.45), inch(3.55), inch(6.35), inch(1.90), [
-    ("", "OCP", "KinD", "ratio"),
-    ("connect_mcp with sidecar", "3131 ms", "168 ms", "18.6x"),
-    ("tool call, unjudged", "545 ms", "13 ms", "41.1x"),
-    ("tool call, judged", "2507 ms", "1167 ms", "2.1x"),
+grid(s, inch(0.45), inch(3.75), inch(6.35), inch(1.90), [
+    ("median span", "OCP", "KinD", "ratio"),
+    ("connect_mcp, no sidecar", "424 ms", "79 ms", "5.4x"),
+    ("connect_mcp with sidecar", "3200 ms", "131 ms", "24.4x"),
+    ("tool call, unjudged", "1657 ms", "11 ms", "150.6x"),
+    ("tool call, judged", "4689 ms", "1306 ms", "3.6x"),
 ], col_w=[inch(2.6), inch(1.25), inch(1.25), inch(1.25)], font=10.5)
 pts = [
     ("The judge is itself an LLM call", "The sidecar POSTs to a chat-completions endpoint per "
      "authorized action, which is why it costs seconds and why its latency is so variable."),
     ("Most of the OCP figure is topology, not plugins",
-     "The judged-call cost is comparable across platforms (2.1x) because it is dominated by a shared "
-     "external gateway. The fixed cost is 8x apart because this OCP matrix is cross-cluster — "
-     "token exchange over external routes. Do NOT quote +9.5 s as \u201cthe cost of AuthBridge\u201d; "
-     "the single-node figures (~+1.2 s fixed, ~+1.1 s per judged call) are the better estimate."),
+     "The judged-call cost is broadly comparable across platforms (3.6x) because it is dominated by a "
+     "shared external gateway. The fixed cost is 13x apart because this OCP matrix is cross-cluster — "
+     "token exchange over external routes. Do NOT quote +12.6 s as \u201cthe cost of AuthBridge\u201d; "
+     "the single-node figure (~+1.0 s fixed) is the better estimate of the intrinsic cost."),
     ("Presets cannot be ranked from these numbers",
-     "Only 1 of 6 IBAC legs authorized all of its tool calls: OCP judged 4/5, 3/5, 5/5 and KinD "
-     "3/5, 4/5, 3/5. A leg that judged fewer calls shows a lower median — a mixture, not a saving. "
-     "Whether that is decision caching under concurrency or a fail-open gap is still OPEN; the test "
-     "is one ibac-only leg at parallelism 1."),
+     "NOT ONE of the six IBAC legs authorized all of its tool calls: OCP judged 4/5, 3/5, 4/5 and KinD "
+     "3/5, 2/5, 3/5. A leg that judged fewer calls shows a lower median — a mixture, not a saving, "
+     "which is why the judged-call cost cannot be isolated at all from this matrix. Decision caching "
+     "under concurrency, or a fail-open hole? Still OPEN; the test is one ibac-only leg at "
+     "parallelism 1."),
     ("Latency only", "The sidecar's CPU and memory cost is unmeasured — every infra field in these "
      "runs is 0.0."),
 ]
