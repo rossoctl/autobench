@@ -226,27 +226,26 @@ if missing:
           "legs that did land; a missing leg is a gap in the design, not a null result.", ""]
 
 # --- design ----------------------------------------------------------------
-L += ["## What this measures, and why it is not the retrospective report", "",
+L += ["## What this measures, and why it needed its own runs", "",
       "This is a **designed experiment**: the conditions, the task count and the run order were all "
-      "chosen in order to measure plugin cost. The earlier "
-      "`12run-plugin-overhead-*.md` documents are a **retrospective mining** of the canonical 12-run "
-      "matrix, whose purpose was platform validation. Both are honest about their own arithmetic; "
-      "they differ in what the arithmetic is *capable of resolving*.", "",
-      "Three specific defects motivated this run, each measured rather than assumed:", "",
-      f"| defect in the 12-run design | evidence | fixed here by |",
+      "chosen in order to measure plugin cost. That is worth stating because the obvious cheaper "
+      "route does not work — the canonical 12-run matrix already exercises each plugin preset, so it "
+      "is tempting to mine plugin cost out of runs you have rather than commission new ones. Three "
+      "defects make those numbers unresolvable, and each was measured rather than assumed:", "",
+      f"| defect when mining the 12-run matrix | evidence | fixed here by |",
       "|---|---|---|",
       "| each preset runs **once at `max_tasks=5`** | bootstrap puts the minimum detectable "
       "preset-to-preset difference at ~**3x**; the pairs of interest differ by far less, so a null "
-      "result there was *underpowered*, not reassuring | `max_tasks=50` |",
+      "result there is *underpowered*, not reassuring | `max_tasks=50` |",
       "| per-task figures are dominated by **warm-up** | in 50-task baseline legs, which have **no "
       "sidecar at all**, the first concurrency wave costs ~**2.0–2.2x** steady state and the "
       "transient is gone by the second wave; at `p=4` that is *four of the five tasks* an n=5 leg "
       "measures | excluding the first wave, and reporting it **separately** |",
       "| **run order** aliases onto the plugin variable | the legs run in one fixed sequence, so any "
       "monotone drift loads onto whichever preset ran last | a **reversed-order replicate** |", "",
-      "The matching that made the retrospective comparison worth doing still applies and is still "
-      "load-bearing: **task selection is deterministic**, so every leg runs the same tasks in the "
-      "same order with the same model. That is verified below before any latency figure is quoted.", ""]
+      "One property of the 12-run design is worth keeping, and this experiment inherits it: **task "
+      "selection is deterministic**, so every leg runs the same tasks in the same order with the "
+      "same model. That is verified below before any latency figure is quoted.", ""]
 
 # --- order balance ---------------------------------------------------------
 L += ["## Run order was balanced by design (the crossover)", "",
@@ -636,11 +635,12 @@ L += ["## Does per-call cost hold across benchmarks? (the tau2 linearity test)",
 tau_base = next((n for n in TAU if cond(n) == "baseline"), None)
 tau_pre = next((n for n in TAU if cond(n) != "baseline"), None)
 if tau_base and tau_pre and rows(tau_base) and rows(tau_pre):
-    L += ["The retrospective reports project plugin cost onto other benchmarks by multiplying a "
-          "gsm8k per-tool-call delta by each benchmark's tool-call count. That assumes per-call cost "
-          "is a **constant** across benchmarks. gsm8k makes ~1 substantive tool call per task; tau2 "
-          "makes roughly an order of magnitude more, so this pair tests the assumption directly "
-          "instead of resting on it.", "",
+    L += ["There is a tempting shortcut for pricing a plugin on an expensive benchmark without "
+          "running it: take the per-tool-call delta from cheap gsm8k legs and multiply by the "
+          "target benchmark's tool-call count. That assumes per-call cost is a **constant** across "
+          "benchmarks. gsm8k makes ~1 substantive tool call per task; tau2 makes roughly an order "
+          "of magnitude more, so this pair tests the assumption directly instead of resting on "
+          "it.", "",
           "| leg | condition | tasks OK | tool calls/task | non-LLM s/task (med) | per tool call (s) |",
           "|---|---|---:|---:|---:|---:|"]
     per_call = {}
@@ -665,7 +665,7 @@ if tau_base and tau_pre and rows(tau_base) and rows(tau_pre):
               f"**{f(d_call, '%+.3f')} s per tool call**.", ""]
         if gs_delta is not None and tp:
             proj = gs_delta * tp
-            L += [f"**Projected from gsm8k** by the retrospective method: the same condition costs "
+            L += [f"**Projected from gsm8k** by that shortcut: the same condition costs "
                   f"{gs_delta:+.3f} s/task on gsm8k over ~1 tool call, which scaled by tau2's "
                   f"{tp:.0f} tool calls/task predicts **{proj:+.2f} s/task**.", ""]
             if abs(proj) > 1e-9:
@@ -677,16 +677,15 @@ if tau_base and tau_pre and rows(tau_base) and rows(tau_pre):
                           "other benchmarks — with the factor-of-two caveat now measured rather "
                           "than hoped for.", ""]
                 else:
-                    L += ["**The projection does not hold.** Per-call cost is not a constant across "
-                          "benchmarks, so the projected tau2/appworld figures in the retrospective "
-                          "reports should be withdrawn rather than re-scaled: whatever drives the "
+                    L += ["**The shortcut does not hold, so do not price a benchmark this way.** "
+                          "Per-call cost is not a constant across benchmarks: whatever drives the "
                           "difference (session reuse, connection amortisation, cache behaviour "
                           "across many calls in one session) is not captured by a per-call "
-                          "constant.", ""]
+                          "constant. Measure the benchmark instead — it costs two legs.", ""]
 else:
-    L += ["⚠️ The tau2 pair did not both complete, so the per-call projection used by the "
-          "retrospective reports remains **untested**. It should continue to be labelled an "
-          "assumption wherever it is quoted.", ""]
+    L += ["⚠️ The tau2 pair did not both complete, so the per-call scaling shortcut remains "
+          "**untested in this run**. Treat it as an assumption, not a measurement, wherever it "
+          "is quoted.", ""]
 
 # --- limitations -----------------------------------------------------------
 L += ["## Confidence and limitations", "",

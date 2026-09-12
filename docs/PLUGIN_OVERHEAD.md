@@ -116,21 +116,28 @@ could not settle.
 
 **The judged-call ratio is ~1.** For every IBAC preset it lands at 0.94–1.00 on both clusters; for
 `baseline` and `auth-only` it is exactly 0.00, which is correct and also confirms nothing else is
-consulting the judge. Earlier 12-run matrices showed alarming ratios like "3 of 5 calls authorized."
-At n=50 that turns out to have been small-sample noise on a quantity that is really ~1.
+consulting the judge. This is worth knowing because the ratio looks alarming on small runs: a 5-task
+leg can easily show "3 of 5 calls authorized," which invites the conclusion that the judge is being
+skipped. At n=50 that reading dissolves. **Don't read a judged/tool ratio off a handful of calls.**
 
-**Per-call cost is not a cross-benchmark constant.** We used to project plugin cost onto other
-benchmarks by multiplying a gsm8k per-tool-call delta by the target benchmark's tool-call count.
-tau2 makes ~11 tool calls per task against gsm8k's ~1, so it tests the assumption directly:
+**Per-call cost is not a cross-benchmark constant.** There is an obvious shortcut for estimating what
+a plugin will cost on tau2 or appworld without running them: take the per-tool-call delta measured on
+cheap gsm8k legs and multiply by the target benchmark's tool-call count. **It does not work.** tau2
+makes ~11 tool calls per task against gsm8k's ~1, so it tests the assumption directly:
 
 | cluster | tau2 measured Δ/task | projected from gsm8k | measured/projected |
 |---|---:|---:|---:|
 | OpenShift | +70.8 s | 156.3 s | 0.45x |
 | KinD | +46.8 s | 20.9 s | 2.24x |
 
-The projection is not merely inaccurate, it is **wrong in opposite directions**, so no correction
-factor can rescue it. We withdrew the projected figures rather than rescaling them. Measuring a
-benchmark's plugin cost directly costs two legs; do that instead.
+(Figures from [plugin-study-xplat.md](results/v1.27-2026-09-12/plugin-study-xplat.md). The
+per-platform reports quote 0.46x for OpenShift, because they pool the gsm8k baseline per leg with
+warm-up excluded while the cross-platform generator pools it across conditions. The 2% gap is
+immaterial to a number whose point is that it is off by a factor of two.)
+
+The shortcut is not merely imprecise — it is **wrong in opposite directions on the two clusters**,
+which rules out fixing it with a correction factor. Per-call cost is not the constant the arithmetic
+needs it to be. Measuring a benchmark's plugin cost directly costs two legs; do that instead.
 
 ## Two traps in reading any of our latency numbers
 
