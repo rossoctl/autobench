@@ -455,7 +455,7 @@ GENERATED = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 head = [f"# AutoBench Service — 12 Parameterized Runs ({PLATFORM})", "",
         f"**Report generated:** {GENERATED}  ",
-        f"**Service version:** `{VERSION}`  ", f"**Target:** {data.get('base')}  ",
+        f"**Service version:** `{VERSION}`  ", f"**Platform:** {PLATFORM}  ",  # never the raw endpoint: these reports are public
         f"**Runs executed:** {len(runs)}", "",
         "All numbers below are derived programmatically from the mirrored S3 artifacts "
         "(`report.ndjson` / `token_report.ndjson` / `span_report.ndjson` / `manifest.json`) — none "

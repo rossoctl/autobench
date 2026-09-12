@@ -150,7 +150,7 @@ GEN = datetime = dt.datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 L = [f"# AuthBridge plugin overhead — comparative estimate ({PLATFORM})", "",
      f"**Report generated:** {GEN}  ",
      f"**Service version:** `{VERSION}`  ",
-     f"**Target:** {data.get('base')}  ",
+     f"**Platform:** {PLATFORM}  ",  # never the raw endpoint: these reports are public
      f"**Legs compared:** #{BASELINE} (baseline) vs #" + ", #".join(str(n) for n in LEGS[1:]),
      f"  ·  **tasks per leg:** {len(common_sorted)} (`{'`, `'.join(common_sorted)}`)  ",
      f"**Judge-call evidence:** {'included' if judge_ts else '**ABSENT** — see the warning below'}",
@@ -466,30 +466,27 @@ for n in LEGS:
         f(st.mean(v), "%.0f") if v else "—"))
 L.append("")
 
-# --- projection ------------------------------------------------------------
+# --- projection: WITHDRAWN, and deliberately replaced rather than deleted -----------------------
+# This block used to multiply the gsm8k per-authorized-call delta by another benchmark's tool-call
+# count to project plugin cost onto tau2/appworld. The designed study (2026-09-12, both platforms)
+# measured tau2 directly under a preset and falsified the assumption: measured/projected came out
+# 0.45x on OCP and 2.24x on KinD. Wrong in *opposite* directions is not fixable with a correction
+# factor, so the projection is withdrawn. The note stays so a reader of an older report knows why
+# the numbers they remember are gone.
 if PURE and pure_tool is not None and base_tool is not None:
     delta = (pure_tool - base_tool) / 1000.0
-    L += ["## Projection to the heavier benchmarks (NOT a measurement)", "",
-          "gsm8k makes only one substantive tool call per task, so it barely exercises the marginal "
-          "cost. Multiplying the measured per-authorized-call delta "
-          f"(**{f(delta, '%.2f')} s**, from `{label(PURE)}`) by the tool-call counts observed "
-          "elsewhere in the same matrix indicates what the same policy would cost on a tool-heavy "
-          "workload:", "",
-          "| benchmark | tool calls/task (measured) | projected added latency/task |",
-          "|---|---:|---:|"]
-    gs = med([x.get("tool_count") or 0 for x in leg_rows(BASELINE)])
-    L.append(f"| gsm8k | {f(gs, '%.0f')} | {f(delta * (gs or 0), '%.1f')} s |")
-    for n, bench in ((9, "tau2"), (11, "appworld")):
-        rr = rows(n)
-        if rr:
-            tc = med([x.get("tool_count") or 0 for x in rr])
-            L.append(f"| {bench} | {f(tc, '%.0f')} | {f(delta * (tc or 0), '%.1f')} s |")
-    L += ["",
-          "**A model-based projection, not a measurement.** It assumes per-call cost is constant "
-          "across benchmarks and unaffected by concurrency — untested, and the judged/tool gap above "
-          "is direct evidence that call *counts* behave unexpectedly under concurrency. tau2 and "
-          "appworld were never run with a preset in this matrix. Treat as a planning indication and "
-          "measure before relying on it.", ""]
+    L += ["## Projection to the heavier benchmarks — WITHDRAWN", "",
+          "Earlier versions of this report projected plugin cost onto tau2 and appworld by "
+          f"multiplying the measured per-authorized-call delta (**{f(delta, '%.2f')} s**, from "
+          f"`{label(PURE)}`) by each benchmark's tool-call count. **Those figures have been "
+          "withdrawn and are not reproduced here.**", "",
+          "The projection assumed per-call cost is a constant across benchmarks. The designed "
+          "experiment measured tau2 directly under a preset on two clusters and found the "
+          "assumption false **in opposite directions** — measured/projected was 0.45x on one "
+          "cluster and 2.24x on the other. A method that errs both ways cannot be rescued by a "
+          "correction factor.", "",
+          "Per-benchmark plugin cost has to be measured. It costs two legs; see "
+          "`docs/PLUGIN_OVERHEAD.md` and `reference/plugin_study_specs.json`.", ""]
 
 # --- per-task --------------------------------------------------------------
 L += ["## Per-task detail (non-LLM path)", "",
