@@ -25,7 +25,19 @@ server-side user simulator), and **appworld** (long-horizon app automation). See
 
 [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) walks from deploy to result analysis with real,
 copy-pasteable commands. [docs/SERVICE_DESIGN_DECISIONS.md](docs/SERVICE_DESIGN_DECISIONS.md) records
-why the service is shaped the way it is.
+why the service is shaped the way it is. [CLAUDE.md](CLAUDE.md) collects the conventions and traps
+that matter when changing the code rather than using it.
+
+## Results
+
+[docs/results/](docs/results/README.md) publishes the reports for **landmark runs** — the current
+v1.27 cross-cluster baseline and the designed AuthBridge plugin-overhead study. All of them are
+generated from S3 artifacts, never hand-edited.
+
+For the plugin question specifically, read [docs/PLUGIN_OVERHEAD.md](docs/PLUGIN_OVERHEAD.md) first:
+it explains the sidecar/preset/judge vocabulary and carries the conclusions, the headline being that
+our two clusters disagree about *which* plugin layer costs anything — so no absolute per-task figure
+is portable between them.
 
 ## License
 
