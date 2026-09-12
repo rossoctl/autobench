@@ -1,0 +1,351 @@
+{
+  "study": "AuthBridge plugin overhead — designed experiment (supersedes the retrospective mining of the 12-run matrix)",
+  "why": [
+    "The 12-run matrix runs each preset ONCE at max_tasks=5. Bootstrapping the v1.26+v1.27 samples shows that",
+    "buys no resolving power at all: no preset-to-preset difference below 3x is detectable, and the per-leg",
+    "median of a judged/unjudged MIXTURE is a step function of the judged count rather than an estimate of",
+    "anything. Worse, the 50-task baseline leg shows the first 5 tasks cost 2.1x (OCP) to 3.0x (KinD) more per",
+    "task than steady state WITH NO SIDECAR AT ALL, so every n=5 'fixed cost per task' figure is warm-up.",
+    "This file fixes the three defects that matter: n, replication, and run order.",
+    "",
+    "#111 is the decisive security test and runs FIRST because it is the cheapest and the only one with a",
+    "security consequence: ibac-only at max_parallel_sessions=1. Serial execution means decision caching shows",
+    "~1 judge call for the whole leg, while no caching shows one per tool call. Across four matrices, 12 IBAC",
+    "legs, only one ever reached 5/5 judged, and the counts wobble randomly across identical configs -- the",
+    "signature of a race, which is either benign caching or a FAIL-OPEN enforcement gap.",
+    "",
+    "#101-#110 are two replicates of the five gsm8k conditions at max_tasks=50. n=50 amortises the warm-up",
+    "transient (visible and gone by task ~10), so per-task cost splits into a one-time admission cost and a",
+    "steady-state marginal cost -- a decomposition n=5 cannot express. It also lifts the minimum detectable",
+    "preset-to-preset difference from '3x, i.e. nothing' to roughly 10-30%.",
+    "",
+    "ORDER IS THE POINT of running the second replicate in reverse. In the 12-run the legs run in a fixed",
+    "sequence, so gateway warm-up and response caching alias perfectly onto the plugin variable -- demonstrably",
+    "so on the LLM path, which is why those spans are excluded from the headline. Reversing replicate 2 makes",
+    "every condition's mean run position identical (11), so a monotone drift over the session cancels instead",
+    "of loading onto one preset.",
+    "",
+    "#112/#113 test the projection. The retrospective report multiplies a gsm8k per-call delta by tool-call",
+    "count to project tau2 at ~25.6s/task and appworld at ~37.3s/task, assuming per-call cost is constant",
+    "across benchmarks. tau2 makes ~11 tool calls per task against gsm8k's 1, so this matched pair MEASURES",
+    "that instead of assuming it. It is also the leg most likely to fail outright: the preset chain has only",
+    "ever been exercised on gsm8k."
+  ],
+  "order": [111, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 112, 113],
+  "legs": [
+    {
+      "n": 111,
+      "bench": "gsm8k",
+      "role": "serial-diagnostic",
+      "condition": "ibac-only",
+      "rep": 0,
+      "title": "111 — DIAGNOSTIC: gsm8k --plugin-preset ibac-only --max-tasks 10 --max-parallel-sessions 1 — caching vs fail-open",
+      "reading": "10 serial tool calls. ~1-2 judge calls => decision caching (benign). ~10 => no caching, and the judged/tool gaps seen under p=4 are a FAIL-OPEN gap.",
+      "deploy": "DELETE gsm8k; POST deploy {\"authbridge_enabled\":true,\"plugin_preset\":\"ibac-only\"}",
+      "deploy_body": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "authbridge_enabled": true,
+        "plugin_preset": "ibac-only"
+      },
+      "teardown": true,
+      "run": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "max_tasks": 10,
+        "max_parallel_sessions": 1,
+        "timeout_seconds": 900,
+        "task_timeout_seconds": 120
+      }
+    },
+
+    {
+      "n": 101,
+      "bench": "gsm8k",
+      "role": "rep1",
+      "condition": "baseline",
+      "rep": 1,
+      "title": "101 — rep1 baseline: gsm8k --max-tasks 50 --max-parallel-sessions 4 — no plugins",
+      "deploy": "fresh deploy, no AuthBridge",
+      "deploy_body": {
+        "agent": "tool_calling",
+        "namespace": "team1"
+      },
+      "teardown": true,
+      "run": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "max_tasks": 50,
+        "max_parallel_sessions": 4,
+        "timeout_seconds": 600,
+        "task_timeout_seconds": 120
+      }
+    },
+    {
+      "n": 102,
+      "bench": "gsm8k",
+      "role": "rep1",
+      "condition": "auth-only",
+      "rep": 1,
+      "title": "102 — rep1 auth-only: gsm8k --plugin-preset auth-only --max-tasks 50",
+      "deploy": "DELETE gsm8k; POST deploy {\"authbridge_enabled\":true,\"plugin_preset\":\"auth-only\"}",
+      "deploy_body": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "authbridge_enabled": true,
+        "plugin_preset": "auth-only"
+      },
+      "teardown": true,
+      "run": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "max_tasks": 50,
+        "max_parallel_sessions": 4,
+        "timeout_seconds": 1200,
+        "task_timeout_seconds": 120
+      }
+    },
+    {
+      "n": 103,
+      "bench": "gsm8k",
+      "role": "rep1",
+      "condition": "ibac-only",
+      "rep": 1,
+      "title": "103 — rep1 ibac-only: gsm8k --plugin-preset ibac-only --max-tasks 50",
+      "deploy": "DELETE gsm8k; POST deploy {\"authbridge_enabled\":true,\"plugin_preset\":\"ibac-only\"}",
+      "deploy_body": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "authbridge_enabled": true,
+        "plugin_preset": "ibac-only"
+      },
+      "teardown": true,
+      "run": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "max_tasks": 50,
+        "max_parallel_sessions": 4,
+        "timeout_seconds": 1200,
+        "task_timeout_seconds": 120
+      }
+    },
+    {
+      "n": 104,
+      "bench": "gsm8k",
+      "role": "rep1",
+      "condition": "full",
+      "rep": 1,
+      "title": "104 — rep1 full: gsm8k --plugin-preset full --max-tasks 50",
+      "deploy": "DELETE gsm8k; POST deploy {\"authbridge_enabled\":true,\"plugin_preset\":\"full\"}",
+      "deploy_body": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "authbridge_enabled": true,
+        "plugin_preset": "full"
+      },
+      "teardown": true,
+      "run": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "max_tasks": 50,
+        "max_parallel_sessions": 4,
+        "timeout_seconds": 1200,
+        "task_timeout_seconds": 120
+      }
+    },
+    {
+      "n": 105,
+      "bench": "gsm8k",
+      "role": "rep1",
+      "condition": "full+ibac:observe",
+      "rep": 1,
+      "title": "105 — rep1 full+observe: gsm8k --plugin-preset full --plugin ibac:observe --max-tasks 50",
+      "deploy": "DELETE gsm8k; POST deploy {\"authbridge_enabled\":true,\"plugin_preset\":\"full\",\"plugins\":[\"ibac:observe\"]}",
+      "deploy_body": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "authbridge_enabled": true,
+        "plugin_preset": "full",
+        "plugins": ["ibac:observe"]
+      },
+      "teardown": true,
+      "run": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "max_tasks": 50,
+        "max_parallel_sessions": 4,
+        "timeout_seconds": 1200,
+        "task_timeout_seconds": 120
+      }
+    },
+
+    {
+      "n": 106,
+      "bench": "gsm8k",
+      "role": "rep2",
+      "condition": "full+ibac:observe",
+      "rep": 2,
+      "title": "106 — rep2 full+observe (reverse order): gsm8k --plugin-preset full --plugin ibac:observe --max-tasks 50",
+      "deploy": "DELETE gsm8k; POST deploy {\"authbridge_enabled\":true,\"plugin_preset\":\"full\",\"plugins\":[\"ibac:observe\"]}",
+      "deploy_body": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "authbridge_enabled": true,
+        "plugin_preset": "full",
+        "plugins": ["ibac:observe"]
+      },
+      "teardown": true,
+      "run": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "max_tasks": 50,
+        "max_parallel_sessions": 4,
+        "timeout_seconds": 1200,
+        "task_timeout_seconds": 120
+      }
+    },
+    {
+      "n": 107,
+      "bench": "gsm8k",
+      "role": "rep2",
+      "condition": "full",
+      "rep": 2,
+      "title": "107 — rep2 full (reverse order): gsm8k --plugin-preset full --max-tasks 50",
+      "deploy": "DELETE gsm8k; POST deploy {\"authbridge_enabled\":true,\"plugin_preset\":\"full\"}",
+      "deploy_body": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "authbridge_enabled": true,
+        "plugin_preset": "full"
+      },
+      "teardown": true,
+      "run": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "max_tasks": 50,
+        "max_parallel_sessions": 4,
+        "timeout_seconds": 1200,
+        "task_timeout_seconds": 120
+      }
+    },
+    {
+      "n": 108,
+      "bench": "gsm8k",
+      "role": "rep2",
+      "condition": "ibac-only",
+      "rep": 2,
+      "title": "108 — rep2 ibac-only (reverse order): gsm8k --plugin-preset ibac-only --max-tasks 50",
+      "deploy": "DELETE gsm8k; POST deploy {\"authbridge_enabled\":true,\"plugin_preset\":\"ibac-only\"}",
+      "deploy_body": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "authbridge_enabled": true,
+        "plugin_preset": "ibac-only"
+      },
+      "teardown": true,
+      "run": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "max_tasks": 50,
+        "max_parallel_sessions": 4,
+        "timeout_seconds": 1200,
+        "task_timeout_seconds": 120
+      }
+    },
+    {
+      "n": 109,
+      "bench": "gsm8k",
+      "role": "rep2",
+      "condition": "auth-only",
+      "rep": 2,
+      "title": "109 — rep2 auth-only (reverse order): gsm8k --plugin-preset auth-only --max-tasks 50",
+      "deploy": "DELETE gsm8k; POST deploy {\"authbridge_enabled\":true,\"plugin_preset\":\"auth-only\"}",
+      "deploy_body": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "authbridge_enabled": true,
+        "plugin_preset": "auth-only"
+      },
+      "teardown": true,
+      "run": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "max_tasks": 50,
+        "max_parallel_sessions": 4,
+        "timeout_seconds": 1200,
+        "task_timeout_seconds": 120
+      }
+    },
+    {
+      "n": 110,
+      "bench": "gsm8k",
+      "role": "rep2",
+      "condition": "baseline",
+      "rep": 2,
+      "title": "110 — rep2 baseline (reverse order): gsm8k --max-tasks 50 — no plugins",
+      "deploy": "fresh deploy, no AuthBridge",
+      "deploy_body": {
+        "agent": "tool_calling",
+        "namespace": "team1"
+      },
+      "teardown": true,
+      "run": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "max_tasks": 50,
+        "max_parallel_sessions": 4,
+        "timeout_seconds": 600,
+        "task_timeout_seconds": 120
+      }
+    },
+
+    {
+      "n": 112,
+      "bench": "tau2",
+      "role": "linearity",
+      "condition": "baseline",
+      "rep": 1,
+      "title": "112 — LINEARITY baseline: tau2 --max-tasks 10 --max-parallel-sessions 1 — no plugins (~11 tool calls/task)",
+      "deploy": "force teardown then fresh tau2 deploy",
+      "deploy_body": {
+        "agent": "tool_calling",
+        "namespace": "team1"
+      },
+      "teardown": true,
+      "run": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "max_tasks": 10,
+        "max_parallel_sessions": 1,
+        "timeout_seconds": 2400,
+        "task_timeout_seconds": 600
+      }
+    },
+    {
+      "n": 113,
+      "bench": "tau2",
+      "role": "linearity",
+      "condition": "full+ibac:observe",
+      "rep": 1,
+      "title": "113 — LINEARITY preset: tau2 --plugin-preset full --plugin ibac:observe --max-tasks 10 — tests the per-call projection",
+      "reading": "Projected +25.6s/task from the gsm8k per-call delta x 11 tool calls. If the measured delta differs, per-call cost is NOT constant across benchmarks and the projection in the retrospective reports must be withdrawn.",
+      "deploy": "DELETE tau2; POST deploy {\"authbridge_enabled\":true,\"plugin_preset\":\"full\",\"plugins\":[\"ibac:observe\"]}",
+      "deploy_body": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "authbridge_enabled": true,
+        "plugin_preset": "full",
+        "plugins": ["ibac:observe"]
+      },
+      "teardown": true,
+      "run": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "max_tasks": 10,
+        "max_parallel_sessions": 1,
+        "timeout_seconds": 3600,
+        "task_timeout_seconds": 600
+      }
+    }
+  ]
+}
