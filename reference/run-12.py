@@ -14,6 +14,16 @@ Target is selected entirely by env so the same script drives kind and the OCP cl
     BM_ONLY          comma-separated run numbers to execute (default all 12)
     BM_CARD_TEMPLATE optional agent-card URL template with {service}/{namespace}, e.g.
                      https://{service}-{namespace}.apps.ykt2.../.well-known/agent-card.json
+    BM_SPECS         alternate spec file (default reference/run12_specs.json)
+
+SPEC FILE FORMAT — two accepted shapes, so an experiment can reuse this driver without touching the
+canonical matrix:
+
+  * a bare LIST of legs — the canonical `run12_specs.json`. Execution order is the fixed
+    `[1,2,3,5,6,7,8,4,9,10,11,12]` below (#4 last of the gsm8k block: it swaps the model).
+  * an OBJECT `{"order": [...], "legs": [...]}` — carries its own execution order, which is what an
+    experiment needs: replicate blocks have to be *interleaved* to keep run order from aliasing onto
+    the condition being measured. `reference/plugin_study_specs.json` is one.
 
 WARM-UP: the Service reports tool_ready/agent_ready BEFORE an OpenShift Route actually serves the
 agent — a run started in that window fails every task in <1s with
@@ -51,7 +61,8 @@ SETTLE_PLAIN = float(os.environ.get("BM_SETTLE_PLAIN", "15"))
 SETTLE_SIDECAR = float(os.environ.get("BM_SETTLE_SIDECAR", "45"))
 STABLE_POLLS = int(os.environ.get("BM_STABLE_POLLS", "4"))
 MIRROR = pathlib.Path("/tmp/autobench")
-SPECS = pathlib.Path(__file__).with_name("run12_specs.json")
+SPECS = pathlib.Path(os.environ.get("BM_SPECS")
+                     or pathlib.Path(__file__).with_name("run12_specs.json"))
 
 _CTX = ssl._create_unverified_context() if INSECURE else None
 
@@ -267,8 +278,12 @@ def execute(spec, H):
 
 
 def main():
-    specs = json.loads(SPECS.read_text())
-    order = [1, 2, 3, 5, 6, 7, 8, 4, 9, 10, 11, 12]  # #4 last of gsm8k: it swaps the model
+    raw = json.loads(SPECS.read_text())
+    if isinstance(raw, dict):        # experiment file: brings its own legs AND its own order
+        specs, order = raw["legs"], raw["order"]
+    else:                            # canonical matrix: a bare list, fixed order
+        specs = raw
+        order = [1, 2, 3, 5, 6, 7, 8, 4, 9, 10, 11, 12]  # #4 last of gsm8k: it swaps the model
     by_n = {s["n"]: s for s in specs}
     tok = token()
     H = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
