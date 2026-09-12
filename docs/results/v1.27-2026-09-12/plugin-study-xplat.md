@@ -1,6 +1,6 @@
 # AuthBridge plugin overhead — OCP (ykt3/ykt2) vs KinD (single node)
 
-**Report generated:** 2026-09-12T19:10:05Z  
+**Report generated:** 2026-09-12T19:30:56Z  
 **Service version:** `v1.27`  
 **Experiment:** `plugin_study_specs.json` — 13 legs, identical specs on both platforms  
 **Companion reports:** the per-platform analyses, which carry the intervals and the design rationale this document does not repeat.
@@ -23,7 +23,7 @@
 
 The two platforms ran the **same 13 legs from the same spec file, on the same image, with the same deterministic task selection**. The intent was ordinary cross-platform validation: confirm on a second cluster what the first one measured.
 
-That is not what came back. The platforms agree on every *structural* finding and disagree on every *magnitude* — including which plugin layer the cost belongs to. Since the retrospective `12run-plugin-overhead-*.md` reports quote per-task second figures without qualifying them by platform, that disagreement is the single most consequential result of the study, and it is invisible in either report alone.
+That is not what came back. The platforms agree on every *structural* finding and disagree on every *magnitude* — including which plugin layer the cost belongs to. That disagreement is the single most consequential result of the study, and it is **invisible in either per-platform report alone**: each one reads as a clean, internally consistent answer. It is the reason a per-task plugin figure must never be quoted without naming the cluster it was measured on.
 
 ## First: did the two platforms do the same work?
 
@@ -118,14 +118,14 @@ The 12-run matrices repeatedly showed IBAC legs authorizing only *some* calls �
 
 ### The cross-benchmark projection fails on both — in opposite directions
 
-The retrospective reports project plugin cost onto other benchmarks by multiplying a gsm8k per-tool-call delta by the target benchmark's tool-call count. That assumes per-call cost is a constant. tau2 makes ~11 tool calls per task against gsm8k's ~1, so the pair tests the assumption.
+The cheap way to price a plugin on an expensive benchmark is to multiply a gsm8k per-tool-call delta by the target benchmark's tool-call count. That assumes per-call cost is a constant. tau2 makes ~11 tool calls per task against gsm8k's ~1, so the pair tests the assumption.
 
 | platform | tau2 measured Δ s/task | projected from gsm8k | measured / projected |
 |---|---:|---:|---:|
 | OCP (ykt3/ykt2) | +70.8 | 156.3 | 0.45x |
 | KinD (single node) | +46.8 | 20.9 | 2.24x |
 
-**The projection is not merely inaccurate — it is inconsistent in sign.** It over-estimates by 2.2x on OCP (ykt3/ykt2) and under-estimates by 2.2x on KinD (single node) — the two factors landing on nearly the same magnitude is a coincidence of these two clusters, not a shared constant. A method that errs in both directions cannot be salvaged with a correction factor, so **the projected tau2 and appworld figures in the retrospective reports should be withdrawn rather than rescaled.** Measuring a benchmark is now the only way to know its plugin cost — which is two legs, as done here.
+**The projection is not merely inaccurate — it is inconsistent in sign.** It over-estimates by 2.2x on OCP (ykt3/ykt2) and under-estimates by 2.2x on KinD (single node) — the two factors landing on nearly the same magnitude is a coincidence of these two clusters, not a shared constant. A method that errs in both directions cannot be salvaged with a correction factor — so this shortcut has no defensible form and should not be used to price a benchmark. Measuring is the only way to know a benchmark's plugin cost, and it is two legs, as done here.
 
 ## The unit of replication, checked twice
 

@@ -148,10 +148,11 @@ L += ["## Why compare, when both reports already agree on method", "",
       "the same deterministic task selection**. The intent was ordinary cross-platform validation: "
       "confirm on a second cluster what the first one measured.", "",
       "That is not what came back. The platforms agree on every *structural* finding and disagree "
-      "on every *magnitude* — including which plugin layer the cost belongs to. Since the "
-      "retrospective `12run-plugin-overhead-*.md` reports quote per-task second figures without "
-      "qualifying them by platform, that disagreement is the single most consequential result of "
-      "the study, and it is invisible in either report alone.", ""]
+      "on every *magnitude* — including which plugin layer the cost belongs to. That disagreement "
+      "is the single most consequential result of the study, and it is **invisible in either "
+      "per-platform report alone**: each one reads as a clean, internally consistent answer. It is "
+      "the reason a per-task plugin figure must never be quoted without naming the cluster it was "
+      "measured on.", ""]
 
 # --- same work -------------------------------------------------------------
 L += ["## First: did the two platforms do the same work?", "",
@@ -340,10 +341,10 @@ lin = [n for n in ORDER if legs[n].get("role") == "linearity"]
 if len(lin) == 2:
     nb, nf = lin
     L += ["### The cross-benchmark projection fails on both — in opposite directions", "",
-          "The retrospective reports project plugin cost onto other benchmarks by multiplying a "
-          "gsm8k per-tool-call delta by the target benchmark's tool-call count. That assumes "
-          "per-call cost is a constant. tau2 makes ~11 tool calls per task against gsm8k's ~1, so "
-          "the pair tests the assumption.", "",
+          "The cheap way to price a plugin on an expensive benchmark is to multiply a gsm8k "
+          "per-tool-call delta by the target benchmark's tool-call count. That assumes per-call "
+          "cost is a constant. tau2 makes ~11 tool calls per task against gsm8k's ~1, so the pair "
+          "tests the assumption.", "",
           "| platform | tau2 measured Δ s/task | projected from gsm8k | measured / projected |",
           "|---|---:|---:|---:|"]
     ratios = []
@@ -368,10 +369,9 @@ if len(lin) == 2:
               + (" — the two factors landing on nearly the same magnitude is a coincidence of these "
                  "two clusters, not a shared constant" if near else "")
               + ". A method that errs in both directions cannot be "
-              f"salvaged with a correction factor, so **the projected tau2 and appworld figures in "
-              f"the retrospective reports should be withdrawn rather than rescaled.** Measuring a "
-              f"benchmark is now the only way to know its plugin cost — which is two legs, as done "
-              f"here.", ""]
+              f"salvaged with a correction factor — so this shortcut has no defensible form and "
+              f"should not be used to price a benchmark. Measuring is the only way to know a "
+              f"benchmark's plugin cost, and it is two legs, as done here.", ""]
     else:
         L += ["The projection does not reproduce the measured value on either platform; see the "
               "per-platform reports for the mechanism discussion.", ""]

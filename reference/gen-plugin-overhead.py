@@ -466,27 +466,15 @@ for n in LEGS:
         f(st.mean(v), "%.0f") if v else "—"))
 L.append("")
 
-# --- projection: WITHDRAWN, and deliberately replaced rather than deleted -----------------------
-# This block used to multiply the gsm8k per-authorized-call delta by another benchmark's tool-call
-# count to project plugin cost onto tau2/appworld. The designed study (2026-09-12, both platforms)
-# measured tau2 directly under a preset and falsified the assumption: measured/projected came out
-# 0.45x on OCP and 2.24x on KinD. Wrong in *opposite* directions is not fixable with a correction
-# factor, so the projection is withdrawn. The note stays so a reader of an older report knows why
-# the numbers they remember are gone.
-if PURE and pure_tool is not None and base_tool is not None:
-    delta = (pure_tool - base_tool) / 1000.0
-    L += ["## Projection to the heavier benchmarks — WITHDRAWN", "",
-          "Earlier versions of this report projected plugin cost onto tau2 and appworld by "
-          f"multiplying the measured per-authorized-call delta (**{f(delta, '%.2f')} s**, from "
-          f"`{label(PURE)}`) by each benchmark's tool-call count. **Those figures have been "
-          "withdrawn and are not reproduced here.**", "",
-          "The projection assumed per-call cost is a constant across benchmarks. The designed "
-          "experiment measured tau2 directly under a preset on two clusters and found the "
-          "assumption false **in opposite directions** — measured/projected was 0.45x on one "
-          "cluster and 2.24x on the other. A method that errs both ways cannot be rescued by a "
-          "correction factor.", "",
-          "Per-benchmark plugin cost has to be measured. It costs two legs; see "
-          "`docs/PLUGIN_OVERHEAD.md` and `reference/plugin_study_specs.json`.", ""]
+# A cross-benchmark projection was removed here on 2026-09-12. DO NOT ADD IT BACK.
+#
+# It multiplied the gsm8k per-authorized-call delta (`pure_tool - base_tool`) by tau2's and
+# appworld's measured tool-call counts, on the assumption that per-call plugin cost is a constant.
+# The designed study measured tau2 directly under a preset on both clusters and falsified that:
+# measured/projected was 0.45x on OCP and 2.24x on KinD. Erring in *opposite* directions rules out
+# a correction factor -- the assumption is simply wrong, so there is no version of this table worth
+# emitting. Per-benchmark plugin cost costs two legs to measure; see `docs/PLUGIN_OVERHEAD.md` and
+# `reference/plugin_study_specs.json`.
 
 # --- per-task --------------------------------------------------------------
 L += ["## Per-task detail (non-LLM path)", "",
