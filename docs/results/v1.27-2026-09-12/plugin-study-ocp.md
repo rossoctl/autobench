@@ -1,6 +1,6 @@
 # AuthBridge plugin overhead — designed experiment (OpenShift — ykt3 Service / ykt2 workloads)
 
-**Report generated:** 2026-09-12T19:31:51Z  
+**Report generated:** 2026-09-12T20:12:21Z  
 **Service version:** `v1.27`  
 **Platform:** OpenShift — ykt3 Service / ykt2 workloads  
 **Legs executed:** 13 of 13  
@@ -224,12 +224,12 @@ There is a tempting shortcut for pricing a plugin on an expensive benchmark with
 
 | leg | condition | tasks OK | tool calls/task | non-LLM s/task (med) | per tool call (s) |
 |---|---|---:|---:|---:|---:|
-| #112 | baseline | 10 | 12 | 22.36 | 1.864 |
-| #113 | full+ibac:observe | 10 | 12 | 93.21 | 8.106 |
+| #112 | baseline | 10 | 12.0 | 22.36 | 1.864 |
+| #113 | full+ibac:observe | 10 | 11.5 | 93.21 | 8.106 |
 
 **Measured on tau2:** `full+ibac:observe` adds **+70.85 s/task**, i.e. **+6.242 s per tool call**.
 
-**Projected from gsm8k** by that shortcut: the same condition costs +13.476 s/task on gsm8k over ~1 tool call, which scaled by tau2's 12 tool calls/task predicts **+154.97 s/task**.
+**Projected from gsm8k** by that shortcut: the same condition costs +13.476 s/task on gsm8k over ~1 tool call, which scaled by tau2's 11.5 tool calls/task predicts **+154.97 s/task**.
 
 **Measured / projected = 0.46x.**
 

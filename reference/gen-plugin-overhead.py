@@ -471,7 +471,7 @@ L.append("")
 # It multiplied the gsm8k per-authorized-call delta (`pure_tool - base_tool`) by tau2's and
 # appworld's measured tool-call counts, on the assumption that per-call plugin cost is a constant.
 # The designed study measured tau2 directly under a preset on both clusters and falsified that:
-# measured/projected was 0.45x on OCP and 2.24x on KinD. Erring in *opposite* directions rules out
+# measured/projected was 0.46x on OCP and 2.26x on KinD. Erring in *opposite* directions rules out
 # a correction factor -- the assumption is simply wrong, so there is no version of this table worth
 # emitting. Per-benchmark plugin cost costs two legs to measure; see `docs/PLUGIN_OVERHEAD.md` and
 # `reference/plugin_study_specs.json`.

@@ -1,6 +1,6 @@
 # AuthBridge plugin overhead — designed experiment (KinD — single-node local cluster)
 
-**Report generated:** 2026-09-12T19:31:59Z  
+**Report generated:** 2026-09-12T20:12:29Z  
 **Service version:** `v1.27`  
 **Platform:** KinD — single-node local cluster  
 **Legs executed:** 13 of 13  
@@ -222,12 +222,12 @@ There is a tempting shortcut for pricing a plugin on an expensive benchmark with
 
 | leg | condition | tasks OK | tool calls/task | non-LLM s/task (med) | per tool call (s) |
 |---|---|---:|---:|---:|---:|
-| #112 | baseline | 10 | 11 | 22.29 | 2.026 |
-| #113 | full+ibac:observe | 10 | 11 | 69.08 | 6.280 |
+| #112 | baseline | 10 | 11.0 | 22.29 | 2.026 |
+| #113 | full+ibac:observe | 10 | 11.0 | 69.08 | 6.280 |
 
 **Measured on tau2:** `full+ibac:observe` adds **+46.79 s/task**, i.e. **+4.254 s per tool call**.
 
-**Projected from gsm8k** by that shortcut: the same condition costs +1.882 s/task on gsm8k over ~1 tool call, which scaled by tau2's 11 tool calls/task predicts **+20.71 s/task**.
+**Projected from gsm8k** by that shortcut: the same condition costs +1.882 s/task on gsm8k over ~1 tool call, which scaled by tau2's 11.0 tool calls/task predicts **+20.71 s/task**.
 
 **Measured / projected = 2.26x.**
 
