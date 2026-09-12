@@ -519,13 +519,26 @@ if sd_dep:
                  f" — below the noise floor.** Not 'probably small': **unresolvable** with two "
                  f"deploys per condition, regardless of how many tasks each deploy runs. Adding "
                  f"tasks tightens the wrong interval.")
-    L += ["",
-          "**What it would actually take.** At ~16·σ²/δ² deploys per condition for 80% power, "
-          "resolving a "
-          + ", ".join(f"{d:.0f} s effect needs ~{max(2, round(16*sd_dep**2/d**2)):.0f} deploys"
-                      for d in (1.0, 2.0))
-          + " per condition — against the 2 run here. That is the honest price of a per-preset "
-          "ranking, and it is the number to quote if anyone asks for one.", ""]
+    need = {d: 16 * sd_dep ** 2 / d ** 2 for d in (1.0, 2.0)}
+    if max(need.values()) <= 2:
+        # Small between-deploy sigma: 2 deploys already resolve effects of this size, so the
+        # limitation is the effect sizes themselves, not the replicate count.
+        L += ["",
+              f"**What it would actually take.** At ~16·σ²/δ² deploys per condition for 80% power, "
+              f"σ={sd_dep:.3f} s here is small enough that the **2 deploys already run suffice** to "
+              f"resolve a 1 s effect. So the unresolved steps above are not under-replicated — they "
+              f"are genuinely smaller than 1 s. Resolving them would mean pinning down effects of "
+              f"~0.1 s, which needs ~{max(2, round(16 * sd_dep ** 2 / 0.1 ** 2)):.0f} deploys per "
+              f"condition, and at that scale cluster drift over the required hours becomes the "
+              f"dominant error rather than deployment variability.", ""]
+    else:
+        L += ["",
+              "**What it would actually take.** At ~16·σ²/δ² deploys per condition for 80% power, "
+              "resolving a "
+              + ", ".join(f"{d:.0f} s effect needs ~{max(2, round(need[d])):.0f} deploys"
+                          for d in (1.0, 2.0))
+              + " per condition — against the 2 run here. That is the honest price of a per-preset "
+              "ranking, and it is the number to quote if anyone asks for one.", ""]
     if sidecar and "baseline" in pair:
         b_dd = pair["baseline"][2]
         if b_dd < min(sidecar) / 2:
