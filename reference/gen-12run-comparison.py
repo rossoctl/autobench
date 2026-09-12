@@ -139,13 +139,14 @@ def s3_section(sets):
     return "\n".join(o)
 
 
-X, xbase = load(A)
-Y, ybase = load(B)
+X, _ = load(A)   # load() still returns the Service base; deliberately discarded, see the header below
+Y, _ = load(B)
 GENERATED = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 L = [f"# 12-Run Comparison — {ALAB} vs {BLAB}, both Service {VERSION}", "",
      f"**Report generated:** {GENERATED}", "",
-     f"- **{ALAB}**: `{xbase}`", f"- **{BLAB}**: `{ybase}`", "",
+     # Platform labels only, never the Service endpoints: these reports are published.
+     f"**Platforms compared:** {ALAB} vs {BLAB}", "",
      "Both sides ran the same 12 request bodies, the same Service version, and verified-identical",
      "instance config. Every leg deploys fresh. Task selection is deterministic, so the same",
      "`task_id` is the same task on both platforms — differences are attributable to the platform.",

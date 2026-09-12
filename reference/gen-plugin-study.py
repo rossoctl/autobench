@@ -212,7 +212,7 @@ TAU = [n for n in ORDER if role(n) == "linearity"]
 L = [f"# AuthBridge plugin overhead — designed experiment ({PLATFORM})", "",
      f"**Report generated:** {GEN}  ",
      f"**Service version:** `{VERSION}`  ",
-     f"**Target:** {data.get('base')}  ",
+     f"**Platform:** {PLATFORM}  ",  # never the raw endpoint: these reports are public
      f"**Legs executed:** {len(ORDER)} of {len(spec['legs'])}  ",
      f"**Judge-call evidence:** {'included' if judge_ts else '**absent** — judged-call sections omitted'}  ",
      f"**Statistics:** {int(CONF*100)}% bootstrap CIs ({B_BOOT:,} resamples), "

@@ -220,8 +220,10 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Local benchmark result dumps (fetched via the API for review, not source)
-results/
+# Local benchmark result dumps (fetched via the API for review, not source).
+# Anchored with a leading slash on purpose: a bare `results/` also matches at any depth, which
+# silently swallowed `docs/results/` -- the curated landmark reports that ARE meant to be tracked.
+/results/
 
 # Office lock/owner files: PowerPoint writes ~$<name>.pptx while a deck is open, and a plain
 # `git add -A` picks it up. It got committed three times that way.
