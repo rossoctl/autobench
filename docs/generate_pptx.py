@@ -392,7 +392,8 @@ for _cx, _items in ((inch(0.6), _lgl), (inch(6.7), _lgr)):
 
 # ================================================== SLIDE 5: ARCHITECTURE
 s = prs.slides.add_slide(BLANK)
-title_band(s, "3.  Architecture", "Relations between client, service, cluster-specific Keycloak / Rossoctl / workload, MLflow & S3")
+title_band(s, "3.  Implementation Architecture: Kubernetes-Based Benchmark Workloads",
+           "Relations between client, service, cluster-specific Keycloak / Rossoctl / workload, MLflow & S3")
 
 # Client (off-cluster / host)
 box(s, inch(0.4), inch(1.30), inch(2.8), inch(0.85),
