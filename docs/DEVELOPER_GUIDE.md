@@ -1168,6 +1168,19 @@ python3 reference/gen_pdf.py docs/DEVELOPER_GUIDE.md          # just this guide
 python3 reference/gen_pdf.py docs/12_RUNS_CROSS_CLUSTER.md -o /tmp/draft.pdf
 ```
 
+**Every generated PDF carries a bookmarks outline** (the navigation sidebar), and each run prints
+what it produced — `outline: 36 bookmarks, depth 0-3, first='…'` — so a silent regression to a
+PDF you cannot navigate shows up in the build output instead of in a reader's lap. Two different
+mechanisms produce it, which is why both needed fixing:
+
+- **`.md` → Chrome** builds the outline from the `h1`–`h6` tree, but only with
+  `--generate-pdf-document-outline` (Chrome ≥ 122). Without that switch Chrome emits no outline at
+  all, and it ignores the unknown flag silently on older builds.
+- **`.pptx` → LibreOffice** names each bookmark after the slide's **name**, not its title text.
+  python-pptx leaves `<p:cSld name>` unset, so the deck's outline read `Slide 1 … Slide 16`;
+  `generate_pptx.py` now names every slide after its own title in a final pass, next to the
+  page-numbering pass. Regenerate the `.pptx` before the `.pdf` or the old names persist.
+
 The CSS lives in the script rather than in a theme file for one reason worth knowing before you
 change it: **long code lines must wrap, not clip.** A 190-char `autobench-cli` line or a 185-char
 S3 URL runs off the page under default print styling, and the flags that matter are at the end.

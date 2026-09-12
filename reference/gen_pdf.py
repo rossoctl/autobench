@@ -55,6 +55,10 @@ PAIRS = [
 
 SOFFICE_CANDIDATES = ["/Applications/LibreOffice.app/Contents/MacOS/soffice"]
 
+# Repo-relative links in the .md (e.g. `../src/autobench/registry.py`) have no meaning in a
+# PDF, so they are rewritten to this base. See absolutize_repo_links().
+GITHUB_BLOB = "https://github.com/rossoctl/autobench/blob/main"
+
 # A table cell longer than this is allowed to break mid-word (`.wrapany`). Below it, the
 # cell keeps its natural min-content width so narrow columns stay narrow.
 WIDE_CELL_CHARS = 60
@@ -187,6 +191,88 @@ HTML_SHELL = """<!DOCTYPE html>
 """
 
 
+def outline_titles(pdf: pathlib.Path) -> list[tuple[int, str]]:
+    """Walk the PDF outline tree; return [(depth, title), ...] in document order.
+
+    Both engines we use write the outline as plain (uncompressed) objects, so a small
+    stdlib reader is enough and gen_pdf.py keeps its no-Python-dependency property. If the
+    structure is not recognisable we return [] and the caller warns -- this is a
+    verification aid, never a reason to fail a render that otherwise succeeded.
+    """
+    blob = pdf.read_bytes()
+    objs = {int(m.group(1)): m.group(2)
+            for m in re.finditer(rb"(\d+)\s+0\s+obj(.*?)endobj", blob, re.S)}
+    # Chrome tags the root `/Type /Outlines`; LibreOffice omits /Type entirely, so fall back
+    # to whatever the document Catalog points its /Outlines key at. Checking only for
+    # /Type /Outlines reports a perfectly good LibreOffice outline as missing.
+    root = next((n for n, o in objs.items()
+                 if re.search(rb"/Type\s*/Outlines", o)), None)
+    if root is None:
+        m = re.search(rb"/Outlines\s+(\d+)\s+0\s+R", blob)
+        root = int(m.group(1)) if m else None
+    if root is None or root not in objs:
+        return []
+
+    def ref(obj: bytes, key: bytes) -> int | None:
+        m = re.search(rb"/" + key + rb"\s+(\d+)\s+0\s+R", obj)
+        return int(m.group(1)) if m else None
+
+    def title(obj: bytes) -> str:
+        m = re.search(rb"/Title\s*", obj)
+        if not m:
+            return "?"
+        i = m.end()
+        if blob and obj[i:i + 1] == b"<":                      # UTF-16BE hex string
+            j = obj.index(b">", i)
+            raw = bytes.fromhex(re.sub(rb"\s", b"", obj[i + 1:j]).decode())
+            return raw.decode("utf-16-be", errors="replace").lstrip("﻿")
+        if obj[i:i + 1] != b"(":
+            return "?"
+        # Literal string: honour \( \) escapes and nesting, or titles containing a
+        # parenthesis come out truncated.
+        i, depth, out = i + 1, 1, bytearray()
+        while depth and i < len(obj):
+            c = obj[i:i + 1]
+            if c == b"\\":
+                out += {b"n": b"\n", b"r": b"\r", b"t": b"\t"}.get(obj[i + 1:i + 2],
+                                                                  obj[i + 1:i + 2])
+                i += 2
+                continue
+            if c == b"(":
+                depth += 1
+            elif c == b")":
+                depth -= 1
+                if not depth:
+                    break
+            out += c
+            i += 1
+        return out.decode("utf-8", errors="replace")
+
+    found: list[tuple[int, str]] = []
+    seen: set[int] = set()
+
+    def walk(n: int | None, depth: int = 0) -> None:
+        while n is not None and n in objs and n not in seen:
+            seen.add(n)
+            found.append((depth, title(objs[n])))
+            walk(ref(objs[n], b"First"), depth + 1)
+            n = ref(objs[n], b"Next")
+
+    walk(ref(objs[root], b"First"))
+    return found
+
+
+def report_outline(pdf: pathlib.Path) -> None:
+    entries = outline_titles(pdf)
+    if not entries:
+        print(f"  WARNING: {pdf.name} has NO PDF outline (bookmarks) -- viewers will show "
+              f"no navigation sidebar", file=sys.stderr)
+        return
+    depths = sorted({d for d, _ in entries})
+    print(f"  outline: {len(entries)} bookmarks, depth {min(depths)}-{max(depths)}, "
+          f"first={entries[0][1][:40]!r}")
+
+
 def find_chrome() -> str:
     for c in CHROME_CANDIDATES:
         if pathlib.Path(c).is_file():
@@ -225,6 +311,31 @@ def render_pptx(src: pathlib.Path, pdf_path: pathlib.Path, soffice: str,
         pdf_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(produced), str(pdf_path))
     print(f"{src} -> {pdf_path}  ({pdf_path.stat().st_size:,} bytes)")
+    report_outline(pdf_path)
+
+
+def absolutize_repo_links(html_body: str, md: pathlib.Path) -> str:
+    """Point repo-relative links at GitHub instead of at the renderer's temp directory.
+
+    We render from a throwaway HTML file in /tmp, so a link like `../src/autobench/app.py`
+    resolves against THAT directory: the committed PDF ended up carrying
+    `file:///var/folders/.../tmpXXXX/src/autobench/app.py` links, which are dead for every
+    reader and leak the build machine's temp path into a published artifact. In-page anchors
+    (`#section`) and absolute URLs are already correct and are left alone.
+    """
+    def fix(m: re.Match) -> str:
+        href = html.unescape(m.group(1))
+        if re.match(r"^(#|[a-zA-Z][a-zA-Z0-9+.-]*:|//)", href):
+            return m.group(0)
+        path, _, frag = href.partition("#")
+        try:
+            target = (md.parent / path).resolve().relative_to(REPO)
+        except ValueError:                       # outside the repo; nothing better to offer
+            return m.group(0)
+        url = f"{GITHUB_BLOB}/{target.as_posix()}" + (f"#{frag}" if frag else "")
+        return f'href="{html.escape(url)}"'
+
+    return re.sub(r'href="([^"]*)"', fix, html_body)
 
 
 def md_to_html_body(md: pathlib.Path) -> str:
@@ -266,6 +377,7 @@ def md_to_html_body(md: pathlib.Path) -> str:
         return f"<{tag}{attrs}>{inner}</{tag}>"
 
     out = re.sub(r"<(t[dh])((?:\s[^>]*)?)>(.*?)</\1>", tag_wide_cell, out, flags=re.S)
+    out = absolutize_repo_links(out, md)
     return out
 
 
@@ -288,6 +400,12 @@ def render(md_path: pathlib.Path, pdf_path: pathlib.Path, chrome: str,
             f"--user-data-dir={tmp / 'profile'}",
             "--no-first-run", "--no-default-browser-check",
             "--no-pdf-header-footer",
+            # PDF outline (the viewer's bookmarks sidebar) built from the h1-h6 tree, so a
+            # 60-page guide is navigable. Chrome emits NO outline without this -- the flag
+            # is the command-line face of CDP's Page.printToPDF generateDocumentOutline,
+            # and it needs Chrome >= 122. Older builds ignore an unknown switch silently
+            # rather than failing, and verify_outline() below catches that.
+            "--generate-pdf-document-outline",
             "--run-all-compositor-stages-before-draw",
             "--virtual-time-budget=20000",
             f"--print-to-pdf={pdf_path}",
@@ -318,6 +436,7 @@ def render(md_path: pathlib.Path, pdf_path: pathlib.Path, chrome: str,
             sys.exit(f"chrome produced no PDF for {md_path} within {timeout}s")
     size = pdf_path.stat().st_size
     print(f"{md_path} -> {pdf_path}  ({size:,} bytes)")
+    report_outline(pdf_path)
 
 
 def main() -> int:
