@@ -43,13 +43,13 @@ The canonical 12 runs are the upstream harness's `deploy-and-evaluate` compariso
 > was the deeper one — the original blocker was the **wrong MCP surface** rather than the
 > architecture: the image must come from the exgentic `exgentic_benchmarks` framework and expose the
 > `list_tasks`/`create_session`/`evaluate_session`/`delete_session` orchestration contract (verified
-> live: 168 tasks). On the v1.26 12-run matrices both legs reach terminal `succeeded` with bounded
+> live: 168 tasks). On the v1.27 12-run matrices both legs reach terminal `succeeded` with bounded
 > per-task verdicts on **both** OpenShift and KinD. `pass_rate` is **0.0 by design** — gemini-2.5-pro
 > driving the generic `tool_calling` agent solves no appworld tasks; the acceptance gate is that the
 > pipeline runs tasks to completion and scores them honestly, which it does. Also note the tau2
 > failures in #9/#10 above are long since fixed (per-task timeouts + a 4Gi MCP): those legs now score
-> 0.75-0.9. Everything in this file is the 2026-08-10/11 snapshot; see `SERVICE_DESIGN_DECISIONS.md`
-> and the generated `results/12run-report-v1.26-*.md` for current numbers.
+> 0.8-0.9. Everything in this file is the 2026-08-10/11 snapshot; see `SERVICE_DESIGN_DECISIONS.md`
+> and the generated `results/12run-report-v1.27-*.md` for current numbers.
 
 ## Elaboration
 
