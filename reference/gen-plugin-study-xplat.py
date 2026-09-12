@@ -92,7 +92,13 @@ def load(pl):
                        if x.get("status") == "OK" and i > par],
             "all_ok": [non_llm(x) for x in okr],
             "n_rows": len(rr), "n_ok": len(okr),
+            # `tool` is a TOTAL, only ever divided by another total (the judged/call ratio).
+            # `tool_med` is the per-task rate. Keep them distinct: dividing the total by n_ok gives
+            # a MEAN, and the rest of this analysis is median-based, so mixing the two made the
+            # per-platform and cross-platform reports disagree in the 2nd decimal on one shared
+            # quantity -- small, but a reader who spots it has no way to tell which is right.
             "tool": sum(x.get("tool_count") or 0 for x in okr),
+            "tool_med": st.median([x.get("tool_count") or 0 for x in okr]) if okr else None,
             "in_tok": sum(x.get("llm_input_tokens") or 0 for x in rr),
             "model": okr[0]["model"] if okr else None,
             "par": par, "run_id": r.get("run_id"),
@@ -352,7 +358,7 @@ if len(lin) == 2:
         lb, lf = P["legs"][nb], P["legs"][nf]
         mb_, mf_ = st.median(lb["all_ok"]), st.median(lf["all_ok"])
         delta = mf_ - mb_
-        tpt = lf["tool"] / max(1, lf["n_ok"])
+        tpt = lf["tool_med"] or 0   # MEDIAN, matching gen-plugin-study.py; see the note in load()
         g = cond_samples(P, legs[nf]["condition"])
         gb = cond_samples(P, "baseline")
         proj = (st.median(g) - st.median(gb)) * tpt if g and gb else None

@@ -127,13 +127,8 @@ makes ~11 tool calls per task against gsm8k's ~1, so it tests the assumption dir
 
 | cluster | tau2 measured Δ/task | projected from gsm8k | measured/projected |
 |---|---:|---:|---:|
-| OpenShift | +70.8 s | 156.3 s | 0.45x |
-| KinD | +46.8 s | 20.9 s | 2.24x |
-
-(Figures from [plugin-study-xplat.md](results/v1.27-2026-09-12/plugin-study-xplat.md). The
-per-platform reports quote 0.46x for OpenShift, because they pool the gsm8k baseline per leg with
-warm-up excluded while the cross-platform generator pools it across conditions. The 2% gap is
-immaterial to a number whose point is that it is off by a factor of two.)
+| OpenShift | +70.8 s | 155.0 s | 0.46x |
+| KinD | +46.8 s | 20.7 s | 2.26x |
 
 The shortcut is not merely imprecise — it is **wrong in opposite directions on the two clusters**,
 which rules out fixing it with a correction factor. Per-call cost is not the constant the arithmetic

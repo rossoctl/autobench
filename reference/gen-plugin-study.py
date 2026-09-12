@@ -650,7 +650,7 @@ if tau_base and tau_pre and rows(tau_base) and rows(tau_pre):
         m = st.median([non_llm(x) for x in rr]) if rr else None
         pc = (m / tpt) if (m and tpt) else None
         per_call[n] = (m, tpt, pc)
-        L.append(f"| #{n} | {cond(n)} | {len(rr)} | {f(tpt, '%.0f')} | {f(m, '%.2f')} | "
+        L.append(f"| #{n} | {cond(n)} | {len(rr)} | {f(tpt, '%.1f')} | {f(m, '%.2f')} | "
                  f"{f(pc, '%.3f')} |")
     mb, tb, pb = per_call[tau_base]
     mp, tp, pp = per_call[tau_pre]
@@ -667,7 +667,7 @@ if tau_base and tau_pre and rows(tau_base) and rows(tau_pre):
             proj = gs_delta * tp
             L += [f"**Projected from gsm8k** by that shortcut: the same condition costs "
                   f"{gs_delta:+.3f} s/task on gsm8k over ~1 tool call, which scaled by tau2's "
-                  f"{tp:.0f} tool calls/task predicts **{proj:+.2f} s/task**.", ""]
+                  f"{tp:.1f} tool calls/task predicts **{proj:+.2f} s/task**.", ""]
             if abs(proj) > 1e-9:
                 ratio = d_task / proj
                 L += [f"**Measured / projected = {ratio:.2f}x.**", ""]
