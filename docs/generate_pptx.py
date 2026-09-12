@@ -1132,6 +1132,33 @@ for _i, _s in enumerate(prs.slides, 1):
     _tf.margin_left = _tf.margin_right = 0
     _tf.margin_top = _tf.margin_bottom = 0
 
+# ---- slide names, which become the PDF bookmarks ---------------------------
+# LibreOffice builds the PDF outline from each slide's NAME (<p:cSld name="...">), not from
+# its title text. python-pptx leaves that attribute unset, so the exported deck showed a
+# useless "Slide 1 ... Slide 16" bookmark list. Name every slide after its own title and the
+# bookmarks become the agenda.
+#
+# The title is the first non-empty text on the slide: title_band() adds the navy band before
+# any body content, and slide 1 (no band) leads with its "AutoBench" wordmark. The page-number
+# pass above appends its textbox last, so it can never be mistaken for a title -- but run this
+# BEFORE that pass would also be safe, since we take the FIRST match, not the last.
+def _slide_title(slide, fallback):
+    for sh in slide.shapes:
+        if not sh.has_text_frame:
+            continue
+        for para in sh.text_frame.paragraphs:
+            text = "".join(r.text for r in para.runs).strip()
+            if text:
+                # Agenda-numbered titles read "1.  Overview" with a double space; collapse
+                # runs of whitespace so the bookmark is tidy.
+                return " ".join(text.split())
+    return fallback
+
+
+for _i, _s in enumerate(prs.slides, 1):
+    _cSld = _s.element.find(qn("p:cSld"))
+    _cSld.set("name", _slide_title(_s, f"Slide {_i}"))
+
 out = "docs/AutoBench.pptx"
 prs.save(out)
 print("wrote", out, "with", len(prs.slides._sldIdLst), "slides")
