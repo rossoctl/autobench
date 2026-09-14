@@ -19,7 +19,7 @@ latency. They are independent.
 > | | ours | upstream | status |
 > |---|---|---|---|
 > | span loss on warm agents | **Bug 1** (below) | **#250** | fixed — `_get_parent_context` now uses `getattr(ctx, "otel_context", None)` and falls back to the ambient OTEL context instead of raising `AttributeError` into a swallowed handler. A second defect fixed with it: the tracer is process-global, so `_init_otel` never re-ran on a warm process and the per-session log stayed pinned to the first run's directory. |
-> | the `max_tokens=1` probe | **Bug 2** (below) | *no issue — removed as part of the same work* | **measured gone.** 8 gsm8k legs, 86 tasks, 103 `chat` spans: `request_max_tokens` is `null` on every one, and the `chat` count equals the `tool` count exactly in every leg — including a `gpt-4.1` leg, where the probe previously *succeeded* and was therefore recorded. The probe's code path still exists in the agent's `health.py`, so it could return via config. |
+> | the `max_tokens=1` probe | **Bug 2** (below) | *no issue — changed as part of the same work* | **measured gone**, across all four model classes: 12 legs, 869 `chat` spans, `request_max_tokens` `null` on every one. But it was **replaced, not removed** — see the regression below, which is a direct consequence. |
 > | LiteLLM response caching on by default | *we never reported this* | **#251** | fixed — caching now defaults **off for the `a2a` command only** (which is what our agents run), via a `model_fields_set` check so an explicit `EXGENTIC_LITELLM_CACHING` still wins in both directions. |
 >
 > So upstream #251 is **not** our Bug 2. Our Bug 2 was the probe; #251 is a caching default we had not
@@ -39,6 +39,62 @@ latency. They are independent.
 > matrix structurally cannot check that — every leg deploys fresh, so it never reuses an agent. The
 > dedicated experiment is `reference/warm_reuse_specs.json` (one cold reference leg, two serial
 > reuse legs, one reuse leg at `p=4`); until it has run, treat warm-agent reuse as unverified.
+
+---
+
+## Bug 3 — the replacement health probe fails tasks outright on a high-latency gateway (found 2026-09-14, `0.3.5.dev145`)
+
+**This is a regression introduced by the same change that fixed Bug 1 and retired Bug 2's probe**, and
+it is why the `max_tokens=1` probe disappeared: the probe was **replaced**, not removed.
+`check_model_accessible_sync` now runs the unbilled reachability check instead of a completion call —
+deliberately, and the docstring's reasoning is sound (a generation probe costs tokens on every
+invocation, and a malformed request classifies as `REACHABLE`, so it could report success without
+verifying anything; `strict=True` adds it back).
+
+The replacement, however, is a hard gate in front of every task:
+
+| property | value | where |
+|---|---|---|
+| what it does | `GET /v1/models` against the OpenAI-compatible surface | `integrations/litellm/health.py` |
+| when it runs | **once per task** — in `LiteLLMToolCallingAgentInstance.__init__` | `agents/litellm_tool_calling/instance.py:88` |
+| timeout | **10 s, hard-capped** — `min(timeout, _MODELS_PROBE_TIMEOUT)`, so a caller passing the documented `timeout=30.0` still gets 10 s | `health.py:529`, `_MODELS_PROBE_TIMEOUT = 10.0` |
+| retries | **none** on this path (the `backoff` machinery belongs to `acheck_model_accessible`, the *strict* completion check) | `health.py:466-486` |
+| failure mode | `_fetch_models` swallows every exception into `(None, None)`, so a timeout is indistinguishable from a refusal, and `check_models_endpoint` raises `HealthCheckError(f"Model endpoint for {model} is unreachable at {url}")` | `health.py:290-311, 360-363` |
+| configurability | **none** — no env var, and the caller-supplied timeout is clamped | — |
+
+**Net effect: a single slow `GET /v1/models` kills the task before the model is ever called.** The
+task is reported as failed, so unlike Bugs 1 and 2 this costs *pass rate*, not just telemetry.
+
+### Measured
+
+Same cluster, same gateway, same benchmark, only the agent digest differs:
+
+| agent | platform | unreachable failures |
+|---|---|---|
+| `15a682ce` (pre-fix) | KinD | **0** across all 12 legs (116 gsm8k+tau2 tasks) |
+| `d924a9ed` (dev145) | KinD | **11 of 66 tasks** in the first four legs alone |
+| `d924a9ed` (dev145) | OpenShift | **0** across all 12 legs |
+
+It is a *latency* interaction, not a misconfiguration — the endpoint answers `401` in 0.19 s warm from
+both the host and inside the agent pod, and 43 of 50 tasks in the same leg succeeded. The KinD gateway
+is VPN-routed (`ete-litellm.ai-models.vpc-int.res.ibm.com`, 9.47.x), each task opens a *fresh*
+connection with no pooling, and a cold DNS+TCP+TLS handshake measured 3.1 s from inside the pod.
+OpenShift never trips it because its path to the gateway is fast.
+
+**The AuthBridge sidecar makes it markedly worse**, which matters because legs #5–#8 all run one:
+leg #5 (`auth-only`) lost 3 of 5 tasks, against 7 of 50 for the no-sidecar leg #3.
+
+### Suggested fix, in preference order
+
+1. **Retry the probe** with the backoff already present in the module — a transient handshake stall is
+   exactly what `ErrorCategory.TRANSIENT` exists for.
+2. **Let the cap be raised.** The `min(timeout, _MODELS_PROBE_TIMEOUT)` clamp makes the function's own
+   `timeout` parameter a no-op above 10 s, which is surprising given the documented default of 30 s.
+3. **Make it skippable** (env var), and/or **hoist it out of the per-task path** — the model endpoint
+   does not change between tasks of one run, so probing once per agent process would keep the
+   diagnostic value at 1/N the exposure.
+4. **Distinguish timeout from refusal** in the error text; `_fetch_models` currently collapses both to
+   `None`, and "is unreachable" sent us to check routing when routing was fine.
 
 ## Environment
 
