@@ -38,7 +38,7 @@ are unaffected.
 | **Pass rate** | **0.98** | **0.83** | **0.00** |
 | Input tokens / task | **343** | **82,966** | **210,792** |
 | Output tokens / task | 205 | 1,955 | 21,499 |
-| LLM calls / task | 2.1 | 11.4 | 23.6 |
+| LLM calls / task † | 2.1 | 11.4 | 23.6 |
 | Tool calls / task | 1.1 | 11.2 | 13.4 |
 | Median task latency | **5.3s** | **92s** | **232s** |
 | Slowest task seen | 62s | 425s | 581s |
@@ -138,10 +138,15 @@ A few things that trip people up:
 
 - **`pass_rate` = `evaluated_pass / total`.** A task that errors before evaluation counts as not
   passed, so a low pass rate can mean "failed the task" *or* "never got to be judged".
-- **The `llm` column overcounts real LLM calls by one.** Each task issues an extra probe call
-  (`max_tokens=1`) before the real work, and it is counted as a `chat` span. So `llm=2` on gsm8k
-  usually means *one* real call, and the gsm8k figure of 2.1 above is really ~1.1 real calls. Same
-  offset applies to tau2 and appworld.
+- **† The `llm` figures in the table above are one call per task too high, and current runs are
+  not.** Agents up to `exgentic 0.3.5.dev131` issued a `max_tokens=1` capability probe before the
+  real work, and it was counted as a `chat` span — so the tabulated 2.1 / 11.4 / 23.6 are really
+  ~1.1 / ~10.4 / ~22.6 real calls. The probe was removed upstream (issues #250/#251); measured absent
+  across 103 `chat` spans on `0.3.5.dev145`, on both reasoning and non-reasoning models. **A current
+  run's `llm` column counts real calls one-for-one, with no offset to subtract.** The table has not
+  been re-measured on the new agent, which is why the correction is stated rather than applied. The
+  practical trap: **do not compare `llm` counts across runs that straddle the change** — a leg will
+  look like it made one fewer call per task when only the instrumentation changed.
 - **Input tokens grow faster than output.** Every LLM call re-sends the whole conversation, so
   cumulative input scales roughly with the square of the turn count while output is bounded per
   call. That is why tau2/appworld input *totals* dwarf output.
@@ -156,15 +161,20 @@ A few things that trip people up:
   `task_id` is the same task across runs and clusters, and a smaller run's tasks are a prefix of a
   larger one's. Cross-run comparisons on the same benchmark are therefore like-for-like.
 - **Implausibly small token counts are a telemetry bug, not a cheap task — and `== 0` is the wrong
-  test.** When a task's usage-bearing span is lost, what survives is the `max_tokens=1` probe, and
-  the probe's *own* usage depends on the model: a reasoning model (gpt-5-mini) has the probe
-  rejected and records nothing (`in=0, out=0` — the familiar "zero-token row"), but
-  claude-sonnet-5 accepts it and leaves `in=8, out=1`, and gemini-2.5-pro leaves `in=1, out=0`.
-  Those are *non-zero*, so a zero-check misses every tau2 and appworld case. Use the structural
-  test instead: **`llm` ≤ 1 alongside `tool` ≥ 2 is impossible**, since each tool call needs a
-  preceding model turn. `llm=1` next to `tool=11` is a lost span. Affected runs' **token totals are
-  understated while their pass rates remain valid** — the tasks really ran and were really judged.
-  Cause and fix (fresh deploy per run, no warm-agent reuse):
+  test.** Use the structural test: **`llm` ≤ 1 alongside `tool` ≥ 2 is impossible**, since each tool
+  call needs a preceding model turn. `llm=1` next to `tool=11` is a lost span. A second impossible
+  shape is a task with `status = OK` and `llm = 0` — nothing completes without a model turn (it has
+  to be gated on status, because an appworld task that fails before its first call legitimately has
+  no `chat` span). Affected runs' **token totals are understated while their pass rates remain
+  valid** — the tasks really ran and were really judged.
+
+  Why not `== 0`: while the `max_tokens=1` probe existed, it was the span that *survived* the loss,
+  and it carried its own usage on non-reasoning models — gpt-5-mini rejected it and left the familiar
+  `in=0, out=0`, but claude-sonnet-5 left `in=8, out=1` and gemini-2.5-pro `in=1, out=0`. A
+  zero-check therefore missed every tau2 and appworld case. Now that the probe is gone a damaged task
+  drops to zero `chat` spans, so `llm = 0` catches more than it used to — but the structural pair
+  test is the one that holds across agent versions, and it is what the report generators use. Cause
+  and fix (fresh deploy per run, no warm-agent reuse):
   `docs/exgentic-agent-bug-report-20260901.md`.
 
 Three more that apply specifically to the **latency** columns, all measured in the plugin-overhead

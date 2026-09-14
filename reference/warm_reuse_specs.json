@@ -1,0 +1,92 @@
+{
+  "study": "warm-agent reuse — does one deploy survive repeated runs with telemetry intact?",
+  "why": [
+    "The canonical 12-run deploys a fresh agent for every leg (every leg sets teardown:true), which",
+    "was adopted deliberately to dodge the warm-agent token-attribution loss. That design means the",
+    "12-run can never test whether the loss is fixed: it never reuses an agent. This spec does the",
+    "one thing the matrix cannot.",
+    "",
+    "Leg #1 deploys and is the cold reference. Legs #2-#4 carry no deploy_body, so the driver leaves",
+    "the deployment alone and the same agent process serves run after run. Task selection is",
+    "deterministic, so all four legs run the SAME five gsm8k tasks and the token columns are directly",
+    "comparable rather than merely similar.",
+    "",
+    "Two defects are read off one run of this spec:",
+    "  span loss  — the structural test llm_count<=1 AND tool_count>=2 is impossible (a tool call",
+    "               needs a preceding model turn), so any row matching it in #2-#4 but not #1 is the",
+    "               warm-agent loss. Do NOT use tokens==0: the probe's own usage is model-dependent.",
+    "  response caching — if litellm caching is live, #2 replays #1's completions instead of calling",
+    "               the model. That shows up as a collapse in latency at unchanged pass rate, not as",
+    "               a token anomaly, so compare total_latency_s across legs as well as tokens.",
+    "",
+    "#4 repeats the reuse at max_parallel_sessions=4 because the two defects have different",
+    "concurrency signatures and a serial-only result would not generalise to legs #3-#12."
+  ],
+  "order": [1, 2, 3, 4],
+  "legs": [
+    {
+      "n": 1,
+      "bench": "gsm8k",
+      "role": "cold",
+      "title": "1 — gsm8k 5 tasks p=1 — fresh deploy, cold reference",
+      "deploy": "fresh deploy; this deployment is kept up and reused by #2-#4",
+      "deploy_body": {
+        "agent": "tool_calling",
+        "namespace": "team1"
+      },
+      "teardown": true,
+      "run": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "max_tasks": 5,
+        "max_parallel_sessions": 1,
+        "timeout_seconds": 300
+      }
+    },
+    {
+      "n": 2,
+      "bench": "gsm8k",
+      "role": "warm",
+      "title": "2 — gsm8k 5 tasks p=1 — REUSE #1's agent (2nd run on one process)",
+      "deploy": "no deploy_body: the driver skips deploy and teardown entirely",
+      "teardown": false,
+      "run": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "max_tasks": 5,
+        "max_parallel_sessions": 1,
+        "timeout_seconds": 300
+      }
+    },
+    {
+      "n": 3,
+      "bench": "gsm8k",
+      "role": "warm",
+      "title": "3 — gsm8k 5 tasks p=1 — REUSE again (3rd run on one process)",
+      "deploy": "no deploy_body; a 3rd run distinguishes 'only the 2nd run breaks' from 'all reuse breaks'",
+      "teardown": false,
+      "run": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "max_tasks": 5,
+        "max_parallel_sessions": 1,
+        "timeout_seconds": 300
+      }
+    },
+    {
+      "n": 4,
+      "bench": "gsm8k",
+      "role": "warm-parallel",
+      "title": "4 — gsm8k 5 tasks p=4 — REUSE under concurrency",
+      "deploy": "no deploy_body; concurrency is where the cache-hit-callback thread path appears",
+      "teardown": false,
+      "run": {
+        "agent": "tool_calling",
+        "namespace": "team1",
+        "max_tasks": 5,
+        "max_parallel_sessions": 4,
+        "timeout_seconds": 300
+      }
+    }
+  ]
+}
