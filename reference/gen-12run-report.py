@@ -61,24 +61,50 @@ def _lost(x):
     """True when the task's usage-bearing `chat` span was never written, so its token counts are
     understated.
 
-    Two presentations of the SAME upstream defect, and the token value alone does not identify it:
+    The primary signal is structural, because it holds under any model and any agent version: every
+    tool call must be decided by a preceding model turn, so `llm_count <= 1` alongside
+    `tool_count >= 2` is impossible for a task that genuinely made those tool calls. Verified against
+    all 272 rows of the v1.23 matrices: it flags exactly the 15 damaged rows and no healthy one.
+    Healthy rows may still have `tool_count > llm_count` — up to +21 on appworld — which is why a
+    plain `tool > llm` test is NOT usable.
 
-    * reasoning models (gpt-5-mini) reject the `max_tokens=1` probe, so the surviving probe span
-      carries no usage at all -> `in == out == 0`. This is the familiar "zero-token row".
-    * non-reasoning models (claude-sonnet-5, gemini-2.5-pro) *accept* the probe, so the probe span
-      carries its own tiny usage -> `in=8/out=1` or `in=1/out=0`. Non-zero, so a `== 0` test misses
-      it entirely.
+    `status == "OK"` with `llm_count == 0` is the other impossible shape: a task cannot complete
+    without a single model turn. It is gated on status because a task that failed before its first
+    call legitimately has no `chat` span, and appworld produces such rows routinely.
 
-    The reliable, model-independent signal is structural: every tool call must be decided by a
-    preceding model turn, so `llm_count <= 1` alongside `tool_count >= 2` is impossible for a task
-    that genuinely made those tool calls. Verified against all 272 rows of the v1.23 matrices: it
-    flags exactly the 15 damaged rows and no healthy one (healthy rows may still have
-    `tool_count > llm_count` — up to +21 on appworld — which is why a plain `tool > llm` test is
-    NOT usable).
+    That clause matters more than it used to. Up to exgentic 0.3.5.dev131 every task also issued a
+    `max_tokens=1` capability probe, so a damaged task still had one surviving `chat` span and
+    reported `llm_count == 1` — which the `llm_count == 0` test cannot see, and which is why the
+    structural pair test was needed in the first place. The probe was removed upstream (measured
+    absent across 103 chat spans on 0.3.5.dev145, both reasoning and non-reasoning models), so a
+    damaged task now drops to zero `chat` spans. Both clauses are kept: the probe's own code path
+    still exists in the agent's `health.py`, so a future config could reintroduce it, and the
+    structural test is the one that survives either way.
+
+    Do not replace any of this with a `tokens == 0` test. While the probe existed it *carried its own
+    usage on non-reasoning models* (`in=8/out=1` on claude-sonnet-5, `in=1/out=0` on gemini-2.5-pro),
+    so a damaged row was not numerically zero at all; the `llm_input_tokens` clause below catches the
+    zero case only as a supplement, never as the detector.
     """
     lc = x.get("llm_count") or 0
     tc = x.get("tool_count") or 0
-    return (lc > 0 and not x.get("llm_input_tokens")) or (lc <= 1 and tc >= 2)
+    return (
+        (x.get("status") == "OK" and lc == 0)
+        or (lc > 0 and not x.get("llm_input_tokens"))
+        or (lc <= 1 and tc >= 2)
+    )
+
+
+def _span_lost(nchat, ntool):
+    """`_lost()`'s structural clause, applied to raw span counts for §8.
+
+    §8 reads `span_report.ndjson`, which carries neither `status` nor token fields, so only the
+    pair test is available here — but it is the clause that matters, and keeping the two in one
+    place stops §8 from drifting back to the pre-`dev145` rule that a lone `chat` span is damage.
+    It is not: a one-shot gsm8k task has exactly one, and flagging those marked every healthy row
+    in the matrix as lost.
+    """
+    return nchat <= 1 and ntool >= 2
 
 
 def rows(run, name):
@@ -125,31 +151,38 @@ S2 = """## 2. Column names & meaning
 | `in` | `llm_input_tokens` | Sum of `gen_ai.usage.input_tokens` over **all** LLM chat calls in that task. |
 | `out` | `llm_output_tokens` | Sum of `gen_ai.usage.output_tokens` over all LLM chat calls in that task. |
 | `total` | `llm_total_tokens` | `in + out` for the task. |
-| `llm` | `llm_count` | Number of LLM (chat-completion) calls the agent made. One per `chat` span. **Overcounts real calls by 1** — see below. |
+| `llm` | `llm_count` | Number of LLM (chat-completion) calls the agent made. One per `chat` span, counted one-for-one. |
 | `tool` | `tool_count` | Number of MCP tool calls the agent made. |
 | `passed` | `evaluation_result` | Task-level pass/fail from `evaluate_session` (`None` = errored before eval). |
 
-**Every task issues one extra `max_tokens=1` capability probe**, counted as a `chat` span. So `llm`
-reads one high: `llm=2` on gsm8k means *one* real call. Whether that probe succeeds is
-model-dependent, which matters for the next paragraph.
+`llm` and `tool` normally move together on these benchmarks: the agent takes a model turn, that turn
+decides a tool call, and gsm8k submits its answer *through* a tool, so `llm == tool` is the healthy
+shape rather than a coincidence.
 
-**Rows marked ⚠ have lost token attribution** — the usage-bearing `chat` span for the real call was
-never written, so `in`/`out` are understated (the task itself ran fine: `tool`, latency and
-`passed` are all genuine). The token value alone does not identify these, because the same defect
-presents differently per model:
+**Rows marked ⚠ have lost token attribution** — the usage-bearing `chat` span was never written, so
+`in`/`out` are understated while the task itself ran fine (`tool`, latency and `passed` are all
+genuine). Two shapes are flagged, both of them structurally impossible rather than merely suspicious:
 
-| model class | probe outcome | damaged row looks like |
-|---|---|---|
-| reasoning (`gpt-5-mini`) | rejected, `BadRequestError`, no usage | `in=0, out=0` — the classic "zero-token row" |
-| non-reasoning (`claude-sonnet-5`) | **succeeds**, so the probe's own usage is recorded | `in=8, out=1` |
-| non-reasoning (`gemini-2.5-pro`) | **succeeds** | `in=1, out=0` |
+| flagged shape | why it cannot happen on a healthy task |
+|---|---|
+| `llm <= 1` with `tool >= 2` | every tool call needs a preceding model turn to decide it |
+| `status == OK` with `llm = 0` | a task cannot complete without taking a single model turn |
 
-A `tokens == 0` test therefore silently misses the sonnet-5/gemini cases. The detector used here is
-structural instead: **`llm<=1` together with `tool>=2` is impossible**, since every tool call needs
-a preceding model turn. Trigger: reusing a warm agent across runs (upstream exgentic tears down the
-per-process OTEL context at run end) — see `docs/exgentic-agent-bug-report-20260901.md`. Mitigation
-is a fresh deploy per run. `llm=0` with `tool=0` is different and benign-ish: no chat span at all
-(session rejected before any model call).
+**Do not substitute a `tokens == 0` test for either.** It is the intuitive check and it is unreliable:
+a damaged row's token total depends on what other spans survived, so it can be non-zero, and a
+zero-token row can equally be a task that failed before its first call. The shape of the counts is
+the evidence; the token value is not.
+
+The known trigger for lost spans is **reusing a warm agent across runs** — see
+`docs/exgentic-agent-bug-report-20260901.md`. Every leg of this matrix therefore deploys a fresh
+agent, which is why these columns can be read at face value here.
+
+One caution when reading `llm`, `tool` or token totals **across** runs: they are properties of the
+agent image as much as of the benchmark, and every agent image is pinned to `:latest`, so two runs
+weeks apart can differ in call counts with nothing in the request changing. **No artifact in this set
+records the agent digest** — not `run.json`, not `manifest.json` — so the only record is operational:
+read `.status.containerStatuses[].imageID` off the agent pod while the run is live. Treat a
+cross-run count comparison as unsupported unless you captured that.
 
 ### `span_report.ndjson` (§8)
 
@@ -163,7 +196,7 @@ One row per OTEL span per task — the evidence the counters above are derived f
 | `name` | The span title, e.g. `Agent.Session`, `chat gpt-5-mini`, `execute_tool submit`. |
 | `kind` | `root` / `phase` / `agent` / `chat` / `tool` / `other` (`other` = nested HTTP/framework children the harness does not name). |
 | `counted` | Whether this span fed `llm_count`/`tool_count`. `false` marks real work the aggregate cannot see, because only spans parented by `invoke_agent` are counted (and `execute_tool initial_observation` never is). `null` for non-chat/tool spans. |
-| `request_max_tokens` | `1` identifies the capability probe unambiguously. |
+| `request_max_tokens` | The `max_tokens` the agent asked for, `null` when it asked for none (the normal case). A value of `1` marks a capability probe rather than real work — no longer emitted by the current agent, but the probe's code path still exists upstream, so the column stays as the unambiguous way to tell one apart from a real call. |
 
 That set is a deliberate whitelist: span attributes can carry prompts and completions, and these
 objects are public, so nothing outside this list is published (see the S3 section).
@@ -378,8 +411,9 @@ def sec7():
         nlost = sum(1 for x in rr if _lost(x))
         if nlost:
             o.append("")
-            o.append(f"> ⚠ **{nlost} of {len(rr)} rows lost token attribution** — their `in`/`out` "
-                     "show only the `max_tokens=1` probe's own usage, not the real call. The tasks "
+            o.append(f"> ⚠ **{nlost} of {len(rr)} rows lost token attribution** — their `llm`/`in`/"
+                     "`out` are structurally impossible for a task that ran (see §2), so the "
+                     "usage-bearing span was dropped rather than the work not happening. The tasks "
                      "themselves ran and were evaluated normally, so `tool`/`passed` are correct "
                      "and this run's **pass rate is valid while its token totals are not**.")
         o.append("")
@@ -391,12 +425,17 @@ def sec8():
     o = ["## 8. Per-task span inventory", "",
          "Which spans each task actually invoked, by name. §6 and §7 report *counts*; this is what "
          "they were counted from, read straight out of each run's `span_report.ndjson`.", "",
-         "Read the **chat** column first. Every task issues a `max_tokens=1` capability probe plus "
-         "its real model calls, so a healthy task shows **at least 2** chat spans. Exactly **1** "
-         "means the usage-bearing span for the real call was never written — the warm-agent defect "
-         "— and that is visible here as a span *count*, independent of any token value (which is "
-         "what makes it catchable on claude-sonnet-5 and gemini-2.5-pro, where the surviving probe "
-         "reports a non-zero 8/1 or 1/0).", "",
+         "Read the **chat** and **tool** columns together. There is no fixed healthy chat count — a "
+         "one-shot gsm8k task legitimately shows a single `chat` span, and a multi-turn tau2 task "
+         "shows many. What is not possible is **`chat` ≤ 1 alongside `tool` ≥ 2**: every tool call "
+         "needs a model turn to request it, so a task cannot invoke two tools off one chat span. "
+         "That shape means a usage-bearing span was dropped, and this section flags it. Reading it "
+         "off *counts* rather than token values is what makes it catchable on every model, "
+         "including ones whose dropped span would still have reported plausible non-zero usage.", "",
+         "Up to `exgentic 0.3.5.dev131` each task also issued a `max_tokens=1` capability probe, so "
+         "a bare `chat == 1` used to be the damage signal and **at least 2** was healthy. The probe "
+         "is gone as of `dev145` (upstream issues #250/#251) — do not resurrect that rule, and do "
+         "not compare chat counts across runs that straddle the change.", "",
          "`not counted` are spans the aggregator cannot see: it only folds a chat/tool span into "
          "`llm_count`/`tool_count` when its parent is the `invoke_agent` span, so anything nested "
          "deeper is real work missing from the totals. A non-zero figure there is not a bug by "
@@ -433,17 +472,20 @@ def sec8():
                     names[s.get("name")] = names.get(s.get("name"), 0) + 1
             uncounted = sum(1 for s in ss if s.get("counted") is False)
             nchat = kinds.get("chat", 0)
+            ntool = kinds.get("tool", 0)
             inventory = ", ".join(f"`{n}`" + (f" x{c}" if c > 1 else "")
                                   for n, c in sorted(names.items(), key=lambda kv: -kv[1]))
             o.append("| %s | %d | %s | %d | %d | %d | %s |" % (
-                tid, len(ss), f"**{nchat}** ⚠" if nchat == 1 else str(nchat),
-                kinds.get("tool", 0), kinds.get("other", 0), uncounted, inventory))
+                tid, len(ss), f"**{nchat}** ⚠" if _span_lost(nchat, ntool) else str(nchat),
+                ntool, kinds.get("other", 0), uncounted, inventory))
         lost = [t for t, ss in by_task.items()
-                if sum(1 for s in ss if s.get("kind") == "chat") == 1]
+                if _span_lost(sum(1 for s in ss if s.get("kind") == "chat"),
+                              sum(1 for s in ss if s.get("kind") == "tool"))]
         if lost:
             o.append("")
-            o.append(f"> ⚠ **{len(lost)} of {len(by_task)} tasks show a single `chat` span** — probe "
-                     "only, real call lost. Their token totals in §6/§7 are understated.")
+            o.append(f"> ⚠ **{len(lost)} of {len(by_task)} tasks invoke ≥2 tools off ≤1 `chat` "
+                     "span** — impossible, so a usage-bearing chat span was dropped. Their token "
+                     "totals in §6/§7 are understated.")
         o.append("")
     if not any_spans:
         return ("## 8. Per-task span inventory\n\n_No run in this set exported "

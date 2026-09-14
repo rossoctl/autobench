@@ -4,6 +4,42 @@ Reported by the AutoBench Service team. Both reproduce on a stock agent image wi
 patches. Bug 1 is a correctness problem (token telemetry is silently lost); Bug 2 is pure wasted
 latency. They are independent.
 
+> ## ✅ Both fixed upstream — resolution note added 2026-09-14
+>
+> **The rest of this document describes the defects as they were, against the digest in the
+> Environment table below. That digest is superseded — do not use this page to reason about a current
+> agent.** Superseded by index `sha256:d924a9ed615fba67ba0a1fa3f130e430e0768ad062491177bebaf8b945f1c1ef`
+> (`linux/amd64` child `sha256:7109b46933537873830fa640127cd7f4d2efc5138e911918d7981af8b7c07ec1`),
+> package version `exgentic 0.3.5.dev145+g82008e9a9`. The image tag did not change — it is still
+> `:latest` — so **only a digest comparison tells you which code you are running**; the local podman
+> cache served the old `:latest` for six weeks and made the fixes look absent.
+>
+> **The issue numbering does not line up with ours, and three distinct things are involved:**
+>
+> | | ours | upstream | status |
+> |---|---|---|---|
+> | span loss on warm agents | **Bug 1** (below) | **#250** | fixed — `_get_parent_context` now uses `getattr(ctx, "otel_context", None)` and falls back to the ambient OTEL context instead of raising `AttributeError` into a swallowed handler. A second defect fixed with it: the tracer is process-global, so `_init_otel` never re-ran on a warm process and the per-session log stayed pinned to the first run's directory. |
+> | the `max_tokens=1` probe | **Bug 2** (below) | *no issue — removed as part of the same work* | **measured gone.** 8 gsm8k legs, 86 tasks, 103 `chat` spans: `request_max_tokens` is `null` on every one, and the `chat` count equals the `tool` count exactly in every leg — including a `gpt-4.1` leg, where the probe previously *succeeded* and was therefore recorded. The probe's code path still exists in the agent's `health.py`, so it could return via config. |
+> | LiteLLM response caching on by default | *we never reported this* | **#251** | fixed — caching now defaults **off for the `a2a` command only** (which is what our agents run), via a `model_fields_set` check so an explicit `EXGENTIC_LITELLM_CACHING` still wins in both directions. |
+>
+> So upstream #251 is **not** our Bug 2. Our Bug 2 was the probe; #251 is a caching default we had not
+> noticed, and it is the more dangerous of the two — a long-lived agent could return a previous run's
+> cached completion as if it were fresh work. It cannot have contaminated any of our published
+> matrices: every canonical leg sets `teardown: true` and deploys a fresh agent, so each leg got a new
+> process and an empty `cache.db`, and tasks within a leg are distinct.
+>
+> **What this changes for us, and what it does not.** The `llm` column now counts real LLM calls
+> one-for-one, with no probe offset to subtract — see `docs/BENCHMARKS_PRIMER.md`, and note that this
+> makes `llm` counts **non-comparable across the version boundary**. The damage detector is unchanged
+> and stays structural (`llm ≤ 1` with `tool ≥ 2`); a bare "one `chat` span" test is now actively
+> wrong, because one `chat` span is the *healthy* shape for a one-shot gsm8k task.
+>
+> **The fresh-deploy-per-run workaround is retained, and the claim that it can be retired is
+> untested.** Upstream states it should no longer be needed for telemetry correctness. Our 12-run
+> matrix structurally cannot check that — every leg deploys fresh, so it never reuses an agent. The
+> dedicated experiment is `reference/warm_reuse_specs.json` (one cold reference leg, two serial
+> reuse legs, one reuse leg at `p=4`); until it has run, treat warm-agent reuse as unverified.
+
 ## Environment
 
 | | |

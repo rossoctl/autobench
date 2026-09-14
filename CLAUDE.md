@@ -42,9 +42,15 @@ those files hold ROPC service credentials.
 
 **A `benchmarks/registry.py` change needs an image rebuild before an e2e run means anything.** The
 edit–pytest–commit–rerun loop silently validates the *old* baked-in value, because the cluster runs
-the image, not your working tree. The validation ladder ends at `GET /benchmarks` against the
-deployed service. On KinD, `kind load docker-image` bypasses the registry, so a pushed tag is not
-necessarily the tag the cluster is running.
+the image, not your working tree. On KinD, `kind load docker-image` bypasses the registry, so a
+pushed tag is not necessarily the tag the cluster is running.
+
+Where the validation ladder ends depends on *what* you changed, because `GET /benchmarks` only
+returns `name`, `mcp_image`, `agents` and `default_model` (see `_summary` in `routes/benchmarks.py`).
+An MCP image or default model shows up there; an **agent `container_image`, `extra_env` entry or
+`model_override` does not** and needs `GET /benchmarks/{name}`, which dumps the whole definition.
+Confirming a registry change against the list endpoint alone can pass while the thing you edited is
+still the old value.
 
 **`InstanceConfig` takes Pydantic's default `extra="ignore"`** — unlike `DeployBenchmarkRequest`
 next to it, which sets `extra="forbid"` deliberately. So an older image accepts a new instance field
@@ -52,6 +58,17 @@ and drops it *silently*. Adding one is never self-verifying: read the value back
 effect.
 
 **`GET /benchmarks` returns `items`, not `benchmarks`.** Small, but it has broken scripts twice.
+
+**Every agent and MCP image is pinned to `:latest`, so an upstream fix arrives by re-pull with no
+tag edit — and a tag tells you nothing about what is running.** The operator renders
+`imagePullPolicy: Always` for these workloads (`registry.py` never sets `image_pull_policy`; that
+default is the operator's, so verify it rather than assume it), which means a *newly created* pod
+gets the new image. A pod that is already running does not, indefinitely. Leftover `team1`
+deployments from a run two days earlier were still serving a six-week-old digest; the driver's
+teardown-before-deploy clears them, but a hand-run experiment will quietly measure the old code.
+Local tooling has the same failure: `podman run ...:latest` reuses a cached image silently — pass
+`--pull=always` before concluding anything about upstream source. Compare **digests**, off
+`.status.containerStatuses[].imageID` on the pod, never tags.
 
 **Never bare-replace the strings `benchmarking` or `benchmarker`.** The S3 bucket
 (`rossoctl-benchmarking`), the Keycloak user (`benchmarker`), and the `BM_*` env prefix deliberately

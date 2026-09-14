@@ -433,8 +433,12 @@ def span_rows(traces: list[dict]) -> list[dict]:
     `parse_traces` only folds a `chat`/`execute_tool` span into `llm_count`/`tool_count` when its
     parent is the `invoke_agent` span, so a span nested deeper is real work that the counters cannot
     see. Publishing `counted` makes that filter auditable rather than folklore, and makes the
-    warm-agent span-loss defect legible: a healthy task shows two `chat` spans (the `max_tokens=1`
-    probe plus the real call), a damaged one shows only the probe.
+    warm-agent span-loss defect legible — but read it structurally, not off a threshold. There is no
+    healthy `chat` count: a one-shot gsm8k task shows exactly one, a multi-turn tau2 task shows many.
+    The impossible shape is `chat` <= 1 alongside two or more `execute_tool` spans, since every tool
+    call needs a model turn to request it. (Agents up to exgentic 0.3.5.dev131 also emitted a
+    `max_tokens=1` capability probe as a second `chat` span, which is why a lone `chat` span used to
+    read as damage; the probe is gone as of dev145 and that rule now flags healthy rows.)
     """
     rows: list[dict] = []
     for trace in traces:
