@@ -141,8 +141,11 @@ A few things that trip people up:
 - **† The `llm` figures in the table above are one call per task too high, and current runs are
   not.** Agents up to `exgentic 0.3.5.dev131` issued a `max_tokens=1` capability probe before the
   real work, and it was counted as a `chat` span — so the tabulated 2.1 / 11.4 / 23.6 are really
-  ~1.1 / ~10.4 / ~22.6 real calls. The probe was removed upstream (issues #250/#251); measured absent
-  across 103 `chat` spans on `0.3.5.dev145`, on both reasoning and non-reasoning models. **A current
+  ~1.1 / ~10.4 / ~22.6 real calls. As of `0.3.5.dev145` it is *replaced* by an unbilled
+  `GET /v1/models` reachability check, which emits no `chat` span — measured absent across all 869
+  `chat` spans of a full 12-leg matrix, all four model classes. (That replacement has a sharp edge of
+  its own: it runs per task with a hard 10 s cap and no retry, and on a high-latency gateway it fails
+  tasks outright. See Bug 3 in `docs/exgentic-agent-bug-report-20260901.md`.) **A current
   run's `llm` column counts real calls one-for-one, with no offset to subtract.** The table has not
   been re-measured on the new agent, which is why the correction is stated rather than applied. The
   practical trap: **do not compare `llm` counts across runs that straddle the change** — a leg will

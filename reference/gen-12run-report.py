@@ -75,11 +75,12 @@ def _lost(x):
     That clause matters more than it used to. Up to exgentic 0.3.5.dev131 every task also issued a
     `max_tokens=1` capability probe, so a damaged task still had one surviving `chat` span and
     reported `llm_count == 1` — which the `llm_count == 0` test cannot see, and which is why the
-    structural pair test was needed in the first place. The probe was removed upstream (measured
-    absent across 103 chat spans on 0.3.5.dev145, both reasoning and non-reasoning models), so a
-    damaged task now drops to zero `chat` spans. Both clauses are kept: the probe's own code path
-    still exists in the agent's `health.py`, so a future config could reintroduce it, and the
-    structural test is the one that survives either way.
+    structural pair test was needed in the first place. As of 0.3.5.dev145 the probe is *replaced*
+    (not deleted) by an unbilled `GET /v1/models` reachability check, which emits no `chat` span —
+    measured absent across all 869 chat spans of a full 12-leg matrix, all four model classes — so a
+    damaged task now drops to zero `chat` spans. Both clauses are kept: the completion probe is still
+    reachable via `strict=True` in the agent's `health.py`, so a future config could reintroduce it,
+    and the structural test is the one that survives either way.
 
     Do not replace any of this with a `tokens == 0` test. While the probe existed it *carried its own
     usage on non-reasoning models* (`in=8/out=1` on claude-sonnet-5, `in=1/out=0` on gemini-2.5-pro),
