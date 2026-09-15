@@ -1,6 +1,6 @@
 # 12-Run Comparison — OCP (ykt3→ykt2) vs KinD, both Service v1.27
 
-**Report generated:** 2026-09-15T01:28:48Z
+**Report generated:** 2026-09-15T03:07:11Z
 
 **Platforms compared:** OCP (ykt3→ykt2) vs KinD
 

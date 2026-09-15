@@ -8,11 +8,26 @@ latency. They are independent.
 >
 > **The rest of this document describes the defects as they were, against the digest in the
 > Environment table below. That digest is superseded — do not use this page to reason about a current
-> agent.** Superseded by index `sha256:d924a9ed615fba67ba0a1fa3f130e430e0768ad062491177bebaf8b945f1c1ef`
-> (`linux/amd64` child `sha256:7109b46933537873830fa640127cd7f4d2efc5138e911918d7981af8b7c07ec1`),
+> agent.** Superseded by index `sha256:d924a9ed615fba67ba0a1fa3f130e430e0768ad062491177bebaf8b945f1c1ef`,
 > package version `exgentic 0.3.5.dev145+g82008e9a9`. The image tag did not change — it is still
 > `:latest` — so **only a digest comparison tells you which code you are running**; the local podman
 > cache served the old `:latest` for six weeks and made the fixes look absent.
+>
+> **Both architectures carry the fix, and they are the same source revision.** Read off the registry
+> with `skopeo inspect --raw docker://ghcr.io/exgentic/exgentic-a2a-tool_calling:latest` — the index is
+> a two-platform OCI image index (plus one attestation manifest per platform):
+>
+> | platform | child digest | used by |
+> |---|---|---|
+> | `linux/amd64` | `sha256:7109b46933537873830fa640127cd7f4d2efc5138e911918d7981af8b7c07ec1` | OpenShift (`ykt2`) |
+> | `linux/arm64` | `sha256:d11a8adf50220f1b242b80bef8d38cacfd318539ba412f2f6684ae3b03b7fbf1` | KinD (Apple Silicon) |
+>
+> Both children carry `org.opencontainers.image.revision =`
+> `82008e9a9ad28a304f308c621c619a18ae35303d`, which is the `g82008e9a9` in the package version above —
+> so the two clusters ran the *same commit*, not merely the same tag, and the arm64 leg's results are
+> not a different code base. Checked again on 2026-09-15T03:02Z: the index digest still resolves
+> to `d924a9ed…`, i.e. `:latest` has not moved since the matrices were run. **Record both children, not
+> just your own arch** — a single-arch digest looks like full provenance and is not.
 >
 > **The issue numbering does not line up with ours, and three distinct things are involved:**
 >
