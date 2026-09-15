@@ -176,8 +176,11 @@ A few things that trip people up:
   `in=0, out=0`, but claude-sonnet-5 left `in=8, out=1` and gemini-2.5-pro `in=1, out=0`. A
   zero-check therefore missed every tau2 and appworld case. Now that the probe is gone a damaged task
   drops to zero `chat` spans, so `llm = 0` catches more than it used to — but the structural pair
-  test is the one that holds across agent versions, and it is what the report generators use. Cause
-  and fix (fresh deploy per run, no warm-agent reuse):
+  test is the one that holds across agent versions, and it is what the report generators use.
+  **This defect is fixed as of `0.3.5.dev145`** — a warm agent now keeps full token attribution,
+  measured over four reuse legs. Keep deploying fresh per run all the same: on a warm process the
+  agent replays *cached completions* and re-reports their tokens as if the model had been called, so
+  the failure mode moved from understated tokens to fabricated ones. Both stories, with the numbers:
   `docs/exgentic-agent-bug-report-20260901.md`.
 
 Three more that apply specifically to the **latency** columns, all measured in the plugin-overhead
