@@ -158,6 +158,38 @@ def probe_failures(run):
                if (x.get("error") or "").endswith("/v1/models"))
 
 
+def repeated_tasks():
+    """[(label, [run numbers], shared task count)] for runs whose prompts overlap.
+
+    Task selection is deterministic — a run takes the first `max_tasks` tasks — so a shorter run's
+    tasks are a *prefix* of a longer one's and legs sharing a benchmark almost always share prompts.
+    That matters because the LLM gateway caches completions on the request body: the second leg to
+    send a prompt gets the first leg's stored response back, usage and all. Which legs overlap is a
+    property of the spec file, so it is computed here rather than hard-coded.
+
+    Grouped by (benchmark, requested model), because the model is part of the request body and so
+    part of the cache key — the gpt-4.1 leg cannot replay the gpt-5-mini legs' responses even though
+    it runs the same task ids. That makes this a *proxy* for cache-key identity, not a proof of it:
+    the real key is the whole body, and two legs could still differ in it (a different tool list, for
+    instance). Overlap here means "these legs could have replayed each other", not "they did".
+    """
+    by_key, out = {}, []
+    for r in runs:
+        ids = {str(x.get("task_id")) for x in rows(r, "report.ndjson") if x.get("task_id") is not None}
+        if ids:
+            model = (r.get("run_request") or {}).get("model")
+            by_key.setdefault((r["bench"], model), []).append((r["n"], ids))
+    for (bench, model), legs in by_key.items():
+        if len(legs) < 2:
+            continue
+        shared = {i for a in range(len(legs)) for b in range(a + 1, len(legs))
+                  for i in legs[a][1] & legs[b][1]}
+        if shared:
+            label = f"{bench}" + (f" on `{model}`" if model else "")
+            out.append((label, [n for n, ids in legs if ids & shared], len(shared)))
+    return out
+
+
 def probe_spans():
     """(capability-probe `chat` spans, all `chat` spans) across this matrix.
 
@@ -427,6 +459,29 @@ def sec4():
                  "mean and CV below, pulling the token figures down and widening their spread. It is "
                  "**not** flagged as lost token attribution, and that is correct — the model was "
                  "never called, so zero tokens is the truth rather than a dropped span.")
+
+    # The LLM gateway caches completions, keyed on the request body, so legs that repeat a task
+    # replay each other's responses. Derived from the data rather than asserted, because which legs
+    # overlap is a property of the spec file and changes with it.
+    shared = repeated_tasks()
+    o.append("")
+    if not shared:
+        o.append("**Gateway response cache:** no task id appears in more than one run of the same "
+                 "benchmark, so no run could have replayed another's completions.")
+    else:
+        o.append("**⚠ The LLM gateway caches completions, and these runs repeat tasks: "
+                 + "; ".join(f"{b} #{'/#'.join(str(n) for n in ns)} share {c} task id"
+                             f"{'s' if c != 1 else ''}" for b, ns, c in shared)
+                 + ".** A repeated request body comes back from `ete-litellm` as the *same stored "
+                   "response* — identical response `id`, identical `usage` — measured with the agent "
+                   "bypassed, on both clusters' gateways, with a TTL measured between 7 and 15 minutes. So for the runs listed, **per-call latency and "
+                   "output token counts are not independent measurements**: a replay re-reports the "
+                   "stored token counts and its latency is a cache lookup. Input tokens and pass "
+                   "rates are unaffected (the same prompt and the same correct answer either way). "
+                   "This is not an agent setting — `EXGENTIC_LITELLM_CACHING=false` is pinned and "
+                   "provably inert against it — and **latency is not a reliable hit detector**: one "
+                   "measured replay took 3.0 s, the same as a miss. Compare response `id`s. Details "
+                   "in `docs/exgentic-agent-bug-report-20260901.md`.")
     return "\n".join(o)
 
 

@@ -331,12 +331,13 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
                     # `service` is the runner that explicitly bridges thread → context.
                     EnvVar(name="EXGENTIC_DEFAULT_RUNNER", value="service"),
                     EnvVar(name="LITELLM_LOCAL_MODEL_COST_MAP", value="True"),
-                    # Response caching off, explicitly. Upstream #251 made `false` the default for
-                    # the `a2a` command, but a warm-reuse run at 0.3.5.dev145 still replayed
-                    # completions: on one process, in one run, five repeat prompts came back in
-                    # 0.06-0.11s while a never-seen prompt took 4.12s — and a replay re-reports its
-                    # token usage as if the model had been called. An explicit value wins over the
-                    # default in either direction, so pin it rather than trust the default.
+                    # Response caching off, explicitly — defence in depth, not a fix for anything
+                    # we have observed. `utils/settings.py` still declares `litellm_caching = True`
+                    # and only the `a2a` command flips it off when unset; an explicit value wins in
+                    # either direction, so pinning it drops our dependence on that one code path.
+                    # It does NOT stop the completion replays we measured: those come from the LLM
+                    # gateway (same response `id` for a repeated body, agent bypassed), which no
+                    # agent-side setting can reach. See docs/exgentic-agent-bug-report-20260901.md.
                     EnvVar(name="EXGENTIC_LITELLM_CACHING", value="false"),
                 ],
                 resources=_AGENT_RESOURCES,
@@ -379,12 +380,13 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
                     # `service` is the runner that explicitly bridges thread → context.
                     EnvVar(name="EXGENTIC_DEFAULT_RUNNER", value="service"),
                     EnvVar(name="LITELLM_LOCAL_MODEL_COST_MAP", value="True"),
-                    # Response caching off, explicitly. Upstream #251 made `false` the default for
-                    # the `a2a` command, but a warm-reuse run at 0.3.5.dev145 still replayed
-                    # completions: on one process, in one run, five repeat prompts came back in
-                    # 0.06-0.11s while a never-seen prompt took 4.12s — and a replay re-reports its
-                    # token usage as if the model had been called. An explicit value wins over the
-                    # default in either direction, so pin it rather than trust the default.
+                    # Response caching off, explicitly — defence in depth, not a fix for anything
+                    # we have observed. `utils/settings.py` still declares `litellm_caching = True`
+                    # and only the `a2a` command flips it off when unset; an explicit value wins in
+                    # either direction, so pinning it drops our dependence on that one code path.
+                    # It does NOT stop the completion replays we measured: those come from the LLM
+                    # gateway (same response `id` for a repeated body, agent bypassed), which no
+                    # agent-side setting can reach. See docs/exgentic-agent-bug-report-20260901.md.
                     EnvVar(name="EXGENTIC_LITELLM_CACHING", value="false"),
                 ],
                 resources=_AGENT_RESOURCES,
@@ -436,12 +438,13 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
                     # `service` is the runner that explicitly bridges thread → context.
                     EnvVar(name="EXGENTIC_DEFAULT_RUNNER", value="service"),
                     EnvVar(name="LITELLM_LOCAL_MODEL_COST_MAP", value="True"),
-                    # Response caching off, explicitly. Upstream #251 made `false` the default for
-                    # the `a2a` command, but a warm-reuse run at 0.3.5.dev145 still replayed
-                    # completions: on one process, in one run, five repeat prompts came back in
-                    # 0.06-0.11s while a never-seen prompt took 4.12s — and a replay re-reports its
-                    # token usage as if the model had been called. An explicit value wins over the
-                    # default in either direction, so pin it rather than trust the default.
+                    # Response caching off, explicitly — defence in depth, not a fix for anything
+                    # we have observed. `utils/settings.py` still declares `litellm_caching = True`
+                    # and only the `a2a` command flips it off when unset; an explicit value wins in
+                    # either direction, so pinning it drops our dependence on that one code path.
+                    # It does NOT stop the completion replays we measured: those come from the LLM
+                    # gateway (same response `id` for a repeated body, agent bypassed), which no
+                    # agent-side setting can reach. See docs/exgentic-agent-bug-report-20260901.md.
                     EnvVar(name="EXGENTIC_LITELLM_CACHING", value="false"),
                     # appworld sandbox exec (create_session/step) can exceed the default 60s
                     # outbound MCP timeout; when it does the agent turn fails "Error: timed out"
