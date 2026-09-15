@@ -158,6 +158,29 @@ def probe_failures(run):
                if (x.get("error") or "").endswith("/v1/models"))
 
 
+def failed_tasks(run):
+    """(tasks that errored, tasks that left no report.ndjson row) — both from `run.json`.
+
+    `report.ndjson` is the wrong source for a failure count: a task killed by the per-task timeout
+    ends without a row at all, so counting non-OK *rows* reported `0/20` for an appworld leg that
+    actually lost 10 of its 20 tasks. `run.json` carries one result per task unconditionally, which is
+    the only place a vanished task is still visible.
+
+    The second number matters on its own, because §6-§7 are computed over `report.ndjson`: a task with
+    no row contributes nothing to any median, mean or CV, so those statistics describe the tasks that
+    *finished*, not the tasks that were attempted.
+    """
+    d = run.get("mirror_dir")
+    p = pathlib.Path(d) / "run.json" if d else None
+    if not (p and p.exists()):
+        rr = rows(run, "report.ndjson")
+        return sum(1 for x in rr if (x.get("status") or "") not in ("OK", "")), 0
+    res = json.loads(p.read_text()).get("results", [])
+    reported = {x.get("task_id") for x in rows(run, "report.ndjson")}
+    return (sum(1 for x in res if x.get("error")),
+            sum(1 for x in res if x.get("task_id") not in reported))
+
+
 def repeated_tasks():
     """[(label, [run numbers], shared task count)] for runs whose prompts overlap.
 
@@ -416,7 +439,7 @@ def sec4():
         s = r.get("summary") or {}
         rr = rows(r, "report.ndjson")
         models = sorted({x.get("model") for x in rr if x.get("model")}) or ["—"]
-        err = sum(1 for x in rr if (x.get("status") or "") not in ("OK", ""))
+        err, _ = failed_tasks(r)
         o.append("| %s | %s | `%s` | %s | %s | %s | %s | %s/%s | %s | %s |" % (
             r["n"], r["bench"], r.get("run_id") or "—", ", ".join(models),
             r.get("status") or "—",
@@ -428,7 +451,20 @@ def sec4():
     tot = sum(c for _, c, _ in bad)
     allrows = sum(t for _, _, t in bad)
     bad = [(n, c, t) for n, c, t in bad if c]
+    # A task that never produced a row is invisible in §6-§7, so say so next to the table rather than
+    # leaving those medians to look like they cover every attempted task.
+    gone = [(r["n"], failed_tasks(r)[1], (r.get("summary") or {}).get("total")) for r in runs]
+    gone = [(n, c, t) for n, c, t in gone if c]
     o.append("")
+    if gone:
+        o.append(f"**Tasks with no `report.ndjson` row: "
+                 + ", ".join(f"#{n} ({c} of {t})" for n, c, t in gone)
+                 + ".** These ended before the harness wrote a per-task row — on appworld, the "
+                   "per-task timeout. `Err/Total` counts them (it reads `run.json`, which has one "
+                   "result per task unconditionally), but **§6-§7 cannot**: a missing row contributes "
+                   "to no median, mean or CV, so those per-task statistics describe the tasks that "
+                   "finished rather than the tasks that were attempted.")
+        o.append("")
     if not bad:
         o.append("**Token attribution:** complete — no row lost its usage-bearing span.")
     else:
@@ -496,17 +532,29 @@ def sec4():
         # than the bare warning, and show the enforced gap so the claim is checkable.
         gap = data.get("cache_gap_seconds") or 0
         if gap >= 660:
-            slept = [r for r in runs if (r.get("cache_gap_slept_seconds") or 0) > 0]
+            # Three distinct reasons a leg was safe, and they are worth separating: a leg that is the
+            # first of its group had no predecessor to replay, which is not the same as one whose gap
+            # was already covered by other legs running in between.
+            slept = sum(1 for r in runs if (r.get("cache_gap_slept_seconds") or 0) > 0)
+            seen, first = set(), 0
+            for n in (data.get("order") or sorted(r["n"] for r in runs)):
+                g = next((r.get("cache_group") for r in runs if r["n"] == n), None)
+                if g is not None and g not in seen:
+                    seen.add(g)
+                    first += 1
+            covered = len(runs) - slept - first
             o.append(f"**✅ These runs were spaced to defeat the gateway's completion cache.** The "
                      f"legs do repeat tasks — {overlap} — but the driver rested every "
                      f"(benchmark, model) prompt set for at least **{int(gap)} s** before reusing "
-                     f"it, against a measured cache TTL of ~10 min, so no leg could replay "
-                     f"another's completions"
-                     + (f" ({len(slept)} of {len(runs)} legs waited out a remainder explicitly; the "
-                        f"rest had already been idle long enough)" if slept else "")
-                     + f". Per-call latency and output tokens are therefore independent across these "
-                       f"legs, which was not true of earlier matrices. For the underlying "
-                       f"mechanism: {mechanism}")
+                     f"it, against a measured cache TTL of ~10 min, so **no leg could replay "
+                     f"another's completions**: {first} leg(s) were the first of their prompt set and "
+                     f"had nothing to replay, {covered} had the gap covered by other legs running in "
+                     f"between, and {slept} waited out the remainder explicitly. The gap is measured "
+                     f"from the previous leg's *finish*, which errs safe — a shared task set is always "
+                     f"a prefix, so the colliding prompts were sent near that leg's start and are older "
+                     f"still. Per-call latency and output tokens are therefore independent across these "
+                     f"legs, which was not true of earlier matrices. For the underlying mechanism: "
+                     f"{mechanism}")
         else:
             o.append(f"**⚠ The LLM gateway caches completions, and these runs repeat tasks: "
                      f"{overlap}.** {mechanism} So for the runs listed, **per-call latency and "
