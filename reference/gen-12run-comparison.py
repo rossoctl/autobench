@@ -422,7 +422,18 @@ L += ["",
       "was the span that *survived* the loss, carrying its own usage on non-reasoning models",
       "(`claude-sonnet-5` `in=8/out=1`, `gemini-2.5-pro` `in=1/out=0`), so a zero-check missed every",
       "tau2 and appworld case. Any leg counted above has **understated** token totals — its pass rate",
-      "remains valid. See `docs/exgentic-agent-bug-report-20260901.md`."]
+      "remains valid. See `docs/exgentic-agent-bug-report-20260901.md`.",
+      "",
+      "One more, and it bears on the *output* token and latency columns rather than the `llm` one:",
+      "**each LLM gateway caches completions**, keyed on the request body, so a leg that repeats an",
+      "earlier leg's task on the same model can be handed back the stored response — same response",
+      "`id`, same `usage`. Task selection is deterministic, so within one side the legs sharing a",
+      "benchmark do repeat tasks; each side's own report names them. That makes per-call latency and",
+      "output tokens non-independent **within** a side. It does not undermine the comparison, because",
+      "the two clusters front *different* gateways with independent caches: a figure the two sides",
+      "agree on is agreement between two independently cached (or uncached) measurements, not one",
+      "measurement counted twice. Latency is not a hit detector either — a measured replay took 3.0 s,",
+      "the same as a miss."]
 
 doc = "\n".join(L) + "\n"
 doc = doc.replace("<!--TOC-->", _toc(doc))

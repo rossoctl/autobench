@@ -20,17 +20,10 @@ latency. They are independent.
 > |---|---|---|---|
 > | span loss on warm agents | **Bug 1** (below) | **#250** | fixed — `_get_parent_context` now uses `getattr(ctx, "otel_context", None)` and falls back to the ambient OTEL context instead of raising `AttributeError` into a swallowed handler. A second defect fixed with it: the tracer is process-global, so `_init_otel` never re-ran on a warm process and the per-session log stayed pinned to the first run's directory. |
 > | the `max_tokens=1` probe | **Bug 2** (below) | *no issue — changed as part of the same work* | **measured gone**, across all four model classes: 12 legs, 869 `chat` spans, `request_max_tokens` `null` on every one. But it was **replaced, not removed** — see the regression below, which is a direct consequence. |
-> | LiteLLM response caching on by default | *we never reported this* | **#251** | fixed upstream, **but not effective on our deployment** — caching is documented as defaulting off for the `a2a` command (which is what our agents run) via a `model_fields_set` check, yet a warm `exgentic-a2a-tool_calling:latest` at `dev145` demonstrably still replays completions (measured below). The same check means an explicit `EXGENTIC_LITELLM_CACHING` wins in both directions, so `registry.py` now pins it `false`. |
+> | LiteLLM response caching on by default | *we never reported this* | **#251** | fixed upstream, and **honored on our deployment** — the `a2a` command defaults it off via a `model_fields_set` check, and because that check lets an explicit value win in either direction `registry.py` now pins `EXGENTIC_LITELLM_CACHING=false` as well. Verified in the running pod: the startup line `✓ LiteLLM response caching disabled via EXGENTIC_LITELLM_CACHING`, `get_settings().litellm_caching == False`, and no `/app/.cache/exgentic/litellm` directory. |
 >
-> So upstream #251 is **not** our Bug 2. Our Bug 2 was the probe; #251 is a caching default we had not
-> noticed, and it is the more dangerous of the two — a long-lived agent could return a previous run's
-> cached completion as if it were fresh work. It cannot have contaminated any of our published
-> matrices: every canonical leg sets `teardown: true` and deploys a fresh agent, so each leg got a new
-> process and an empty `cache.db`, and tasks within a leg are distinct. That is now more than an
-> argument from the spec — the cache is **per process, not gateway-side**: the cold leg of the
-> warm-reuse run below paid a full 1.8–4.2 s on the very five gsm8k tasks that four legs of the same
-> day's matrix had already run against the same gateway with the same model. A shared cache at the
-> gateway would have replayed them.
+> So upstream #251 is **not** our Bug 2 — and, as it turned out, **not the cause of the completion
+> replays either.** The replays are real; they happen at the **LLM gateway**, outside the agent.
 >
 > **What this changes for us, and what it does not.** The `llm` column now counts real LLM calls
 > one-for-one, with no probe offset to subtract — see `docs/BENCHMARKS_PRIMER.md`, and note that this
@@ -43,24 +36,64 @@ latency. They are independent.
 > confirmed: `reference/warm_reuse_specs.json`, run on OpenShift 2026-09-14 (one cold reference leg,
 > two serial reuse legs, one reuse leg at `p=4`; 20 tasks, all `succeeded`, pass 1.0 throughout), gave
 > **complete token attribution on every warm row** — 5 `chat` spans per leg, all `counted: true`, no
-> row matching the structural detector, and warm token totals **byte-identical to the cold leg**
-> (1564 in / 500 out). Bug 1 is fixed on a warm process, not merely on a fresh one.
+> row matching the structural detector. The span *presence* is the evidence here; the fact that warm
+> token totals came out byte-identical to the cold leg is **not** independent corroboration, because a
+> gateway replay (below) returns the very same stored `usage`. Bug 1 is fixed on a warm process, not
+> merely on a fresh one.
 >
-> **What blocks retiring the workaround is now the caching default (#251), which does not hold for our
-> deployment.** On the reused process the same five prompts came back in **0.05–0.11 s** against
-> **1.8–4.2 s** cold, at byte-identical token counts — a replay, not a faster process. A sixth leg on
-> that same warm process settles it inside a single run: tasks 0–4 (seen before) returned in
-> 0.06–0.11 s while task 5 (never seen) took **4.12 s**, a 71× separation that no warm-up explains.
-> The replay is the dangerous part, because litellm re-reports the cached usage as if the model had
-> been called: a warm leg would publish fabricated token totals and 40–70× understated latency at an
-> unchanged pass rate — a corruption with no signature in `pass_rate` at all. So warm reuse stays off
-> until the pin below is deployed and re-verified.
+> **The completion replay is real, but it is not the agent's and not #251's — it is the LLM gateway.**
+> Measured directly, with the agent code out of the picture: four POSTs to
+> `{OPENAI_API_BASE}/v1/chat/completions` issued from a shell inside the agent pod, three of them
+> byte-identical and the fourth with one sentence appended.
 >
-> `registry.py` now sets **`EXGENTIC_LITELLM_CACHING=false`** explicitly on all three `tool_calling`
-> agents rather than relying on #251's default. That pin is baked into the Service image, so it means
-> nothing until a rebuilt image is rolled out — and it must then be confirmed by re-running
-> `warm_reuse_specs.json` and checking that the warm legs are *slow*, not by reading `GET /benchmarks`
-> (which does not return `extra_env`).
+> | call | latency | response `id` (tail) | `completion_tokens` |
+> |---|---|---|---|
+> | 1 — fresh nonce | 2.969 s | `GMHy8TLYwl6U` | 274 |
+> | 2 — identical body | **0.131 s** | `GMHy8TLYwl6U` | 274 |
+> | 3 — identical body | **3.013 s** | `GMHy8TLYwl6U` | 274 |
+> | 4 — one sentence appended | 7.391 s | `1NdXijnEEQw3` | 465 |
+>
+> A response `id` is minted per request, so **the same `id` coming back three times is a replay of one
+> stored response** — served by `ete-litellm.ai-models.vpc.res.ibm.com`, not by anything in the agent.
+> The same test inside a KinD agent pod against the *other* gateway
+> (`ete-litellm.ai-models.vpc-int.res.ibm.com`, a separate deployment with its own key table) behaves
+> identically: 6.283 s then 0.561 s and 0.595 s on one `id`, a new body 5.067 s on a new one. **Both
+> our gateways do this.** The TTL is bracketed at **7–15 minutes**: one stored response was still
+> being replayed at t+60 s, t+180 s and t+420 s and was gone by t+900 s.
+>
+> Two claims an earlier draft of this note made, both wrong, both mine:
+>
+> - **"The cache is per process, not gateway-side" — withdrawn.** It was inferred from a cold leg
+>   paying full price on prompts an earlier leg had already sent through the same gateway, but that
+>   comparison is confounded by *time*: every cold leg followed a ~13-minute gap while every warm leg
+>   followed by seconds. A `kubectl rollout restart` settles it. On a **brand-new pod** — empty
+>   process, empty everything — the same five gsm8k prompts came back at **0.08–1.43 s** against
+>   **2.7–5.9 s** on a genuinely cold gateway, with byte-identical output-token totals. Nothing that
+>   survived the restart lived inside the agent.
+> - **Latency is not a reliable cache-hit detector.** Call 3 above is a replay that took 3.013 s,
+>   indistinguishable by the clock from call 1's miss. Compare **response `id`s**; use latency only as
+>   a hint.
+>
+> **What the replay damages.** A replayed response carries the stored `usage`, so tokens get
+> attributed to a call the model never made and that call's latency measures a cache lookup. It is
+> keyed on the request body, so it bites wherever a run repeats a prompt inside the TTL — and the
+> canonical matrix does repeat prompts: legs #1, #2, #3 and #5–#8 all open with the same five gsm8k
+> tasks. Pass rates and input-token counts are untouched. What our matrices should **not** be read as
+> claiming is that gsm8k per-call latency and output tokens are independent measurements across those
+> legs.
+>
+> **The fresh-deploy-per-run rule stays, but it no longer earns its keep the way we thought.** It does
+> not buy telemetry correctness any more (Bug 1 is fixed) and it never could have avoided the gateway
+> cache (a fresh pod dials the same gateway). What it does still buy is unrelated to both: a *newly
+> created* pod re-pulls `:latest` under `imagePullPolicy: Always`, whereas a long-lived one serves a
+> stale digest indefinitely, and a Deployment left standing keeps serving its old `api_base`.
+>
+> The **`EXGENTIC_LITELLM_CACHING=false`** pin in `registry.py` is kept as defence in depth, not as a
+> fix: `utils/settings.py` still declares `litellm_caching: bool = True`, and only the `a2a` command
+> overrides it when unset, so pinning it removes our dependence on that one code path. Rolling it out
+> (Service image v1.28, both clusters) demonstrably changed nothing about the replays — as expected,
+> now that they are known to be gateway-side. Note that the pin cannot be confirmed from
+> `GET /benchmarks`, which omits `extra_env`; read `GET /benchmarks/{name}` or the pod's env.
 
 ---
 

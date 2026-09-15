@@ -178,10 +178,18 @@ A few things that trip people up:
   drops to zero `chat` spans, so `llm = 0` catches more than it used to — but the structural pair
   test is the one that holds across agent versions, and it is what the report generators use.
   **This defect is fixed as of `0.3.5.dev145`** — a warm agent now keeps full token attribution,
-  measured over four reuse legs. Keep deploying fresh per run all the same: on a warm process the
-  agent replays *cached completions* and re-reports their tokens as if the model had been called, so
-  the failure mode moved from understated tokens to fabricated ones. Both stories, with the numbers:
-  `docs/exgentic-agent-bug-report-20260901.md`.
+  measured over four reuse legs. We keep deploying fresh per run anyway, but for an unrelated reason
+  (a newly created pod re-pulls `:latest`; a long-lived one serves a stale digest indefinitely).
+  Details: `docs/exgentic-agent-bug-report-20260901.md`.
+- **The LLM gateway caches completions, so a repeated prompt can be a replay.** Sending the same
+  request body twice within the gateway's TTL returns the *same response `id`* and the same `usage` —
+  proven by hand against both gateways, with the agent out of the picture (TTL 7-15 min). A replay re-reports the
+  stored token counts and its latency measures a cache lookup, so **per-call latency and output
+  tokens are not independent across legs that share prompts** — which legs #1–#3 and #5–#8 of the
+  canonical matrix do, since they all open with the same five gsm8k tasks. Input tokens and pass
+  rates are unaffected. This is not an agent setting we can turn off (`EXGENTIC_LITELLM_CACHING=false`
+  is pinned and changes nothing), and **latency is the wrong detector** — one measured replay took
+  3.0 s, the same as a miss. Compare response `id`s.
 
 Three more that apply specifically to the **latency** columns, all measured in the plugin-overhead
 study ([docs/PLUGIN_OVERHEAD.md](PLUGIN_OVERHEAD.md)):

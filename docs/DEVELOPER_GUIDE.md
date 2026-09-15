@@ -1040,11 +1040,12 @@ example unchanged. Two details the table encodes silently:
 
 - **Every line is a fresh deploy.** `all` pre-cleans with `DELETE …/deploy` before deploying, which
   is what the matrix requires. That is also why `--no-deploy` has no place here. The reason has
-  changed as of `exgentic 0.3.5.dev145` but the rule has not: warm reuse no longer drops the
-  usage-bearing span (measured — that defect is fixed), it now **replays cached completions and
-  re-reports their tokens as if the model had been called**, which fabricates token totals and
-  collapses latency 40–70× at an unchanged pass rate. See
-  `docs/exgentic-agent-bug-report-20260901.md`.
+  changed as of `exgentic 0.3.5.dev145` but the rule has not. Warm reuse no longer drops the
+  usage-bearing span — that defect is fixed, measured. What a fresh deploy still buys is a **fresh
+  image pull**: these workloads are pinned to `:latest` under `imagePullPolicy: Always`, so a newly
+  created pod picks up an upstream fix while a long-lived one serves a six-week-old digest
+  indefinitely. It does *not* protect you from the LLM gateway's own response cache, which is outside
+  the agent and unavoidable from here. See `docs/exgentic-agent-bug-report-20260901.md`.
 - **`--settle` needs no value.** It defaults to 45 s when `--preset` or `--plugin` is present and
   15 s otherwise, matching `BM_SETTLE_SIDECAR` / `BM_SETTLE_PLAIN` in §6.4.
 

@@ -1,6 +1,6 @@
 # AutoBench Service — 12 Parameterized Runs (KinD — single-node local cluster)
 
-**Report generated:** 2026-09-14T19:52:50Z  
+**Report generated:** 2026-09-15T01:34:54Z  
 **Service version:** `v1.27`  
 **Platform:** KinD — single-node local cluster  
 **Runs executed:** 12
@@ -361,6 +361,8 @@ Each run = an optional **deploy** step (teardown + `POST /benchmarks/<b>/deploy`
 **Token attribution:** complete — no row lost its usage-bearing span.
 
 **Health probe:** every task reached the model — no task was lost to the agent's per-task `GET /v1/models` check.
+
+**⚠ The LLM gateway caches completions, and these runs repeat tasks: gsm8k #1/#2/#3/#5/#6/#7/#8 share 10 task ids; tau2 #9/#10 share 10 task ids; appworld on `openai/gemini-2.5-pro` #11/#12 share 4 task ids.** A repeated request body comes back from `ete-litellm` as the *same stored response* — identical response `id`, identical `usage` — measured with the agent bypassed, on both clusters' gateways, with a TTL measured between 7 and 15 minutes. So for the runs listed, **per-call latency and output token counts are not independent measurements**: a replay re-reports the stored token counts and its latency is a cache lookup. Input tokens and pass rates are unaffected (the same prompt and the same correct answer either way). This is not an agent setting — `EXGENTIC_LITELLM_CACHING=false` is pinned and provably inert against it — and **latency is not a reliable hit detector**: one measured replay took 3.0 s, the same as a miss. Compare response `id`s. Details in `docs/exgentic-agent-bug-report-20260901.md`.
 
 ## 5. Contents of the manifest file
 
