@@ -1,6 +1,6 @@
 # AutoBench Service — 12 Parameterized Runs (KinD — single-node local cluster)
 
-**Report generated:** 2026-09-15T01:34:54Z  
+**Report generated:** 2026-09-15T03:07:10Z  
 **Service version:** `v1.27`  
 **Platform:** KinD — single-node local cluster  
 **Runs executed:** 12
@@ -100,6 +100,14 @@ weeks apart can differ in call counts with nothing in the request changing. **No
 records the agent digest** — not `run.json`, not `manifest.json` — so the only record is operational:
 read `.status.containerStatuses[].imageID` off the agent pod while the run is live. Treat a
 cross-run count comparison as unsupported unless you captured that.
+
+If you did not, one weaker check is still available after the fact:
+`skopeo inspect --raw docker://<agent image>:latest` gives the current index digest and its
+per-platform children. That tells you what `:latest` points at **now**, so it can only confirm the tag
+has *not* moved since your run — it can never recover the digest of a run that predates a push. Note
+also that the index is multi-platform: compare the child for the cluster's architecture
+(`linux/amd64` on OpenShift, `linux/arm64` on a KinD on Apple Silicon), and check the children share
+`org.opencontainers.image.revision` before treating two clusters' legs as the same code.
 
 ### `span_report.ndjson` (§8)
 
