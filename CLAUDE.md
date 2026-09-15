@@ -95,12 +95,24 @@ config bug in the new one.
 
 ## Long runs
 
-A full 12-run takes 1–2 hours. Two rules, both learned the hard way:
+A full 12-run takes 1–2 hours. Three rules, all learned the hard way:
 
 - **Detach in-process.** The Bash tool kills the process *group*, background or not, so wrap the
   driver in a `os.setsid()` call before importing it (macOS has no `setsid(1)`).
-- **One platform at a time, never in parallel.** Both clusters front the same LLM gateways, so
-  concurrent runs contend and the latency numbers become meaningless.
+- **One platform at a time, never in parallel.** Each platform has its *own* litellm deployment —
+  hence its own completion cache and its own key table, which is why a key copied between them always
+  401s — but the same upstream model providers sit behind both. Concurrent runs therefore contend
+  where it matters and the latency numbers become meaningless.
+- **Space the legs that share prompts, or the gateway pays for them.** litellm caches completions
+  keyed on the request body, so a leg whose task set is a *prefix* of an earlier leg's replays that
+  leg's answers instead of generating them. Task selection is deterministic and driven by
+  `max_tasks`, so #1 ⊂ #2 ⊂ #3 and #5–#8 are all the same first five — and plugins do not break the
+  collision, because they change what happens *around* the call, not the body. Measured TTL on the
+  internal gateway is **~10 min** (survival curve: HIT at 3/5/7/9, MISS at 11/13/15/18/21), so
+  `BM_CACHE_GAP=900` in `reference/run-12.py` clears it with margin. Only the shortfall is slept, so
+  pair it with a `BM_ORDER` that interleaves the cache groups — that is the difference between ~120
+  and ~42 minutes of sleeping. **The hit detector is the response `id`, never latency**: a replay can
+  take as long as a miss.
 
 If a poller dies, the server-side run keeps going — **adopt it and merge the results** rather than
 re-running the leg.

@@ -477,19 +477,40 @@ def sec4():
         o.append("**Gateway response cache:** no task id appears in more than one run of the same "
                  "benchmark, so no run could have replayed another's completions.")
     else:
-        o.append("**⚠ The LLM gateway caches completions, and these runs repeat tasks: "
-                 + "; ".join(f"{b} #{'/#'.join(str(n) for n in ns)} share {c} task id"
-                             f"{'s' if c != 1 else ''}" for b, ns, c in shared)
-                 + ".** A repeated request body comes back from `ete-litellm` as the *same stored "
-                   "response* — identical response `id`, identical `usage` — measured with the agent "
-                   "bypassed, on both clusters' gateways, with a TTL measured between 7 and 15 minutes. So for the runs listed, **per-call latency and "
-                   "output token counts are not independent measurements**: a replay re-reports the "
-                   "stored token counts and its latency is a cache lookup. Input tokens and pass "
-                   "rates are unaffected (the same prompt and the same correct answer either way). "
-                   "This is not an agent setting — `EXGENTIC_LITELLM_CACHING=false` is pinned and "
-                   "provably inert against it — and **latency is not a reliable hit detector**: one "
-                   "measured replay took 3.0 s, the same as a miss. Compare response `id`s. Details "
-                   "in `docs/exgentic-agent-bug-report-20260901.md`.")
+        overlap = ("; ".join(f"{b} #{'/#'.join(str(n) for n in ns)} share {c} task id"
+                             f"{'s' if c != 1 else ''}" for b, ns, c in shared))
+        mechanism = ("A repeated request body comes back from `ete-litellm` as the *same stored "
+                     "response* — identical response `id`, identical `usage` — measured with the "
+                     "agent bypassed, on both clusters' gateways. **The TTL is ~10 minutes**, "
+                     "measured by survival curve (one probe per nonce at its own age: hit at "
+                     "3/5/7/9 min, miss at 11/13/15/18/21). A replay re-reports the stored token "
+                     "counts and its latency is a cache lookup, so per-call latency and output "
+                     "token counts are affected; input tokens and pass rates are not (the same "
+                     "prompt and the same correct answer either way). This is not an agent setting "
+                     "— `EXGENTIC_LITELLM_CACHING=false` is pinned and provably inert against it — "
+                     "and **latency is not a reliable hit detector**: one measured replay took "
+                     "3.0 s, the same as a miss. Compare response `id`s. Details in "
+                     "`docs/exgentic-agent-bug-report-20260901.md`.")
+        # A run driven with BM_CACHE_GAP rests each (benchmark, model) prompt set past the TTL, so
+        # the overlap above is present but cannot have been served from the cache. Report that rather
+        # than the bare warning, and show the enforced gap so the claim is checkable.
+        gap = data.get("cache_gap_seconds") or 0
+        if gap >= 660:
+            slept = [r for r in runs if (r.get("cache_gap_slept_seconds") or 0) > 0]
+            o.append(f"**✅ These runs were spaced to defeat the gateway's completion cache.** The "
+                     f"legs do repeat tasks — {overlap} — but the driver rested every "
+                     f"(benchmark, model) prompt set for at least **{int(gap)} s** before reusing "
+                     f"it, against a measured cache TTL of ~10 min, so no leg could replay "
+                     f"another's completions"
+                     + (f" ({len(slept)} of {len(runs)} legs waited out a remainder explicitly; the "
+                        f"rest had already been idle long enough)" if slept else "")
+                     + f". Per-call latency and output tokens are therefore independent across these "
+                       f"legs, which was not true of earlier matrices. For the underlying "
+                       f"mechanism: {mechanism}")
+        else:
+            o.append(f"**⚠ The LLM gateway caches completions, and these runs repeat tasks: "
+                     f"{overlap}.** {mechanism} So for the runs listed, **per-call latency and "
+                     f"output token counts are not independent measurements**.")
     return "\n".join(o)
 
 
