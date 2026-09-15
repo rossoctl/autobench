@@ -114,9 +114,11 @@ latency. They are independent.
 
 ## Bug 3 — the replacement health probe fails tasks outright on a high-latency gateway (found 2026-09-14, `0.3.5.dev145`)
 
-> **Still open upstream.** Paste-ready issue text, with our cluster and gateway names stripped and only
-> full-matrix numbers: [`exgentic-issue-models-probe.md`](exgentic-issue-models-probe.md). Keep the two
-> in step if either changes.
+> **FIXED UPSTREAM in `0.3.5.dev146+gff7ef6a37`, verified 2026-09-15** — all five of our suggestions
+> were taken. See [Resolution](#bug-3-resolution) at the end of this section for what changed and how we
+> confirmed it. The issue text we sent is
+> [`exgentic-issue-models-probe.md`](exgentic-issue-models-probe.md); everything below describes the
+> defect **as it was in `dev145`** and is kept because the dev145 matrices still carry its losses.
 
 **This is a regression introduced by the same change that fixed Bug 1 and retired Bug 2's probe**, and
 it is why the `max_tokens=1` probe disappeared: the probe was **replaced**, not removed.
@@ -211,6 +213,66 @@ holds the dev145 index — the operational check the artifacts do not record.
    diagnostic value at 1/N the exposure.
 4. **Distinguish timeout from refusal** in the error text; `_fetch_models` currently collapses both to
    `None`, and "is unreachable" sent us to check routing when routing was fine.
+
+<a id="bug-3-resolution"></a>
+### Resolution — fixed in `dev146`, verified 2026-09-15
+
+`:latest` moved to `exgentic 0.3.5.dev146+gff7ef6a37`. **All five suggestions were taken.** Read out of
+the shipped image, not from a checkout:
+
+| we asked for | what shipped | where |
+|---|---|---|
+| retry the probe | `_MODELS_PROBE_ATTEMPTS = 2`, `_MODELS_PROBE_RETRY_DELAY = 0.5`; a transport failure retries, an **HTTP** response (incl. 5xx) does not — the verdict would not change | `health.py:263-267, 466-483` |
+| honour the caller's timeout | clamp deleted. `_probe_timeout()` resolves *argument → `EXGENTIC_MODEL_PROBE_TIMEOUT` → 10 s default*, and the comment says callers may raise it | `health.py:283-296` |
+| hoist it out of the per-task path | call site is **still** `instance.py:88`, but a success is now memoised per process in `_probe_memo` keyed on `(model, base URL)`, with a `force=True` escape and a `reset_probe_memo()` for tests. Only successes memoise, so a failure is re-probed | `health.py:516-536, 684-694` |
+| make it skippable | `EXGENTIC_SKIP_MODEL_PROBE=1` (also accepts `true`/`yes`/`on`) returns before any traffic | `health.py:269-281` |
+| distinguish timeout from refusal | new `_describe_fetch_failure` branches on timeout / DNS / TLS / refused / other `OSError`; `_fetch_models` returns the description in the body slot instead of `None`. The message is now `did not respond at <url> after N attempt(s): <cause>` — it no longer asserts "unreachable" | `health.py:341-367, 393` |
+
+The module docstring now states the policy outright: *"The probe is a diagnostic, not a gate, and is
+scoped so it cannot cost more than it saves."*
+
+**Verified behaviourally in the shipped image** (blackholed `api_base`, so the transport genuinely
+stalls — the exact condition that lost us tasks):
+
+| check | result |
+|---|---|
+| `_probe_timeout(30.0)` | `30.0` — no longer clamped to 10 |
+| transport stall, `EXGENTIC_MODEL_PROBE_TIMEOUT=1` | 2 attempts, **2.53 s** total (1×1 s + 0.5 s delay + 1×1 s), then raised. One attempt would have been ~1.0 s |
+| error text, connection refused | `… did not respond … after 1 attempt(s): connection refused: [Errno 111] …` |
+| error text, bad DNS | `… did not respond … after 1 attempt(s): DNS resolution failed: [Errno -2] …` |
+| `EXGENTIC_SKIP_MODEL_PROBE=1` against the blackhole | returned in **0.000 s**, no probe |
+| memo across 3 successive instances (i.e. 3 tasks) | **1** HTTP probe issued, not 3 — counted by intercepting `urlopen` |
+
+**Verified end-to-end on the cluster that lost the tasks.** KinD, agent pods recycled onto index
+`sha256:c2b6fdb5…` (children `linux/amd64 sha256:6f70f41f…`, `linux/arm64 sha256:22c79f1d…`, both
+revision `ff7ef6a37`), gsm8k legs #1-#3 = 61 tasks:
+
+| leg | tasks | passed | errors | probe failures |
+|---|---|---|---|---|
+| #1 | 1 | 1 | 0 | 0 |
+| #2 | 10 | 10 | 0 | 0 |
+| #3 (50 tasks, 4 parallel) | 50 | 50 | 0 | 0 |
+
+**61/61, pass rate 1.0 on all three, zero probe failures.** On `dev145` these same three legs lost
+**4 of 61** (#1 1/1, #2 1/10, #3 2/50) — leg #1 lost its only task, so its pass rate was 0.
+
+Two caveats on the scope of this verification, so it is not over-read:
+
+- **The memo count came from the in-container test, not from the cluster run.** Both the "endpoint check
+  passed" and "already verified in this process" lines are `logger.debug`, and the agent pods run at
+  `INFO`, so pod logs cannot distinguish 1 probe from 50. The `urlopen` interception counts it directly.
+- **61 tasks on one platform is not the full matrix.** A clean 61/61 where dev145 lost 4 is strong, but
+  the 12-of-141 figure would only be retired by a full 12-leg run on both platforms. That run is also
+  what a new baseline would need, since dev145's probe losses are what disqualified it as one.
+
+Unrelated, and worth recording because it cost more time than the verification itself: the KinD cluster
+had been restarted, so **44 Running pods predated ztunnel's Ready condition** and were un-enrolled from
+the mesh. The symptom was not obviously mesh-shaped — `/healthz` 503, then `DELETE`/`POST deploy` → 500
+with `httpx.ReadError` from the Service to the Rossoctl backend, then agent pods in `CrashLoopBackOff`
+on *"OTEL is enabled but collector is not reachable … may be gRPC. Error: timed out"*, which reads like
+a protocol misconfiguration and is not. Recycling `rossoctl-backend`, `rossoctl-controller-manager`,
+`otel-collector`, `mlflow*`, `ibac-judge`, `http-istio`, `postgres-otel`, the MCP pods and the Service
+cleared all three. See `kind-ambient-ztunnel-restart-breaks-old-pods`.
 
 ## Environment
 

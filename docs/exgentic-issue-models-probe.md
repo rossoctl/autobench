@@ -3,7 +3,20 @@ Send-ready text for the exgentic image authors. Everything below the rule is mea
 as-is: no cluster names, no internal hostnames, no instructions telling them what to run — the
 evidence is ours. The internal record, including how this relates to the #250/#251 work and two
 figures we withdrew, stays in exgentic-agent-bug-report-20260901.md. Keep the two in step.
+
+RESOLVED — do NOT send this again. Fixed in 0.3.5.dev146+gff7ef6a37; all five suggestions were
+taken. The report body is kept verbatim as the record of what we sent. Verification lives in the
+"Resolution" section of exgentic-agent-bug-report-20260901.md.
 -->
+
+> **✅ RESOLVED in `exgentic 0.3.5.dev146+gff7ef6a37`** (index `sha256:c2b6fdb5…`), verified
+> 2026-09-15. All five suggested changes were taken: a retry (2 attempts, 0.5 s apart, transport
+> failures only), the caller's timeout honoured with an `EXGENTIC_MODEL_PROBE_TIMEOUT` override,
+> a per-process success memo so the probe no longer runs per task, an
+> `EXGENTIC_SKIP_MODEL_PROBE` opt-out, and per-cause error text in place of "is unreachable".
+> The 3 legs that lost 4 of 61 tasks now run 61/61 clean. **Do not re-send this text** — it is kept
+> as the record of what was reported. Verification detail:
+> [`exgentic-agent-bug-report-20260901.md`](exgentic-agent-bug-report-20260901.md#bug-3-resolution).
 
 # The per-task `GET /v1/models` probe fails whole tasks on a slow first contact
 
