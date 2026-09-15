@@ -70,15 +70,18 @@ Local tooling has the same failure: `podman run ...:latest` reuses a cached imag
 `--pull=always` before concluding anything about upstream source. Compare **digests**, off
 `.status.containerStatuses[].imageID` on the pod, never tags.
 
-**`Model endpoint ... is unreachable` is usually not a network fault.** As of agent
-`0.3.5.dev145` every task opens with a `GET /v1/models` health probe capped at a hard 10 s with no
-retry, and any failure — including a slow TLS handshake — fails the whole task before the model is
-called. On the VPN-routed KinD gateway this costs ~14% of tasks and roughly 60% on the sidecar legs,
-while OpenShift never trips it. Before touching routing, check the endpoint by hand: a fast `401`
-from inside the agent pod means the path is fine and you are looking at the probe. Details and the
-suggested upstream fix are Bug 3 in `docs/exgentic-agent-bug-report-20260901.md`. There is no env
-var for it, so a KinD matrix run against this agent version is not comparable to a pre-`dev145`
-baseline on pass rate.
+**`Model endpoint ... is unreachable` means you are on `dev145` — fixed in `dev146`.** That agent
+opened every task with a `GET /v1/models` probe capped at a hard 10 s with no retry, so any failure —
+including a slow TLS handshake — failed the whole task before the model was called: 12 of 141 tasks on
+KinD, 0 on OpenShift. `0.3.5.dev146+gff7ef6a37` fixed it (retry, per-process memo, caller's timeout
+honoured, `EXGENTIC_SKIP_MODEL_PROBE`, per-cause error text) and the same legs now run clean —
+verified, see Bug 3 and its Resolution section in `docs/exgentic-agent-bug-report-20260901.md`.
+
+Two things survive the fix. **The dev145 matrices are still contaminated** and are not a baseline: a
+killed task leaves a report row with zero tokens that skews every per-task stat, so pass rates from
+that pair need the `total − probe_failures` denominator. And the message wording is the *old* one — if
+you see `is unreachable` rather than `did not respond ... after N attempt(s): <cause>`, the pod is
+running dev145, whatever `:latest` points at now. Check the digest on the pod, not the tag.
 
 **Never bare-replace the strings `benchmarking` or `benchmarker`.** The S3 bucket
 (`rossoctl-benchmarking`), the Keycloak user (`benchmarker`), and the `BM_*` env prefix deliberately
