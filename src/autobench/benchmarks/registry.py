@@ -331,6 +331,13 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
                     # `service` is the runner that explicitly bridges thread → context.
                     EnvVar(name="EXGENTIC_DEFAULT_RUNNER", value="service"),
                     EnvVar(name="LITELLM_LOCAL_MODEL_COST_MAP", value="True"),
+                    # Response caching off, explicitly. Upstream #251 made `false` the default for
+                    # the `a2a` command, but a warm-reuse run at 0.3.5.dev145 still replayed
+                    # completions: on one process, in one run, five repeat prompts came back in
+                    # 0.06-0.11s while a never-seen prompt took 4.12s — and a replay re-reports its
+                    # token usage as if the model had been called. An explicit value wins over the
+                    # default in either direction, so pin it rather than trust the default.
+                    EnvVar(name="EXGENTIC_LITELLM_CACHING", value="false"),
                 ],
                 resources=_AGENT_RESOURCES,
             ),
@@ -372,6 +379,13 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
                     # `service` is the runner that explicitly bridges thread → context.
                     EnvVar(name="EXGENTIC_DEFAULT_RUNNER", value="service"),
                     EnvVar(name="LITELLM_LOCAL_MODEL_COST_MAP", value="True"),
+                    # Response caching off, explicitly. Upstream #251 made `false` the default for
+                    # the `a2a` command, but a warm-reuse run at 0.3.5.dev145 still replayed
+                    # completions: on one process, in one run, five repeat prompts came back in
+                    # 0.06-0.11s while a never-seen prompt took 4.12s — and a replay re-reports its
+                    # token usage as if the model had been called. An explicit value wins over the
+                    # default in either direction, so pin it rather than trust the default.
+                    EnvVar(name="EXGENTIC_LITELLM_CACHING", value="false"),
                 ],
                 resources=_AGENT_RESOURCES,
             ),
@@ -422,6 +436,13 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
                     # `service` is the runner that explicitly bridges thread → context.
                     EnvVar(name="EXGENTIC_DEFAULT_RUNNER", value="service"),
                     EnvVar(name="LITELLM_LOCAL_MODEL_COST_MAP", value="True"),
+                    # Response caching off, explicitly. Upstream #251 made `false` the default for
+                    # the `a2a` command, but a warm-reuse run at 0.3.5.dev145 still replayed
+                    # completions: on one process, in one run, five repeat prompts came back in
+                    # 0.06-0.11s while a never-seen prompt took 4.12s — and a replay re-reports its
+                    # token usage as if the model had been called. An explicit value wins over the
+                    # default in either direction, so pin it rather than trust the default.
+                    EnvVar(name="EXGENTIC_LITELLM_CACHING", value="false"),
                     # appworld sandbox exec (create_session/step) can exceed the default 60s
                     # outbound MCP timeout; when it does the agent turn fails "Error: timed out"
                     # and the A2A task is marked failed. 300s lets long sandbox turns complete.

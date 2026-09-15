@@ -20,13 +20,17 @@ latency. They are independent.
 > |---|---|---|---|
 > | span loss on warm agents | **Bug 1** (below) | **#250** | fixed — `_get_parent_context` now uses `getattr(ctx, "otel_context", None)` and falls back to the ambient OTEL context instead of raising `AttributeError` into a swallowed handler. A second defect fixed with it: the tracer is process-global, so `_init_otel` never re-ran on a warm process and the per-session log stayed pinned to the first run's directory. |
 > | the `max_tokens=1` probe | **Bug 2** (below) | *no issue — changed as part of the same work* | **measured gone**, across all four model classes: 12 legs, 869 `chat` spans, `request_max_tokens` `null` on every one. But it was **replaced, not removed** — see the regression below, which is a direct consequence. |
-> | LiteLLM response caching on by default | *we never reported this* | **#251** | fixed — caching now defaults **off for the `a2a` command only** (which is what our agents run), via a `model_fields_set` check so an explicit `EXGENTIC_LITELLM_CACHING` still wins in both directions. |
+> | LiteLLM response caching on by default | *we never reported this* | **#251** | fixed upstream, **but not effective on our deployment** — caching is documented as defaulting off for the `a2a` command (which is what our agents run) via a `model_fields_set` check, yet a warm `exgentic-a2a-tool_calling:latest` at `dev145` demonstrably still replays completions (measured below). The same check means an explicit `EXGENTIC_LITELLM_CACHING` wins in both directions, so `registry.py` now pins it `false`. |
 >
 > So upstream #251 is **not** our Bug 2. Our Bug 2 was the probe; #251 is a caching default we had not
 > noticed, and it is the more dangerous of the two — a long-lived agent could return a previous run's
 > cached completion as if it were fresh work. It cannot have contaminated any of our published
 > matrices: every canonical leg sets `teardown: true` and deploys a fresh agent, so each leg got a new
-> process and an empty `cache.db`, and tasks within a leg are distinct.
+> process and an empty `cache.db`, and tasks within a leg are distinct. That is now more than an
+> argument from the spec — the cache is **per process, not gateway-side**: the cold leg of the
+> warm-reuse run below paid a full 1.8–4.2 s on the very five gsm8k tasks that four legs of the same
+> day's matrix had already run against the same gateway with the same model. A shared cache at the
+> gateway would have replayed them.
 >
 > **What this changes for us, and what it does not.** The `llm` column now counts real LLM calls
 > one-for-one, with no probe offset to subtract — see `docs/BENCHMARKS_PRIMER.md`, and note that this
@@ -34,11 +38,29 @@ latency. They are independent.
 > and stays structural (`llm ≤ 1` with `tool ≥ 2`); a bare "one `chat` span" test is now actively
 > wrong, because one `chat` span is the *healthy* shape for a one-shot gsm8k task.
 >
-> **The fresh-deploy-per-run workaround is retained, and the claim that it can be retired is
-> untested.** Upstream states it should no longer be needed for telemetry correctness. Our 12-run
-> matrix structurally cannot check that — every leg deploys fresh, so it never reuses an agent. The
-> dedicated experiment is `reference/warm_reuse_specs.json` (one cold reference leg, two serial
-> reuse legs, one reuse leg at `p=4`); until it has run, treat warm-agent reuse as unverified.
+> **The fresh-deploy-per-run workaround is retained — but the reason for it has changed.** Upstream
+> states it is no longer needed for telemetry correctness, and *that* part is now measured and
+> confirmed: `reference/warm_reuse_specs.json`, run on OpenShift 2026-09-14 (one cold reference leg,
+> two serial reuse legs, one reuse leg at `p=4`; 20 tasks, all `succeeded`, pass 1.0 throughout), gave
+> **complete token attribution on every warm row** — 5 `chat` spans per leg, all `counted: true`, no
+> row matching the structural detector, and warm token totals **byte-identical to the cold leg**
+> (1564 in / 500 out). Bug 1 is fixed on a warm process, not merely on a fresh one.
+>
+> **What blocks retiring the workaround is now the caching default (#251), which does not hold for our
+> deployment.** On the reused process the same five prompts came back in **0.05–0.11 s** against
+> **1.8–4.2 s** cold, at byte-identical token counts — a replay, not a faster process. A sixth leg on
+> that same warm process settles it inside a single run: tasks 0–4 (seen before) returned in
+> 0.06–0.11 s while task 5 (never seen) took **4.12 s**, a 71× separation that no warm-up explains.
+> The replay is the dangerous part, because litellm re-reports the cached usage as if the model had
+> been called: a warm leg would publish fabricated token totals and 40–70× understated latency at an
+> unchanged pass rate — a corruption with no signature in `pass_rate` at all. So warm reuse stays off
+> until the pin below is deployed and re-verified.
+>
+> `registry.py` now sets **`EXGENTIC_LITELLM_CACHING=false`** explicitly on all three `tool_calling`
+> agents rather than relying on #251's default. That pin is baked into the Service image, so it means
+> nothing until a rebuilt image is rolled out — and it must then be confirmed by re-running
+> `warm_reuse_specs.json` and checking that the warm legs are *slow*, not by reading `GET /benchmarks`
+> (which does not return `extra_env`).
 
 ---
 
