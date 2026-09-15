@@ -183,13 +183,16 @@ A few things that trip people up:
   Details: `docs/exgentic-agent-bug-report-20260901.md`.
 - **The LLM gateway caches completions, so a repeated prompt can be a replay.** Sending the same
   request body twice within the gateway's TTL returns the *same response `id`* and the same `usage` —
-  proven by hand against both gateways, with the agent out of the picture (TTL 7-15 min). A replay re-reports the
-  stored token counts and its latency measures a cache lookup, so **per-call latency and output
-  tokens are not independent across legs that share prompts** — which legs #1–#3 and #5–#8 of the
-  canonical matrix do, since they all open with the same five gsm8k tasks. Input tokens and pass
-  rates are unaffected. This is not an agent setting we can turn off (`EXGENTIC_LITELLM_CACHING=false`
-  is pinned and changes nothing), and **latency is the wrong detector** — one measured replay took
-  3.0 s, the same as a miss. Compare response `id`s.
+  proven by hand against both gateways, with the agent out of the picture. **The TTL is ~10 minutes**,
+  measured by survival curve (one probe per nonce at its own age: HIT at 3/5/7/9 min, MISS at
+  11/13/15/18/21). A replay re-reports the stored token counts and its latency measures a cache
+  lookup, so **per-call latency and output tokens are not independent across legs that share
+  prompts** — which legs #1–#3 and #5–#8 of the canonical matrix do, since they all open with the same
+  five gsm8k tasks. Input tokens and pass rates are unaffected. This is not an agent setting we can
+  turn off (`EXGENTIC_LITELLM_CACHING=false` is pinned and changes nothing), and **latency is the
+  wrong detector** — one measured replay took 3.0 s, the same as a miss. Compare response `id`s. To
+  get independent legs, space them: `BM_CACHE_GAP` in `reference/run-12.py` rests each (benchmark,
+  model) prompt set for 900 s, which is what the v1.28 matrices were run with.
 
 Three more that apply specifically to the **latency** columns, all measured in the plugin-overhead
 study ([docs/PLUGIN_OVERHEAD.md](PLUGIN_OVERHEAD.md)):

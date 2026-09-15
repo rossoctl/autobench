@@ -73,8 +73,17 @@ latency. They are independent.
 > The same test inside a KinD agent pod against the *other* gateway
 > (`ete-litellm.ai-models.vpc-int.res.ibm.com`, a separate deployment with its own key table) behaves
 > identically: 6.283 s then 0.561 s and 0.595 s on one `id`, a new body 5.067 s on a new one. **Both
-> our gateways do this.** The TTL is bracketed at **7–15 minutes**: one stored response was still
-> being replayed at t+60 s, t+180 s and t+420 s and was gone by t+900 s.
+> our gateways do this.** **The TTL is ~10 minutes**, measured 2026-09-15 by survival curve on the
+> internal gateway — 11 nonce prompts seeded together, each probed **exactly once** at its own age:
+>
+> | age | 3 min | 5 | 7 | 9 | 11 | 13 | 15 | 18 | 21 |
+> |---|---|---|---|---|---|---|---|---|---|
+> | | HIT | HIT | HIT | HIT | MISS | MISS | MISS | MISS | MISS |
+>
+> Sharp boundary between 9 and 11 min, control 11/11 distinct seed `id`s. Probing *one* entry
+> repeatedly — which an earlier bracket of "7–15 min" did — measures TTL-refresh-on-access, not TTL,
+> so the one-probe-per-nonce design is the point. 900 s is therefore a safe spacing gap, and
+> `BM_CACHE_GAP` in `reference/run-12.py` enforces it per (benchmark, model) prompt set.
 >
 > Two claims an earlier draft of this note made, both wrong, both mine:
 >
