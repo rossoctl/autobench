@@ -1,6 +1,6 @@
 # AutoBench Service — 12 Parameterized Runs (OpenShift — ykt3 Service / ykt2 workloads)
 
-**Report generated:** 2026-09-12T19:09:48Z  
+**Report generated:** 2026-09-14T19:52:49Z  
 **Service version:** `v1.27`  
 **Platform:** OpenShift — ykt3 Service / ykt2 workloads  
 **Runs executed:** 12
@@ -68,31 +68,38 @@ Objects are readable **and listable anonymously** (no credentials needed), so tr
 | `in` | `llm_input_tokens` | Sum of `gen_ai.usage.input_tokens` over **all** LLM chat calls in that task. |
 | `out` | `llm_output_tokens` | Sum of `gen_ai.usage.output_tokens` over all LLM chat calls in that task. |
 | `total` | `llm_total_tokens` | `in + out` for the task. |
-| `llm` | `llm_count` | Number of LLM (chat-completion) calls the agent made. One per `chat` span. **Overcounts real calls by 1** — see below. |
+| `llm` | `llm_count` | Number of LLM (chat-completion) calls the agent made. One per `chat` span, counted one-for-one. |
 | `tool` | `tool_count` | Number of MCP tool calls the agent made. |
 | `passed` | `evaluation_result` | Task-level pass/fail from `evaluate_session` (`None` = errored before eval). |
 
-**Every task issues one extra `max_tokens=1` capability probe**, counted as a `chat` span. So `llm`
-reads one high: `llm=2` on gsm8k means *one* real call. Whether that probe succeeds is
-model-dependent, which matters for the next paragraph.
+`llm` and `tool` normally move together on these benchmarks: the agent takes a model turn, that turn
+decides a tool call, and gsm8k submits its answer *through* a tool, so `llm == tool` is the healthy
+shape rather than a coincidence.
 
-**Rows marked ⚠ have lost token attribution** — the usage-bearing `chat` span for the real call was
-never written, so `in`/`out` are understated (the task itself ran fine: `tool`, latency and
-`passed` are all genuine). The token value alone does not identify these, because the same defect
-presents differently per model:
+**Rows marked ⚠ have lost token attribution** — the usage-bearing `chat` span was never written, so
+`in`/`out` are understated while the task itself ran fine (`tool`, latency and `passed` are all
+genuine). Two shapes are flagged, both of them structurally impossible rather than merely suspicious:
 
-| model class | probe outcome | damaged row looks like |
-|---|---|---|
-| reasoning (`gpt-5-mini`) | rejected, `BadRequestError`, no usage | `in=0, out=0` — the classic "zero-token row" |
-| non-reasoning (`claude-sonnet-5`) | **succeeds**, so the probe's own usage is recorded | `in=8, out=1` |
-| non-reasoning (`gemini-2.5-pro`) | **succeeds** | `in=1, out=0` |
+| flagged shape | why it cannot happen on a healthy task |
+|---|---|
+| `llm <= 1` with `tool >= 2` | every tool call needs a preceding model turn to decide it |
+| `status == OK` with `llm = 0` | a task cannot complete without taking a single model turn |
 
-A `tokens == 0` test therefore silently misses the sonnet-5/gemini cases. The detector used here is
-structural instead: **`llm<=1` together with `tool>=2` is impossible**, since every tool call needs
-a preceding model turn. Trigger: reusing a warm agent across runs (upstream exgentic tears down the
-per-process OTEL context at run end) — see `docs/exgentic-agent-bug-report-20260901.md`. Mitigation
-is a fresh deploy per run. `llm=0` with `tool=0` is different and benign-ish: no chat span at all
-(session rejected before any model call).
+**Do not substitute a `tokens == 0` test for either.** It is the intuitive check and it is unreliable:
+a damaged row's token total depends on what other spans survived, so it can be non-zero, and a
+zero-token row can equally be a task that failed before its first call. The shape of the counts is
+the evidence; the token value is not.
+
+The known trigger for lost spans is **reusing a warm agent across runs** — see
+`docs/exgentic-agent-bug-report-20260901.md`. Every leg of this matrix therefore deploys a fresh
+agent, which is why these columns can be read at face value here.
+
+One caution when reading `llm`, `tool` or token totals **across** runs: they are properties of the
+agent image as much as of the benchmark, and every agent image is pinned to `:latest`, so two runs
+weeks apart can differ in call counts with nothing in the request changing. **No artifact in this set
+records the agent digest** — not `run.json`, not `manifest.json` — so the only record is operational:
+read `.status.containerStatuses[].imageID` off the agent pod while the run is live. Treat a
+cross-run count comparison as unsupported unless you captured that.
 
 ### `span_report.ndjson` (§8)
 
@@ -106,7 +113,7 @@ One row per OTEL span per task — the evidence the counters above are derived f
 | `name` | The span title, e.g. `Agent.Session`, `chat gpt-5-mini`, `execute_tool submit`. |
 | `kind` | `root` / `phase` / `agent` / `chat` / `tool` / `other` (`other` = nested HTTP/framework children the harness does not name). |
 | `counted` | Whether this span fed `llm_count`/`tool_count`. `false` marks real work the aggregate cannot see, because only spans parented by `invoke_agent` are counted (and `execute_tool initial_observation` never is). `null` for non-chat/tool spans. |
-| `request_max_tokens` | `1` identifies the capability probe unambiguously. |
+| `request_max_tokens` | The `max_tokens` the agent asked for, `null` when it asked for none (the normal case). A value of `1` marks a capability probe rather than real work: agents up to `exgentic 0.3.5.dev131` issued one per task and it was counted as an LLM call, while `dev145` replaced it with an unbilled `GET /v1/models` check that emits no span. **This run set is from before that change**: 138 of its 1213 `chat` spans carry `max_tokens=1`, so its `llm` counts read one high per task — subtract one per task for real calls. The column is the unambiguous way to tell a probe from a real call, and the probe's code path still exists upstream (`strict=True` in the agent's `health.py`), so it stays. |
 
 That set is a deliberate whitelist: span attributes can carry prompts and completions, and these
 objects are public, so nothing outside this list is published (see the S3 section).
@@ -116,9 +123,10 @@ objects are public, so nothing outside this list is published (see the S3 sectio
 | Field | Meaning |
 |---|---|
 | `status` | Terminal run status: `succeeded` / `failed` / `error` / `cancelled`. |
-| `pass_rate` | `evaluated_pass / total` over the run's tasks. |
+| `pass_rate` | `evaluated_pass / total` over the run's tasks. A task that never reached the model is in `total` and not in `evaluated_pass`, so this figure mixes "answered wrong" with "never ran" — see the `Probe` column and the note under §4's table. |
 | `evaluated_pass` | Count of tasks that passed evaluation. |
 | `total` | Number of task results recorded. |
+| `Probe` | Not a `RunSummary` field — derived here by counting `run.json` results whose error is the agent's `GET /v1/models` health check. Such a task emits no spans, but it *does* leave a `report.ndjson` row (`status=ERROR`, `llm=0`, `tool=0`, zero tokens), so it is counted in `Err/Total` **and** included in every per-task token/latency statistic in §6–§7 — where it acts as a zero-cost outlier. `run.json` is used rather than `report.ndjson` because it has one result per task unconditionally. |
 | `wall_seconds` | Wall-clock duration of the run. |
 
 
@@ -335,22 +343,24 @@ Each run = an optional **deploy** step (teardown + `POST /benchmarks/<b>/deploy`
 
 ## 4. Summary of the 12 run results
 
-| # | Benchmark | run_id | Model in use | Status | Pass | Eval-pass | Err/Total | Wall (s) |
-|---|---|---|---|---|---:|---:|---:|---:|
-| 1 | gsm8k | `20260912000728-c0d99c5a` | openai/Azure/gpt-5-mini-2025-08-07 | succeeded | 1.0 | 1 | 0/1 | 14 |
-| 2 | gsm8k | `20260912000921-e6358837` | openai/Azure/gpt-5-mini-2025-08-07 | succeeded | 1.0 | 10 | 0/10 | 60 |
-| 3 | gsm8k | `20260912001200-309fc2b2` | openai/Azure/gpt-5-mini-2025-08-07 | succeeded | 1.0 | 50 | 0/50 | 166 |
-| 4 | gsm8k | `20260912002822-3f3e2a21` | openai/Azure/gpt-4.1 | succeeded | 0.8 | 4 | 0/5 | 13 |
-| 5 | gsm8k | `20260912001716-258c1474` | openai/Azure/gpt-5-mini-2025-08-07 | succeeded | 1.0 | 5 | 0/5 | 29 |
-| 6 | gsm8k | `20260912002010-2faa67bc` | openai/Azure/gpt-5-mini-2025-08-07 | succeeded | 1.0 | 5 | 0/5 | 31 |
-| 7 | gsm8k | `20260912002309-1d8fea67` | openai/Azure/gpt-5-mini-2025-08-07 | succeeded | 1.0 | 5 | 0/5 | 25 |
-| 8 | gsm8k | `20260912002558-11de2ab5` | openai/Azure/gpt-5-mini-2025-08-07 | succeeded | 1.0 | 5 | 0/5 | 29 |
-| 9 | tau2 | `20260912003101-52b759c7` | openai/aws/claude-sonnet-5 | succeeded | 0.9 | 9 | 0/10 | 1184 |
-| 10 | tau2 | `20260912005325-526994f6` | openai/aws/claude-sonnet-5 | succeeded | 0.8 | 16 | 0/20 | 725 |
-| 11 | appworld | `20260912010713-8a93e497` | openai/gemini-2.5-pro | succeeded | 0.0 | 0 | 0/5 | 2211 |
-| 12 | appworld | `20260912014605-2c6c751c` | openai/gemini-2.5-pro | succeeded | 0.0 | 0 | 2/20 | 1887 |
+| # | Benchmark | run_id | Model in use | Status | Pass | Eval-pass | Err/Total | Probe | Wall (s) |
+|---|---|---|---|---|---:|---:|---:|---:|---:|
+| 1 | gsm8k | `20260912000728-c0d99c5a` | openai/Azure/gpt-5-mini-2025-08-07 | succeeded | 1.0 | 1 | 0/1 | 0 | 14 |
+| 2 | gsm8k | `20260912000921-e6358837` | openai/Azure/gpt-5-mini-2025-08-07 | succeeded | 1.0 | 10 | 0/10 | 0 | 60 |
+| 3 | gsm8k | `20260912001200-309fc2b2` | openai/Azure/gpt-5-mini-2025-08-07 | succeeded | 1.0 | 50 | 0/50 | 0 | 166 |
+| 4 | gsm8k | `20260912002822-3f3e2a21` | openai/Azure/gpt-4.1 | succeeded | 0.8 | 4 | 0/5 | 0 | 13 |
+| 5 | gsm8k | `20260912001716-258c1474` | openai/Azure/gpt-5-mini-2025-08-07 | succeeded | 1.0 | 5 | 0/5 | 0 | 29 |
+| 6 | gsm8k | `20260912002010-2faa67bc` | openai/Azure/gpt-5-mini-2025-08-07 | succeeded | 1.0 | 5 | 0/5 | 0 | 31 |
+| 7 | gsm8k | `20260912002309-1d8fea67` | openai/Azure/gpt-5-mini-2025-08-07 | succeeded | 1.0 | 5 | 0/5 | 0 | 25 |
+| 8 | gsm8k | `20260912002558-11de2ab5` | openai/Azure/gpt-5-mini-2025-08-07 | succeeded | 1.0 | 5 | 0/5 | 0 | 29 |
+| 9 | tau2 | `20260912003101-52b759c7` | openai/aws/claude-sonnet-5 | succeeded | 0.9 | 9 | 0/10 | 0 | 1184 |
+| 10 | tau2 | `20260912005325-526994f6` | openai/aws/claude-sonnet-5 | succeeded | 0.8 | 16 | 0/20 | 0 | 725 |
+| 11 | appworld | `20260912010713-8a93e497` | openai/gemini-2.5-pro | succeeded | 0.0 | 0 | 0/5 | 0 | 2211 |
+| 12 | appworld | `20260912014605-2c6c751c` | openai/gemini-2.5-pro | succeeded | 0.0 | 0 | 2/20 | 0 | 1887 |
 
 **Token attribution:** complete — no row lost its usage-bearing span.
+
+**Health probe:** every task reached the model — no task was lost to the agent's per-task `GET /v1/models` check.
 
 ## 5. Contents of the manifest file
 
@@ -648,7 +658,11 @@ A `⚠` in the Lost column means some of that run's rows lost their usage-bearin
 
 Which spans each task actually invoked, by name. §6 and §7 report *counts*; this is what they were counted from, read straight out of each run's `span_report.ndjson`.
 
-Read the **chat** column first. Every task issues a `max_tokens=1` capability probe plus its real model calls, so a healthy task shows **at least 2** chat spans. Exactly **1** means the usage-bearing span for the real call was never written — the warm-agent defect — and that is visible here as a span *count*, independent of any token value (which is what makes it catchable on claude-sonnet-5 and gemini-2.5-pro, where the surviving probe reports a non-zero 8/1 or 1/0).
+Read the **chat** and **tool** columns together. There is no fixed healthy chat count — a one-shot gsm8k task legitimately shows a single `chat` span, and a multi-turn tau2 task shows many. What is not possible is **`chat` ≤ 1 alongside `tool` ≥ 2**: every tool call needs a model turn to request it, so a task cannot invoke two tools off one chat span. That shape means a usage-bearing span was dropped, and this section flags it. Reading it off *counts* rather than token values is what makes it catchable on every model, including ones whose dropped span would still have reported plausible non-zero usage.
+
+⚠ **The `chat` and `tool` columns below are raw span totals; the ⚠ flag is computed on the `counted` subset only.** Do not apply the rule by hand to these columns. A healthy gsm8k task emits two `execute_tool` spans — `initial_observation` and `submit` — of which only `submit` is counted, so its raw pair is `1`/`2` and would trip the test while its §7 pair is the innocent `1`/`1`. Filtering to `counted` is what makes this section agree with §7.
+
+Up to `exgentic 0.3.5.dev131` each task also issued a `max_tokens=1` capability probe, so a bare `chat == 1` used to be the damage signal and **at least 2** was healthy. The probe was replaced in `dev145` by an unbilled `GET /v1/models` check that emits no span — do not resurrect that rule, and do not compare chat counts across runs that straddle the change. **This run set is from before that change**: 138 of its 1213 `chat` spans carry `max_tokens=1`, so its `llm` counts read one high per task — subtract one per task for real calls.
 
 `not counted` are spans the aggregator cannot see: it only folds a chat/tool span into `llm_count`/`tool_count` when its parent is the `invoke_agent` span, so anything nested deeper is real work missing from the totals. A non-zero figure there is not a bug by itself — it is the known blind spot, now measurable.
 
