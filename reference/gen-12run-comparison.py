@@ -62,6 +62,33 @@ def lost(x):
     return (lc > 0 and not x.get("llm_input_tokens")) or (lc <= 1 and tc >= 2)
 
 
+_CAUSES = [
+    # Ordered: the first pattern that matches wins, so the specific infrastructure signatures are
+    # tested before the generic ones. Every bucket below was observed in a real matrix; `other` exists
+    # so a new failure mode shows up as unclassified rather than being folded into a wrong answer.
+    ("health probe (Bug 3)", ("/v1/models",)),
+    ("transport / gateway", ("peer closed connection", "incomplete chunked", "503",
+                             "Network communication error")),
+    ("per-task timeout", ("per-task timeout",)),
+    ("agent (upstream defect)", ("missing assistant content",)),
+    ("wrong answer", ("Error executing submit", "does not match")),
+]
+
+
+def cause(msg):
+    """Bucket a task's error text by *what kind of thing went wrong*.
+
+    A pass-rate delta between platforms is only interpretable if you know whether the losing side lost
+    a task to the model getting it wrong or to a socket closing. Those two live in the same
+    `evaluated_pass` denominator and read identically in every table above.
+    """
+    m = msg or ""
+    for label, pats in _CAUSES:
+        if any(p in m for p in pats):
+            return label
+    return "other"
+
+
 def load(path):
     d = json.loads(pathlib.Path(path).read_text())
     out = {}
@@ -85,11 +112,17 @@ def load(path):
         # that has one result per task unconditionally, while a task can end with no report.ndjson
         # row at all (appworld timeouts do). See Bug 3 in docs/exgentic-agent-bug-report-*.md.
         probe = 0
+        causes = {}
         if md:
             rp = pathlib.Path(md) / "run.json"
             if rp.exists():
-                probe = sum(1 for x in json.loads(rp.read_text()).get("results", [])
+                res = json.loads(rp.read_text()).get("results", [])
+                probe = sum(1 for x in res
                             if (x.get("error") or "").endswith("/v1/models"))
+                for x in res:
+                    if x.get("error"):
+                        c = cause(x["error"])
+                        causes[c] = causes.get(c, 0) + 1
         # Whether the agent issues a `max_tokens=1` capability probe is an era, not a setting, and it
         # decides whether the `llm` column reads one high per task. Measure it instead of asserting a
         # version: a probe call is a `chat` span with `request_max_tokens == 1`, and this generator is
@@ -120,7 +153,7 @@ def load(path):
                           if a.get("url", "").endswith(a["key"])), ""),
             z=sum(1 for x in rows if lost(x)),
             chats=chats, pchats=pchats,
-            probe=probe, total=s.get("total"), passed=s.get("evaluated_pass"),
+            probe=probe, causes=causes, total=s.get("total"), passed=s.get("evaluated_pass"),
             # Pass rate over the tasks that actually reached the model. `None` when the probe took
             # every task in the leg (#1 is a single task, so one failure leaves nothing to score) —
             # an unscoreable leg must not be silently reported as 0.0.
@@ -266,6 +299,61 @@ if px or py:
           "A `—` in an `adj` column means the probe took every task in that leg, leaving nothing to",
           "score; that leg carries no pass-rate signal at all and is excluded from the comparison",
           "below rather than counted as a difference."]
+
+def _cause_totals(S):
+    t = {}
+    for v in S.values():
+        for k, c in (v.get("causes") or {}).items():
+            t[k] = t.get(k, 0) + c
+    return t
+
+
+_cx, _cy = _cause_totals(X), _cause_totals(Y)
+if _cx or _cy:
+    L += ["", "## Why tasks failed", "",
+          "Every task that ended with an error, bucketed by what kind of thing went wrong. This is the",
+          "context a pass-rate delta needs: a task lost to a socket closing and a task lost to the",
+          "model answering wrongly sit in the same `evaluated_pass` denominator and are",
+          "indistinguishable in every table above, but only one of them is a statement about the",
+          "agent. Counted from `run.json`, which carries one result per task unconditionally — a task",
+          "killed by a per-task timeout leaves no `report.ndjson` row at all.", "",
+          f"| cause | {ALAB} | {BLAB} | what it means |",
+          "|---|---:|---:|---|"]
+    _meaning = {
+        "health probe (Bug 3)": "The agent's per-task `GET /v1/models` check killed the task before "
+                                "the model was called. Fixed in `0.3.5.dev146`; a non-zero count here "
+                                "means the pod is running an older image.",
+        "transport / gateway": "The connection to the agent or the gateway failed mid-request. "
+                               "**Infrastructure, not the agent** — it says nothing about the model or "
+                               "the benchmark, and it is the one bucket that should not be read as a "
+                               "capability difference.",
+        "per-task timeout": "The task exceeded its `task_timeout_seconds`. On appworld this is the "
+                            "dominant failure mode and is an upstream agent behaviour, not a resource "
+                            "limit — see the appworld notes in the per-platform reports.",
+        "agent (upstream defect)": "The agent returned a malformed or empty completion. An upstream "
+                                   "defect; the task never had a chance to be scored.",
+        "wrong answer": "The agent ran, answered, and the answer was rejected. **The only bucket that "
+                        "is a genuine statement about the model's ability.**",
+        "other": "Unclassified — inspect the error text in `run.json`. A new failure mode lands here "
+                 "rather than being folded into one of the buckets above.",
+    }
+    for k in [c for c, _ in _CAUSES] + ["other"]:
+        if _cx.get(k) or _cy.get(k):
+            L.append(f"| {k} | {_cx.get(k, 0)} | {_cy.get(k, 0)} | {_meaning[k]} |")
+    _legs = [(n, (X[n].get('causes') or {}).get('transport / gateway', 0),
+              (Y.get(n, {}).get('causes') or {}).get('transport / gateway', 0))
+             for n in sorted(X)]
+    _legs = [(n, a, b) for n, a, b in _legs if a or b]
+    L += [""]
+    if _legs:
+        L.append("**Transport failures fall on specific legs**: "
+                 + ", ".join(f"#{n} ({ALAB} {a}, {BLAB} {b})" for n, a, b in _legs)
+                 + ". Where such a leg also shows a pass-rate delta, that part of the delta is the "
+                   "network, not the platform's ability to run the benchmark — subtract it before "
+                   "drawing a conclusion.")
+    else:
+        L.append("**No task on either side was lost to a transport or gateway failure**, so every "
+                 "pass-rate delta below is attributable to the agent, the model or the benchmark.")
 
 L += ["", "## Token distribution per task", "",
       "For each direction: `median` (robust centre), then `mean`, then `CV` (population sigma / "
@@ -434,6 +522,16 @@ L += ["",
       "agree on is agreement between two independently cached (or uncached) measurements, not one",
       "measurement counted twice. Latency is not a hit detector either — a measured replay took 3.0 s,",
       "the same as a miss."]
+
+# The exact command that produced this file. docs/results/README.md promises every report carries
+# one, and without it a reader who doubts a number cannot re-derive it. Only argv is echoed — the run
+# JSONs also hold the Service base URLs, which are deliberately never printed.
+_args = " ".join(f'"{a}"' if " " in a else a for a in sys.argv[1:])
+L += ["", "## Reproducing this report", "",
+      "```sh", f"python3 reference/gen-12run-comparison.py \\", f"  {_args}", "```", "",
+      "Both run JSONs and the mirrored artifacts they point at come from `reference/run-12.py`. If",
+      "`/tmp` has been pruned since, re-hydrate with `reference/remirror.py` first — a missing",
+      "artifact is treated as an empty one and yields a quietly shorter report."]
 
 doc = "\n".join(L) + "\n"
 doc = doc.replace("<!--TOC-->", _toc(doc))

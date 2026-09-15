@@ -738,9 +738,27 @@ head = [f"# AutoBench Service — 12 Parameterized Runs ({PLATFORM})", "",
         "(`report.ndjson` / `token_report.ndjson` / `span_report.ndjson` / `manifest.json`) — none "
         "are transcribed.", "", "<!--TOC-->", ""]
 
+def repro():
+    """The exact command that produced this file.
+
+    `docs/results/README.md` promises every report carries this, and without it a reader who thinks a
+    number is wrong has no way to re-derive it — which is the whole reason these files are generated
+    rather than written. Only argv is echoed: the run JSON also holds the Service base URL, and that
+    is deliberately never printed (see the disclosure note in README.md).
+    """
+    args = " ".join(f'"{a}"' if " " in a else a for a in sys.argv[1:])
+    return "\n".join([
+        "## Reproducing this report", "",
+        "```sh", f"python3 reference/gen-12run-report.py {args}", "```", "",
+        "The run JSON and the mirrored artifacts it points at are produced by "
+        "`reference/run-12.py`; if `/tmp` has been pruned since, re-hydrate the mirror with "
+        "`reference/remirror.py` first — the generators treat a missing artifact as an empty one "
+        "and will quietly emit a much shorter report."])
+
+
 doc = "\n".join(head) + "\n" + "\n\n".join(
     [sec_s3(), S1, S2.replace("**PROBE_ERA_NOTE**", probe_era_note()),
-     sec3(), sec4(), sec5(), sec6(), sec7(), sec8()]) + "\n"
+     sec3(), sec4(), sec5(), sec6(), sec7(), sec8(), repro()]) + "\n"
 # Sections only: every `### Run #N` subsection title appears twice (per-task and per-span), so
 # listing level 3 would emit duplicate anchors that link to whichever GitHub saw first.
 doc = doc.replace("<!--TOC-->", _toc(doc, max_level=2))
