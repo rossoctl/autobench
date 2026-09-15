@@ -1,14 +1,20 @@
 # 12-Run Comparison — OCP (ykt3→ykt2) vs KinD, both Service v1.27
 
-**Report generated:** 2026-09-12T19:13:12Z
+**Report generated:** 2026-09-14T19:52:50Z
 
 **Platforms compared:** OCP (ykt3→ykt2) vs KinD
 
 Both sides ran the same 12 request bodies, the same Service version, and verified-identical
 instance config. Every leg deploys fresh. Task selection is deterministic, so the same
-`task_id` is the same task on both platforms — differences are attributable to the platform.
+`task_id` is the same task on both platforms, which makes the two sides comparable.
 
-All numbers are derived from the mirrored `report.ndjson` artifacts.
+**That does not make every difference a property of the platform.** A task can also be lost to
+the agent's own per-task health probe before it ever reaches the model, and such a task is
+scored as not-passed — so a raw `pass_rate` mixes "the agent got it wrong" with "the agent
+never ran". Where that happened it is counted and separated below; read the adjusted column
+before attributing anything to the cluster.
+
+All numbers are derived from the mirrored `report.ndjson` and `run.json` artifacts.
 
 **Contents**
 
@@ -105,6 +111,7 @@ For each direction: `median` (robust centre), then `mean`, then `CV` (population
 - output tokens: OCP (ykt3→ykt2) 712,829 · KinD 706,254
 - wall: OCP (ykt3→ykt2) 6373s · KinD 5161s
 - rows with lost token attribution: OCP (ykt3→ykt2) 0/138 · KinD 0/137  — **token capture complete on both sides**
+- tasks lost to the health probe: OCP (ykt3→ykt2) 0/141 · KinD 0/141  — **every task reached the model on both sides**
 
 ## What matches
 
@@ -115,19 +122,18 @@ For each direction: `median` (robust centre), then `mean`, then `CV` (population
 
 ## Where they differ
 
-- **2 run(s) differ**: #4 (+0.20), #9 (-0.10).
-- Interpret small deltas on small runs with care: one task on a 5-task run moves pass_rate by
-  0.20. tau2 and appworld are additionally nondeterministic per episode.
+- **2 of 12 legs differ**: #4 (+0.20), #9 (-0.10).
+- Interpret small deltas on small runs with care: one task on a 5-task run moves pass_rate by 0.20. tau2 and appworld are additionally nondeterministic per episode.
 
 ## Caveats on the `llm` column and on token totals
 
-Each task issues an extra `max_tokens=1` probe call that is counted as a `chat` span, so
-LLM-call counts read one high per task.
+**Both sides' `llm` counts read one high per task.** OCP (ykt3→ykt2) has 138 of 1213 `chat` spans carrying `max_tokens=1` and KinD has 137 of 1247: the pre-`0.3.5.dev145` capability probe, one per task, counted as an LLM call. Subtract one per task to get real calls. The two sides are still comparable to each other, since both are inflated the same way.
 
-Whether that probe *succeeds* is model-dependent, and it determines how a lost-span row looks:
-a reasoning model (`gpt-5-mini`) has the probe rejected and records no usage (`in=out=0`),
-while `claude-sonnet-5` / `gemini-2.5-pro` accept it and record the probe's own usage
-(`in=8/out=1`, `in=1/out=0`). So a `tokens == 0` check silently misses the latter two; the
-detector used above is structural instead (`llm<=1` with `tool>=2` is impossible).
-Any leg counted above has **understated** token totals — pass rates remain valid.
-See `docs/exgentic-agent-bug-report-20260901.md`.
+The damage detector used above is unchanged and stays structural — `llm <= 1` alongside
+`tool >= 2` is impossible, because every tool call needs a preceding model turn. A bare
+"one `chat` span" test is now actively wrong: one `chat` span is the *healthy* shape for a
+one-shot gsm8k task. `tokens == 0` was never sufficient either — while the probe existed it
+was the span that *survived* the loss, carrying its own usage on non-reasoning models
+(`claude-sonnet-5` `in=8/out=1`, `gemini-2.5-pro` `in=1/out=0`), so a zero-check missed every
+tau2 and appworld case. Any leg counted above has **understated** token totals — its pass rate
+remains valid. See `docs/exgentic-agent-bug-report-20260901.md`.

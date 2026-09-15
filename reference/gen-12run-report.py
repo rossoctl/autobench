@@ -96,15 +96,25 @@ def _lost(x):
     )
 
 
-def _span_lost(nchat, ntool):
-    """`_lost()`'s structural clause, applied to raw span counts for §8.
+def _span_lost(spans):
+    """`_lost()`'s structural clause, recomputed from one task's span rows for §8.
 
     §8 reads `span_report.ndjson`, which carries neither `status` nor token fields, so only the
     pair test is available here — but it is the clause that matters, and keeping the two in one
     place stops §8 from drifting back to the pre-`dev145` rule that a lone `chat` span is damage.
     It is not: a one-shot gsm8k task has exactly one, and flagging those marked every healthy row
     in the matrix as lost.
+
+    **Count only `counted` spans.** `_lost()`'s thresholds are defined against `llm_count` and
+    `tool_count`, which `parse_traces` increments only for spans parented on `invoke_agent` — so
+    they are not raw span totals and the thresholds do not transfer to raw ones. A healthy gsm8k
+    task emits *two* `execute_tool` spans, `initial_observation` and `submit`, of which only
+    `submit` is counted; testing `tool >= 2` against the raw count therefore flags every healthy
+    gsm8k row in the matrix. Filtering to `counted` reproduces the §7 numbers exactly, which is
+    the property that makes the two sections agree.
     """
+    nchat = sum(1 for s in spans if s.get("kind") == "chat" and s.get("counted") is not False)
+    ntool = sum(1 for s in spans if s.get("kind") == "tool" and s.get("counted") is not False)
     return nchat <= 1 and ntool >= 2
 
 
@@ -122,6 +132,62 @@ def manifest(run):
     d = run.get("mirror_dir")
     p = pathlib.Path(d) / "manifest.json" if d else None
     return json.loads(p.read_text()) if p and p.exists() else None
+
+
+def probe_failures(run):
+    """Count tasks the agent's per-task `GET /v1/models` health check killed before the model ran.
+
+    Such a task *does* get a `report.ndjson` row — `status == "ERROR"` with `llm_count == 0`,
+    `tool_count == 0` and zero tokens, the error text in `status_message` — so it is inside
+    `Err/Total`, and its ~10.5 s zero-token row is inside every token and latency statistic here.
+    What it is not is damage: `_lost()` correctly declines to flag it, because the model was never
+    called and zero tokens is the truth. The cost is elsewhere: the task is scored as not-passed, so
+    `pass_rate` silently mixes "the agent got the answer wrong" with "the agent never ran", and a
+    string of zero-token rows drags a leg's per-task token median, mean and CV away from the cost of
+    the work that did happen. See Bug 3 in `docs/exgentic-agent-bug-report-20260901.md`.
+
+    Counted from `run.json` rather than `report.ndjson` because `run.json` carries one result per
+    task unconditionally, while a task can occasionally end without a `report.ndjson` row at all
+    (appworld timeouts do).
+    """
+    d = run.get("mirror_dir")
+    p = pathlib.Path(d) / "run.json" if d else None
+    if not (p and p.exists()):
+        return 0
+    return sum(1 for x in json.loads(p.read_text()).get("results", [])
+               if (x.get("error") or "").endswith("/v1/models"))
+
+
+def probe_spans():
+    """(capability-probe `chat` spans, all `chat` spans) across this matrix.
+
+    Which agent era a matrix ran in is measured rather than asserted: a capability probe is a `chat`
+    span carrying `request_max_tokens == 1`. This generator is pointed at matrices from both sides of
+    the `dev145` change — including previously published landmark runs, which get regenerated
+    whenever it changes — so any statement about the probe has to come from the data or it will
+    silently become false for half of them.
+    """
+    n = t = 0
+    for r in runs:
+        for x in rows(r, "span_report.ndjson"):
+            if x.get("kind") == "chat":
+                t += 1
+                n += x.get("request_max_tokens") == 1
+    return n, t
+
+
+def probe_era_note():
+    """One sentence stating which side of the probe change *this* matrix is on, from its own spans."""
+    n, t = probe_spans()
+    if not t:
+        return "This run set published no `chat` spans, so which era it ran in cannot be read off it."
+    if n:
+        return (f"**This run set is from before that change**: {n} of its {t} `chat` spans carry "
+                f"`max_tokens=1`, so its `llm` counts read one high per task — subtract one per task "
+                f"for real calls.")
+    return (f"**This run set is from after that change**: none of its {t} `chat` spans carries "
+            "`max_tokens=1`, so its `llm` counts are real calls one-for-one with no offset to "
+            "subtract.")
 
 
 S1 = """## 1. Terms
@@ -197,7 +263,7 @@ One row per OTEL span per task — the evidence the counters above are derived f
 | `name` | The span title, e.g. `Agent.Session`, `chat gpt-5-mini`, `execute_tool submit`. |
 | `kind` | `root` / `phase` / `agent` / `chat` / `tool` / `other` (`other` = nested HTTP/framework children the harness does not name). |
 | `counted` | Whether this span fed `llm_count`/`tool_count`. `false` marks real work the aggregate cannot see, because only spans parented by `invoke_agent` are counted (and `execute_tool initial_observation` never is). `null` for non-chat/tool spans. |
-| `request_max_tokens` | The `max_tokens` the agent asked for, `null` when it asked for none (the normal case). A value of `1` marks a capability probe rather than real work — no longer emitted by the current agent, but the probe's code path still exists upstream, so the column stays as the unambiguous way to tell one apart from a real call. |
+| `request_max_tokens` | The `max_tokens` the agent asked for, `null` when it asked for none (the normal case). A value of `1` marks a capability probe rather than real work: agents up to `exgentic 0.3.5.dev131` issued one per task and it was counted as an LLM call, while `dev145` replaced it with an unbilled `GET /v1/models` check that emits no span. **PROBE_ERA_NOTE** The column is the unambiguous way to tell a probe from a real call, and the probe's code path still exists upstream (`strict=True` in the agent's `health.py`), so it stays. |
 
 That set is a deliberate whitelist: span attributes can carry prompts and completions, and these
 objects are public, so nothing outside this list is published (see the S3 section).
@@ -207,9 +273,10 @@ objects are public, so nothing outside this list is published (see the S3 sectio
 | Field | Meaning |
 |---|---|
 | `status` | Terminal run status: `succeeded` / `failed` / `error` / `cancelled`. |
-| `pass_rate` | `evaluated_pass / total` over the run's tasks. |
+| `pass_rate` | `evaluated_pass / total` over the run's tasks. A task that never reached the model is in `total` and not in `evaluated_pass`, so this figure mixes "answered wrong" with "never ran" — see the `Probe` column and the note under §4's table. |
 | `evaluated_pass` | Count of tasks that passed evaluation. |
 | `total` | Number of task results recorded. |
+| `Probe` | Not a `RunSummary` field — derived here by counting `run.json` results whose error is the agent's `GET /v1/models` health check. Such a task emits no spans, but it *does* leave a `report.ndjson` row (`status=ERROR`, `llm=0`, `tool=0`, zero tokens), so it is counted in `Err/Total` **and** included in every per-task token/latency statistic in §6–§7 — where it acts as a zero-cost outlier. `run.json` is used rather than `report.ndjson` because it has one result per task unconditionally. |
 | `wall_seconds` | Wall-clock duration of the run. |
 """
 
@@ -303,18 +370,18 @@ def sec3():
 
 def sec4():
     o = ["## 4. Summary of the 12 run results", "",
-         "| # | Benchmark | run_id | Model in use | Status | Pass | Eval-pass | Err/Total | Wall (s) |",
-         "|---|---|---|---|---|---:|---:|---:|---:|"]
+         "| # | Benchmark | run_id | Model in use | Status | Pass | Eval-pass | Err/Total | Probe | Wall (s) |",
+         "|---|---|---|---|---|---:|---:|---:|---:|---:|"]
     for r in runs:
         s = r.get("summary") or {}
         rr = rows(r, "report.ndjson")
         models = sorted({x.get("model") for x in rr if x.get("model")}) or ["—"]
         err = sum(1 for x in rr if (x.get("status") or "") not in ("OK", ""))
-        o.append("| %s | %s | `%s` | %s | %s | %s | %s | %s/%s | %s |" % (
+        o.append("| %s | %s | `%s` | %s | %s | %s | %s | %s/%s | %s | %s |" % (
             r["n"], r["bench"], r.get("run_id") or "—", ", ".join(models),
             r.get("status") or "—",
             s.get("pass_rate", "—"), s.get("evaluated_pass", "—"),
-            err, s.get("total", "—"),
+            err, s.get("total", "—"), probe_failures(r),
             round(s["wall_seconds"]) if s.get("wall_seconds") is not None else "—"))
     bad = [(r["n"], sum(1 for x in rows(r, "report.ndjson") if _lost(x)), len(rows(r, "report.ndjson")))
            for r in runs]
@@ -330,6 +397,36 @@ def sec4():
                  + ". Those runs' **token totals are understated** (pass rates are not affected — "
                    "the tasks ran and were evaluated normally). See §2 for the detector and why a "
                    "`tokens == 0` check does not catch it on claude-sonnet-5 / gemini-2.5-pro.")
+
+    # Reported separately from the `Err/Total` column above, which counts *rows*: a probe-failed task
+    # has no row, so it is not in `Err` and not in `allrows` either. Only the `Pass` column feels it.
+    pf = [(r["n"], probe_failures(r), (r.get("summary") or {}).get("total")) for r in runs]
+    ptot = sum(c for _, c, _ in pf)
+    ptasks = sum(t or 0 for _, _, t in pf)
+    o.append("")
+    if not ptot:
+        o.append("**Health probe:** every task reached the model — no task was lost to the agent's "
+                 "per-task `GET /v1/models` check.")
+    else:
+        pf = [(n, c, t) for n, c, t in pf if c]
+        o.append(f"**⚠ Tasks lost to the agent's health probe: {ptot} of {ptasks}** — "
+                 + ", ".join(f"#{n} ({c}/{t} tasks)" for n, c, t in pf)
+                 + ". Each raised `Model endpoint … is unreachable` from the `GET /v1/models` check "
+                   "that `exgentic 0.3.5.dev145` runs at the start of every task, hard-capped at 10 s "
+                   "with no retry, so the task died **before the model was called**. It is a "
+                   "gateway-latency interaction, not a misconfiguration: see Bug 3 in "
+                   "`docs/exgentic-agent-bug-report-20260901.md`.")
+        o.append("")
+        o.append("Two consequences for reading the rest of this report. **Pass rates are depressed "
+                 "by tasks that never ran** — the task counts as not-passed, indistinguishable in "
+                 "`Pass` from a wrong answer, so divide `Eval-pass` by `Total − Probe` for the rate "
+                 "over the tasks that reached the model. And **the per-task token and latency "
+                 "statistics of the affected runs are contaminated**: the task does leave a "
+                 "`report.ndjson` row (`status=ERROR`, `llm=0`, `tool=0`, zero tokens, ~10.5 s, the "
+                 "error in `status_message`), so it is inside `Err/Total` and inside every median, "
+                 "mean and CV below, pulling the token figures down and widening their spread. It is "
+                 "**not** flagged as lost token attribution, and that is correct — the model was "
+                 "never called, so zero tokens is the truth rather than a dropped span.")
     return "\n".join(o)
 
 
@@ -433,10 +530,17 @@ def sec8():
          "That shape means a usage-bearing span was dropped, and this section flags it. Reading it "
          "off *counts* rather than token values is what makes it catchable on every model, "
          "including ones whose dropped span would still have reported plausible non-zero usage.", "",
+         "⚠ **The `chat` and `tool` columns below are raw span totals; the ⚠ flag is computed on the "
+         "`counted` subset only.** Do not apply the rule by hand to these columns. A healthy gsm8k "
+         "task emits two `execute_tool` spans — `initial_observation` and `submit` — of which only "
+         "`submit` is counted, so its raw pair is `1`/`2` and would trip the test while its §7 pair "
+         "is the innocent `1`/`1`. Filtering to `counted` is what makes this section agree with §7.",
+         "",
          "Up to `exgentic 0.3.5.dev131` each task also issued a `max_tokens=1` capability probe, so "
          "a bare `chat == 1` used to be the damage signal and **at least 2** was healthy. The probe "
-         "is gone as of `dev145` (upstream issues #250/#251) — do not resurrect that rule, and do "
-         "not compare chat counts across runs that straddle the change.", "",
+         "was replaced in `dev145` by an unbilled `GET /v1/models` check that emits no span — do not "
+         "resurrect that rule, and do not compare chat counts across runs that straddle the change. "
+         + probe_era_note(), "",
          "`not counted` are spans the aggregator cannot see: it only folds a chat/tool span into "
          "`llm_count`/`tool_count` when its parent is the `invoke_agent` span, so anything nested "
          "deeper is real work missing from the totals. A non-zero figure there is not a bug by "
@@ -477,11 +581,9 @@ def sec8():
             inventory = ", ".join(f"`{n}`" + (f" x{c}" if c > 1 else "")
                                   for n, c in sorted(names.items(), key=lambda kv: -kv[1]))
             o.append("| %s | %d | %s | %d | %d | %d | %s |" % (
-                tid, len(ss), f"**{nchat}** ⚠" if _span_lost(nchat, ntool) else str(nchat),
+                tid, len(ss), f"**{nchat}** ⚠" if _span_lost(ss) else str(nchat),
                 ntool, kinds.get("other", 0), uncounted, inventory))
-        lost = [t for t, ss in by_task.items()
-                if _span_lost(sum(1 for s in ss if s.get("kind") == "chat"),
-                              sum(1 for s in ss if s.get("kind") == "tool"))]
+        lost = [t for t, ss in by_task.items() if _span_lost(ss)]
         if lost:
             o.append("")
             o.append(f"> ⚠ **{len(lost)} of {len(by_task)} tasks invoke ≥2 tools off ≤1 `chat` "
@@ -505,7 +607,8 @@ head = [f"# AutoBench Service — 12 Parameterized Runs ({PLATFORM})", "",
         "are transcribed.", "", "<!--TOC-->", ""]
 
 doc = "\n".join(head) + "\n" + "\n\n".join(
-    [sec_s3(), S1, S2, sec3(), sec4(), sec5(), sec6(), sec7(), sec8()]) + "\n"
+    [sec_s3(), S1, S2.replace("**PROBE_ERA_NOTE**", probe_era_note()),
+     sec3(), sec4(), sec5(), sec6(), sec7(), sec8()]) + "\n"
 # Sections only: every `### Run #N` subsection title appears twice (per-task and per-span), so
 # listing level 3 would emit duplicate anchors that link to whichever GitHub saw first.
 doc = doc.replace("<!--TOC-->", _toc(doc, max_level=2))
