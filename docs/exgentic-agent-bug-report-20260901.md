@@ -114,6 +114,10 @@ latency. They are independent.
 
 ## Bug 3 — the replacement health probe fails tasks outright on a high-latency gateway (found 2026-09-14, `0.3.5.dev145`)
 
+> **Still open upstream.** Paste-ready issue text, with our cluster and gateway names stripped and only
+> full-matrix numbers: [`exgentic-issue-models-probe.md`](exgentic-issue-models-probe.md). Keep the two
+> in step if either changes.
+
 **This is a regression introduced by the same change that fixed Bug 1 and retired Bug 2's probe**, and
 it is why the `max_tokens=1` probe disappeared: the probe was **replaced**, not removed.
 `check_model_accessible_sync` now runs the unbilled reachability check instead of a completion call —
@@ -142,17 +146,27 @@ Same cluster, same gateway, same benchmark, only the agent digest differs:
 | agent | platform | unreachable failures |
 |---|---|---|
 | `15a682ce` (pre-fix) | KinD | **0** across all 12 legs (116 gsm8k+tau2 tasks) |
-| `d924a9ed` (dev145) | KinD | **11 of 66 tasks** in the first four legs alone |
+| `d924a9ed` (dev145) | KinD | **12 of 141 tasks** across all 12 legs |
 | `d924a9ed` (dev145) | OpenShift | **0** across all 12 legs |
 
-It is a *latency* interaction, not a misconfiguration — the endpoint answers `401` in 0.19 s warm from
-both the host and inside the agent pod, and 43 of 50 tasks in the same leg succeeded. The KinD gateway
-is VPN-routed (`ete-litellm.ai-models.vpc-int.res.ibm.com`, 9.47.x), each task opens a *fresh*
-connection with no pooling, and a cold DNS+TCP+TLS handshake measured 3.1 s from inside the pod.
-OpenShift never trips it because its path to the gateway is fast.
+Per leg on KinD: #1 1/1, #2 1/10, #3 2/50, #4 2/5, #5 1/5, #7 1/5, #10 3/20, #12 1/20 — so it hits
+every benchmark (gsm8k, tau2, appworld) and is not concentrated in one leg shape.
 
-**The AuthBridge sidecar makes it markedly worse**, which matters because legs #5–#8 all run one:
-leg #5 (`auth-only`) lost 3 of 5 tasks, against 7 of 50 for the no-sidecar leg #3.
+It is a *latency* interaction, not a misconfiguration — the endpoint answers `401` in 0.19 s warm from
+both the host and inside the agent pod, and 48 of 50 tasks in leg #3 succeeded against the same
+endpoint in the same process. The KinD gateway is VPN-routed
+(`ete-litellm.ai-models.vpc-int.res.ibm.com`, 9.47.x), each task opens a *fresh* connection with no
+pooling, and a cold DNS+TCP+TLS handshake measured 3.1 s from inside the pod. OpenShift never trips it
+because its path to the gateway is fast.
+
+⚠️ **Two figures previously quoted here came from an earlier, partial KinD run and are withdrawn.**
+That run reported 11 of 66 tasks in its first four legs, and leg #5 (`auth-only`, sidecar) losing 3 of
+5 against leg #3's 7 of 50 — on which basis this section claimed the AuthBridge sidecar "makes it
+markedly worse". **The full matrix does not reproduce that.** Sidecar legs #5–#8 lost 2 of 20 tasks
+(10%); no-sidecar legs #1–#4 lost 6 of 66 (9%). The sidecar claim is therefore unsupported and should
+not be carried upstream; the loss rate on this cluster is ~9% either way. The earlier run's higher
+rate is consistent with a *worse network moment*, which is exactly what a latency-triggered bug looks
+like — the rate is a property of the path on the day, not a stable constant. Do not quote it as one.
 
 ### Suggested fix, in preference order
 
