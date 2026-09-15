@@ -168,6 +168,38 @@ not be carried upstream; the loss rate on this cluster is ~9% either way. The ea
 rate is consistent with a *worse network moment*, which is exactly what a latency-triggered bug looks
 like — the rate is a property of the path on the day, not a stable constant. Do not quote it as one.
 
+### Instrumented directly, 2026-09-15
+
+Measured from a pod on the agent image in `team1`, through the probe's own code path (`urllib`, fresh
+connection per call, `timeout=10.0`, no credentials — a `401` is `REACHABLE`). Scripts were piped in
+over `kubectl exec` / a ConfigMap; `/tmp` is not shared into the podman VM, so a bind mount fails.
+
+- **30 sequential probes, one pod:** min 0.15 s, p50 **0.20 s**, p90 0.26 s, p95 0.90 s, max **10.09 s**
+  → **1 of 30 failed**, and it was the pod's *first* contact. The 29 that followed ran 0.15-0.90 s.
+- **Every slow attempt was absorbed by the next one on the same path — 7 of 7.** 10.09 s (failed) →
+  0.18 s; 3.37 → 0.19; 1.27 → 0.15; 1.22 → 0.15; 1.03 → 0.18; 0.90 → 0.22; 0.88 → 0.23. This is the
+  retry argument, and it is the strongest thing we have.
+- **First contact from a fresh pod is slower than its own retry in 6 of 6 pods** — median 0.74 s vs
+  0.21 s, a ~3.5× cold-path penalty in the same direction every time.
+- **Ruled out two explanations that would have implicated us, not the probe:** 4 concurrent probes
+  (16 samples, 0.15-0.47 s, 0 failures) and 10 fresh *processes* in a warm pod (20/20 succeeded). The
+  predictor is a cold *path* — new pod, or an idle gap (after 120 s idle, first-attempt median rose to
+  0.36 s) — not load and not process freshness. ⚠️ Note I nearly repeated the time-confound mistake
+  from the caching investigation here: "fresh process" was again the intuitive cause and again wrong.
+- **The mesh dataplane roughly doubles the cold penalty but does not explain the excursion:** with
+  `istio.io/dataplane-mode: none`, first-contact median 0.21 s (n=3) vs 0.74 s in-mesh (n=6). Both are
+  two orders of magnitude below the cap.
+- **Host-side, DNS is the expensive part on a cold cache:** `time_namelookup` **3.09 s** of a 3.67 s
+  total for the same name, and `urlopen`'s timeout does not bound `getaddrinfo`. In-cluster DNS resolved
+  in ~0.00-0.07 s, so this is not what bit us — but it is a second way to exceed a 10 s budget.
+
+Every code reference in this section and in the upstream text was **read out of the image**
+(`/app/exgentic/src/exgentic/`), not from a checkout: `health.py:246` (`_MODELS_PROBE_TIMEOUT = 10.0`),
+`health.py:529` (the clamp), `instance.py:88` (per-task call site), and
+`check_model_accessible_sync(timeout: float = 30.0)` whose docstring promises 30 s the clamp can never
+grant. The probe pod reported image ID `sha256:d924a9ed…`, which also confirms the KinD node cache
+holds the dev145 index — the operational check the artifacts do not record.
+
 ### Suggested fix, in preference order
 
 1. **Retry the probe** with the backoff already present in the module — a transient handshake stall is

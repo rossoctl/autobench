@@ -1,139 +1,214 @@
-# Upstream issue text — the per-task `GET /v1/models` probe
+<!--
+Send-ready text for the exgentic image authors. Everything below the rule is meant to be pasted
+as-is: no cluster names, no internal hostnames, no instructions telling them what to run — the
+evidence is ours. The internal record, including how this relates to the #250/#251 work and two
+figures we withdrew, stays in exgentic-agent-bug-report-20260901.md. Keep the two in step.
+-->
 
-Paste-ready text for an issue on `github.com/Exgentic/exgentic`. It is a self-contained rewrite of
-**Bug 3** in [`exgentic-agent-bug-report-20260901.md`](exgentic-agent-bug-report-20260901.md), which
-stays the internal record — read that one for how Bug 3 relates to the #250/#251 work and for the
-withdrawn figures. Deliberately different here: no cluster or gateway hostnames (the reproduction does
-not need them), and the numbers are the full-matrix ones only.
+# The per-task `GET /v1/models` probe fails whole tasks on a slow first contact
+
+**Reported against:** `ghcr.io/exgentic/exgentic-a2a-tool_calling:latest`, index
+`sha256:d924a9ed615fba67ba0a1fa3f130e430e0768ad062491177bebaf8b945f1c1ef`,
+`exgentic 0.3.5.dev145+g82008e9a9`. Code references below were read out of that image, not from
+a source checkout, so they are what ships.
 
 ---
 
-## Title
-
-`check_model_accessible_sync`: the per-task `GET /v1/models` probe fails whole tasks on a slow
-endpoint — 10 s hard cap, no retry, not configurable
-
 ## Summary
 
-As of `0.3.5.dev145`, `LiteLLMToolCallingAgentInstance.__init__` runs a `GET /v1/models` reachability
-check before every task. The check is capped at **10 s regardless of the timeout the caller passes**,
-has **no retry**, and **cannot be disabled or tuned**. When it trips, the agent raises
-`HealthCheckError("Model endpoint for <model> is unreachable at <url>")` and the task fails **before
-the model is ever called**.
+`LiteLLMToolCallingAgentInstance.__init__` runs a `GET /v1/models` reachability check before every
+task. The check is **capped at 10 s regardless of the timeout the caller passes**, has **no retry**,
+and **cannot be disabled or tuned**. When it trips, the agent raises
 
-On an endpoint that is reachable but slow to hand-shake, this converts a transient network stall into
-a permanently failed task. In a benchmark harness that is a **pass-rate** loss, not just a latency
-cost: the task is scored as not-passed and is indistinguishable, in the results, from the agent
-answering incorrectly.
+```
+HealthCheckError: Model endpoint for <model> is unreachable at <url>
+```
 
-We hit this on 12 of 141 tasks (~9%) on one cluster while a second cluster running the identical image
-lost 0 of 141. The endpoint the failing tasks could not reach answers `401` in 0.19 s when warm, and
-48 of 50 tasks in the same leg reached it successfully from the same process.
+and the task fails **before the model is ever called**.
 
-## Why this is a regression
+The endpoint in question is not down. On our slower cluster it answers in **0.20 s at the median**,
+measured from inside the agent's own container with the agent's own code path. But the distribution has
+a long right tail on *first contact*, and one draw from that tail crossed the cap: **10.09 s, failed —
+while the very next attempt on the same path returned in 0.18 s.** Because there is no retry, that
+single excursion is not a slow task, it is a lost task.
 
-This is a side effect of the fix for #250 rather than an independent bug, and worth stating explicitly
-because the two changes shipped together. Before that work, each task issued a `max_tokens=1`
-completion probe. Retiring it was right — it cost tokens on every invocation, and a malformed request
-classifies as `REACHABLE`, so it could report success without verifying anything. **But it was
-replaced, not removed**, and the replacement is a hard gate rather than a best-effort check.
+Across a 141-task benchmark matrix this cost us **12 tasks on one cluster and 0 on another**, same
+image, same benchmarks — the only difference being the network path to the model endpoint.
 
-The old probe's failure mode was wasted latency and one inflated span count. The new probe's failure
-mode is a lost task. That is a strictly worse failure for the same diagnostic.
+We think the fix is small (a retry, or hoisting the probe out of the per-task path) and that the
+diagnostic value survives it intact. Detail and measurements below.
 
-## Where
+## The code, as shipped
 
-| property | value | location |
+| | | |
 |---|---|---|
-| what it does | `GET /v1/models` against the OpenAI-compatible surface | `integrations/litellm/health.py` |
-| when | **once per task**, in `LiteLLMToolCallingAgentInstance.__init__` | `agents/litellm_tool_calling/instance.py:88` |
-| timeout | **10 s, hard-capped** — `min(timeout, _MODELS_PROBE_TIMEOUT)`, so a caller passing the documented `timeout=30.0` still gets 10 s | `health.py:529`, `_MODELS_PROBE_TIMEOUT = 10.0` |
-| retries | **none** — the `backoff` machinery belongs to `acheck_model_accessible`, the *strict* completion check, not to this path | `health.py:466-486` |
-| error text | `_fetch_models` swallows every exception into `(None, None)`, so a timeout is indistinguishable from a refusal; `check_models_endpoint` then reports "is unreachable" | `health.py:290-311, 360-363` |
-| configurability | **none** — no environment variable, and the caller's timeout is clamped | — |
+| probe runs | **once per task**, in `LiteLLMToolCallingAgentInstance.__init__` | `agents/litellm_tool_calling/instance.py:88` |
+| cap | `_MODELS_PROBE_TIMEOUT = 10.0` | `integrations/litellm/health.py:246` |
+| clamp | `check_models_endpoint(model, logger, timeout=min(timeout, _MODELS_PROBE_TIMEOUT))` | `health.py:529` |
+| retries | **none on this path** — the `backoff` machinery belongs to `acheck_model_accessible`, i.e. the `strict=True` completion check | `health.py:466-486` |
+| transport | `urllib.request.urlopen(request, timeout=timeout)`, a new connection per call, no pooling | `health.py:290-311` |
+| error | `_fetch_models` returns `(None, None)` for anything that is not an HTTP response; `check_models_endpoint` maps that to "is unreachable" | `health.py:311`, `health.py:360-363` |
+| configurability | none — no environment variable, and the caller's timeout is clamped | — |
+
+Two details worth calling out, because both surprised us:
+
+**The `timeout` parameter of `check_model_accessible_sync` cannot raise the cap.** Its signature says
+`timeout: float = 30.0` and its docstring says *"Timeout in seconds for the endpoint probe (default:
+30s)"*, but `min(timeout, _MODELS_PROBE_TIMEOUT)` means the probe never gets more than 10 s. Any value
+above 10 is silently discarded, so the documented default is unreachable through the documented knob.
+
+**`urlopen`'s `timeout` does not bound name resolution.** `socket.getaddrinfo` runs inside
+`create_connection` and takes no timeout, so on a host with slow DNS the total wall time exceeds the
+nominal 10 s. Not our dominant cost — in-cluster DNS resolved in ~0.00-0.07 s — but on a directly
+resolving host we measured a cold lookup for the same name at **3.09 s**, which would consume a third
+of the budget before a packet reaches the endpoint.
 
 ## Impact, measured
 
-Two Kubernetes clusters, same agent image index (`sha256:d924a9ed…`, `0.3.5.dev145+g82008e9a9`; the
-`linux/amd64` and `linux/arm64` children share revision `82008e9a9`), same benchmarks, same 12-leg
-matrix, 141 tasks each. The only difference is the network path from the agent pod to the LLM gateway.
+Two Kubernetes clusters, the same agent image index (`d924a9ed…`; its `linux/amd64` and `linux/arm64`
+children share revision `82008e9a9`), the same 12-leg benchmark matrix, 141 tasks each. The only
+material difference is the network path from the agent pod to the model endpoint.
 
-| agent version | cluster | tasks lost to the probe |
+| agent | cluster | tasks lost to the probe |
 |---|---|---|
-| `0.3.5.dev131` (pre-change) | slow-path cluster | **0** of 116 |
-| `0.3.5.dev145` | slow-path cluster | **12** of 141 |
-| `0.3.5.dev145` | fast-path cluster | **0** of 141 |
+| `0.3.5.dev131` (before the probe change) | slower path | **0** of 116 |
+| `0.3.5.dev145` | slower path | **12** of 141 |
+| `0.3.5.dev145` | faster path | **0** of 141 |
 
-The losses are spread across every benchmark we run — gsm8k, tau2 and appworld — and across legs of
-2 to 50 tasks, so it is not specific to one workload shape or one concurrency setting.
+The 12 losses were spread across three benchmarks and legs of 2 to 50 tasks — not one workload shape,
+not one concurrency setting. In the worst leg, **48 of 50 tasks reached the same endpoint from the same
+process**; the other 2 died on the probe.
 
-Two secondary effects, both relevant to anyone measuring with this agent:
+Two consequences that may matter to you beyond the failure itself:
 
-- A killed task still writes a result row, with `status=ERROR`, zero LLM calls, zero tool calls and
-  zero tokens, at ~10.5 s duration. Any per-task token statistic computed over all rows is therefore
-  contaminated by a row for work that never happened — a zero-cost outlier that drags means and
-  medians down and inflates the coefficient of variation.
-- Because the probe precedes the model call, a raw pass rate cannot separate "the agent got it wrong"
-  from "the agent never started". We had to add a second, adjusted pass rate over
+- A killed task still produces a result row, at `status=ERROR` with zero LLM calls, zero tool calls,
+  zero tokens and ~10.5 s duration. Any per-task token or latency statistic computed over all rows is
+  then contaminated by a row for work that never happened.
+- Because the probe precedes the model call, a raw pass rate cannot separate *the agent answered
+  incorrectly* from *the agent never started*. We had to add a second pass rate over
   `total − probe_failures` to keep two clusters comparable at all.
+
+## What we measured directly
+
+All of the following was run from a container on the agent image, in the namespace where the failures
+occurred, through the probe's own code path (`urllib`, one fresh connection per call, `timeout=10.0`)
+and sending no credentials — a `401` is `REACHABLE` to `check_models_endpoint`, so an unauthenticated
+probe exercises exactly what the agent exercises.
+
+**1. The distribution is fine at the median and bad in the tail.** 30 sequential probes from one pod:
+
+| min | p50 | p90 | p95 | max | over the 10 s cap |
+|---|---|---|---|---|---|
+| 0.15 s | 0.20 s | 0.26 s | 0.90 s | **10.09 s** | **1 of 30** |
+
+The 10.09 s sample was the pod's **first** contact with the endpoint. It failed with the socket
+timeout. The 29 that followed on the warmed path ranged 0.15-0.90 s. The mean of 0.56 s is entirely an
+artefact of that one sample, which is the point: the median tells you nothing about your exposure here,
+because the probe is a per-task all-or-nothing gate against a heavy-tailed quantity.
+
+**2. Every slow attempt we recorded was absorbed by the next attempt on the same path.** Seven
+attempts of ≥0.85 s occurred across all our runs; the following attempt took ≤0.23 s in every case:
+
+| slow attempt | next attempt on the same path |
+|---|---|
+| **10.09 s (failed)** | 0.18 s |
+| 3.37 s | 0.19 s |
+| 1.27 s | 0.15 s |
+| 1.22 s | 0.15 s |
+| 1.03 s | 0.18 s |
+| 0.90 s | 0.22 s |
+| 0.88 s | 0.23 s |
+
+7 of 7. This is the single strongest argument for a retry: the condition is transient by construction,
+and one immediate re-attempt would have converted every failure we have seen into a task that ran.
+
+**3. First contact from a fresh pod is systematically slower than its own retry — 6 of 6.** New pod,
+two probes back to back:
+
+| pod | first contact | immediate retry |
+|---|---|---|
+| 1 | 0.45 s | 0.25 s |
+| 2 | 0.42 s | 0.25 s |
+| 3 | 0.31 s | 0.24 s |
+| 4 | 1.22 s | 0.15 s |
+| 5 | 1.27 s | 0.15 s |
+| 6 | 1.03 s | 0.18 s |
+
+Median 0.74 s against 0.21 s — a ~3.5× cold-path penalty, in the same direction every time. Nothing
+here crossed the cap on the day we measured; the network was in better shape than during the matrix.
+That is the nature of the defect: the penalty is always present, its magnitude is a property of the
+path at that moment, and the agent turns any excursion past 10 s into a lost task with no second look.
+
+**4. Neither concurrency nor process freshness is the trigger.** We checked both, because both were
+plausible and both would have implicated us rather than the probe:
+
+- 4 concurrent probes, 16 samples: 0.15-0.47 s, **0 failures**. Parallel tasks colliding is not it.
+- 10 fresh Python processes in an already-warm pod, 2 probes each: **20 of 20 succeeded**, slowest
+  first attempt 3.37 s (retry 0.19 s). A new process on a warm path is fine.
+
+What predicts the slow attempt is the *path* being cold — a new pod, or an idle gap — not the process
+or the load. After a 120 s idle gap, first attempts rose again (median 0.36 s against 0.21 s warm).
+
+**5. A service-mesh dataplane roughly doubles the cold penalty but does not explain the excursion.**
+Same image, same namespace, mesh dataplane disabled on the pod: first contact median 0.21 s (n=3)
+against 0.74 s in-mesh (n=6). So our environment contributes, and we are not claiming otherwise — but
+0.21 s and 0.74 s are both two orders of magnitude below the cap. What crosses 10 s is the tail, and
+the tail exists on both.
 
 ## What we ruled out
 
-- **Not routing or DNS.** From a shell in the failing agent pod, the same URL returns `401` in 0.19 s
-  once warm. A fast `401` proves the path, the TLS chain and the DNS are all fine.
-- **Not credentials.** A `401` is the expected answer to an unauthenticated probe; the authenticated
-  calls in the same pod succeed.
-- **Not a dead endpoint.** In the worst leg, 48 of 50 tasks reached the same endpoint from the same
-  process. Whatever fails, fails intermittently.
-- **Not the benchmark or the model.** It hits three benchmarks and four model classes, and the other
-  cluster runs all of them clean on the identical image.
+- **Routing, DNS, TLS.** From a shell in the affected pod the same URL returns `401` in 0.19 s once
+  warm. A fast `401` proves the route, the chain and the resolution are all sound.
+- **Credentials.** `401` is the expected answer to an unauthenticated probe, and the authenticated
+  calls from the same pod succeed.
+- **A dead or overloaded endpoint.** 48 of 50 tasks in the worst leg reached it from the same process,
+  and 29 of 30 probes in our instrumented run answered in under a second.
+- **The benchmark, the model, the workload shape.** It hits three benchmarks and four model families,
+  and a second cluster runs all of them clean on the identical image.
 
-What is left is the handshake. Each task opens a **fresh** connection with no pooling, and a cold
-DNS + TCP + TLS handshake to our gateway measured **3.1 s** from inside the pod. Add ordinary
-variance, contention from concurrent tasks, and a VPN hop, and 10 s is not a comfortable margin. The
-fast-path cluster has the same code and never comes close.
+What remains is first-contact latency on a path that is healthy but not fast — which is a condition the
+agent cannot control and, we would argue, should not fail a task over.
 
-## Reproducing without our network
+## The argument, stated plainly
 
-The trigger is only latency, so it reproduces with a deliberately slowed endpoint:
+Retiring the old `max_tokens=1` completion probe was right, and the docstring's reasoning is sound: a
+generation probe costs tokens on every invocation, and a malformed request classifies as `REACHABLE`,
+so it could report success while verifying nothing. We are not asking for it back.
 
-1. Point the agent at an OpenAI-compatible endpoint whose `GET /v1/models` responds in >10 s — a proxy
-   with an injected delay, or `tc qdisc add dev eth0 root netem delay 6000ms` on the pod's interface,
-   is enough. Note that a *fixed* delay above the cap fails every task; the interesting case is a
-   delay distribution straddling 10 s, e.g. `netem delay 5000ms 6000ms`, which fails a fraction of
-   them and looks exactly like a flaky agent.
-2. Run any multi-task workload. Each task fails with `Model endpoint ... is unreachable` in ~10.5 s,
-   having made no LLM call.
-3. Confirm the endpoint is healthy from inside the same pod (`curl -s -o /dev/null -w '%{http_code}'`
-   against the same URL) — it answers normally, which is the confusing part in the field.
+But it was **replaced, not removed**, and the replacement is a hard gate where the old one was merely
+wasteful. The old probe's worst case was a wasted round trip and one inflated call count. The new
+probe's worst case is a task that never runs, reported as a failure indistinguishable from the model
+getting the answer wrong. For a diagnostic that is meant to produce a *better error message*, that is
+an expensive trade — and it is paid per task, so exposure scales with the length of the run.
 
-## Suggested fixes, in preference order
+## Suggested changes, in the order we would value them
 
-1. **Retry the probe** using the backoff already present in the module. A handshake stall is precisely
-   what `ErrorCategory.TRANSIENT` is for, and one retry would have absorbed every failure we saw.
-2. **Hoist it out of the per-task path.** The model endpoint does not change between tasks of one run,
-   so probing once per agent process keeps the diagnostic value at 1/N of the exposure. This is the
-   change we would most like to see even if the timeout were generous.
-3. **Let the cap be raised.** `min(timeout, _MODELS_PROBE_TIMEOUT)` silently makes the function's own
-   `timeout` parameter a no-op above 10 s, which is surprising next to a documented default of 30 s.
-   Either honour the argument or drop it from the signature.
-4. **Make it skippable** via an environment variable, for operators who have already established
-   reachability by other means.
-5. **Distinguish a timeout from a refusal** in the error text. `_fetch_models` collapses both to
-   `None`, and the resulting "is unreachable" sent us to check routing, firewalls and DNS for some
-   time before we found the 10 s clamp — the message names a conclusion the code has not actually
-   tested.
+1. **Retry once, with the backoff already in the module.** A first-contact stall is exactly
+   `ErrorCategory.TRANSIENT`, and 7 of 7 slow attempts we recorded were followed by a sub-quarter-second
+   success. This alone would have cost us zero tasks.
+2. **Hoist the probe out of the per-task path.** The model endpoint does not change between tasks of
+   one run, so probing once per agent process retains the diagnostic at 1/N of the exposure. We would
+   want this even with a generous timeout, because the per-task placement is what makes a rare event
+   into a recurring one.
+3. **Honour the caller's `timeout`, or drop it from the signature.** As it stands,
+   `check_model_accessible_sync(timeout=30.0)` is documented, accepted, and silently reduced to 10.
+4. **Allow it to be skipped** via an environment variable, for operators who have established
+   reachability by other means and would rather fail on the real call.
+5. **Distinguish a timeout from a refusal in the message.** `_fetch_models` collapses timeout, refusal,
+   DNS failure and TLS failure into `(None, None)`, and the resulting *"is unreachable"* sent us
+   through routing, firewall and DNS checks before we found the 10 s clamp. The message asserts a
+   conclusion the code has not tested. Even this change alone would have saved us most of the
+   investigation.
 
-Even (5) alone would have saved us most of the investigation.
-
-## Environment
+## Provenance
 
 | | |
 |---|---|
-| Agent image | `ghcr.io/exgentic/exgentic-a2a-tool_calling:latest` |
+| Image | `ghcr.io/exgentic/exgentic-a2a-tool_calling:latest` |
 | Index digest | `sha256:d924a9ed615fba67ba0a1fa3f130e430e0768ad062491177bebaf8b945f1c1ef` |
-| Children | `linux/amd64 sha256:7109b469…`, `linux/arm64 sha256:d11a8adf…`, both revision `82008e9a9` |
-| Package version | `exgentic 0.3.5.dev145+g82008e9a9` |
+| Children | `linux/amd64 sha256:7109b469…`, `linux/arm64 sha256:d11a8adf…`, both `org.opencontainers.image.revision = 82008e9a9…` |
+| Package | `exgentic 0.3.5.dev145+g82008e9a9` |
 | Agent | `tool_calling` |
 | Benchmarks affected | gsm8k, tau2, appworld |
 | Deployment | Kubernetes, one agent pod per run, no HTTP proxy on the model path |
+| Code references | read from `/app/exgentic/src/exgentic/` inside the image above |
