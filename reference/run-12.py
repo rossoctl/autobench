@@ -15,6 +15,13 @@ Target is selected entirely by env so the same script drives kind and the OCP cl
     BM_CARD_TEMPLATE optional agent-card URL template with {service}/{namespace}, e.g.
                      https://{service}-{namespace}.apps.ykt2.../.well-known/agent-card.json
     BM_SPECS         alternate spec file (default reference/run12_specs.json)
+    BM_ORDER         comma-separated execution order, overriding the spec file's own
+    BM_CACHE_GAP     seconds a (benchmark, model) prompt set must rest between legs, so the LLM
+                     gateway's completion cache expires and every leg pays for real completions.
+                     Measured TTL on the internal gateway is ~10 min (hit at 9, miss at 11), so 900
+                     is a 50% margin. Only the shortfall is slept, so pair it with a BM_ORDER that
+                     interleaves the groups — that turns ~68 min of sleeping into ~42 (see the
+                     cache_group docstring).
 
 SPEC FILE FORMAT — two accepted shapes, so an experiment can reuse this driver without touching the
 canonical matrix:
@@ -60,6 +67,9 @@ CARD_TEMPLATE = os.environ.get("BM_CARD_TEMPLATE")
 SETTLE_PLAIN = float(os.environ.get("BM_SETTLE_PLAIN", "15"))
 SETTLE_SIDECAR = float(os.environ.get("BM_SETTLE_SIDECAR", "45"))
 STABLE_POLLS = int(os.environ.get("BM_STABLE_POLLS", "4"))
+CACHE_GAP = float(os.environ.get("BM_CACHE_GAP", "0"))
+ORDER = ([int(x) for x in os.environ["BM_ORDER"].split(",")]
+         if os.environ.get("BM_ORDER") else None)
 MIRROR = pathlib.Path("/tmp/autobench")
 SPECS = pathlib.Path(os.environ.get("BM_SPECS")
                      or pathlib.Path(__file__).with_name("run12_specs.json"))
@@ -277,6 +287,45 @@ def execute(spec, H):
     return rec
 
 
+def cache_group(spec) -> str:
+    """Legs that would hit the LLM gateway's completion cache in each other's wake.
+
+    The gateway keys its cache on the request body, so two legs collide when they send the same
+    prompts to the same model. Task selection is deterministic and driven by ``max_tasks``, so a
+    shorter leg's task set is a *prefix* of a longer one's on the same benchmark — #1 ⊂ #2 ⊂ #3, and
+    #5-#8 are all the same first five. Benchmark plus effective model is therefore the whole key:
+    a ``model_override`` puts a leg in its own group (which is why #4 never collides with #1-#3).
+
+    Plugins do not enter into it. AuthBridge and ibac change what happens *around* the call, not the
+    body sent to the gateway, so #5-#8 collide with #1-#3 exactly as they collide with each other.
+    """
+    db = spec.get("deploy_body") or {}
+    # The canonical specs carry the override as deploy_body["model"]; accept the other spellings so
+    # an experiment file cannot silently fall back to "default" and defeat the whole gap mechanism.
+    model = db.get("model") or db.get("model_override") or (spec.get("run") or {}).get("model")
+    return f"{spec['bench']}:{model or 'default'}"
+
+
+def wait_out_cache(spec, last_finish, log_prefix="  ") -> float:
+    """Sleep until this leg's cache group has been quiet for CACHE_GAP seconds.
+
+    Only the *remainder* is slept: any other leg that ran in between counts toward the gap, which is
+    why an interleaved order makes this far cheaper than a fixed sleep after every leg. Returns the
+    seconds actually slept so the run record can show it.
+    """
+    if CACHE_GAP <= 0:
+        return 0.0
+    key = cache_group(spec)
+    since = time.time() - last_finish.get(key, 0.0)
+    if key not in last_finish or since >= CACHE_GAP:
+        return 0.0
+    remaining = CACHE_GAP - since
+    log(f"{log_prefix}cache group {key!r} last ran {int(since)}s ago; "
+        f"sleeping {int(remaining)}s to clear the gateway's completion cache")
+    time.sleep(remaining)
+    return remaining
+
+
 def main():
     raw = json.loads(SPECS.read_text())
     if isinstance(raw, dict):        # experiment file: brings its own legs AND its own order
@@ -284,27 +333,41 @@ def main():
     else:                            # canonical matrix: a bare list, fixed order
         specs = raw
         order = [1, 2, 3, 5, 6, 7, 8, 4, 9, 10, 11, 12]  # #4 last of gsm8k: it swaps the model
+    if ORDER:                        # BM_ORDER wins over both, so a reordering needs no second
+        order = ORDER                # copy of the legs that would drift from the canonical file
     by_n = {s["n"]: s for s in specs}
     tok = token()
     H = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
     log(f"target={BASE} label={LABEL} (token len={len(tok)})")
 
+    if CACHE_GAP > 0:
+        log(f"cache-gap mode: {int(CACHE_GAP)}s minimum between legs sharing a "
+            f"(benchmark, model) prompt set; order={order}")
+
     out, t0 = [], time.time()
+    last_finish: dict[str, float] = {}
     for n in order:
         if ONLY and n not in ONLY:
             continue
         s = by_n[n]
         log(f"=== Run #{n}: {s['title'][:70]}")
+        slept = wait_out_cache(s, last_finish)
         try:
-            out.append(execute(s, H))
+            rec = execute(s, H)
         except Exception as e:  # never let one run abort the set
             log(f"  !! exception: {type(e).__name__}: {e}")
-            out.append({"n": n, "bench": s["bench"], "title": s["title"],
-                        "status": "driver_exception", "error": f"{type(e).__name__}: {e}"})
+            rec = {"n": n, "bench": s["bench"], "title": s["title"],
+                   "status": "driver_exception", "error": f"{type(e).__name__}: {e}"}
+        if CACHE_GAP > 0:
+            rec["cache_group"] = cache_group(s)
+            rec["cache_gap_slept_seconds"] = round(slept, 1)
+        last_finish[cache_group(s)] = time.time()
+        out.append(rec)
         # refresh the token: the full set outlives a 30-minute access token
         tok = token()
         H["Authorization"] = f"Bearer {tok}"
-        json.dump({"label": LABEL, "base": BASE, "runs": out},
+        json.dump({"label": LABEL, "base": BASE, "order": order,
+                   "cache_gap_seconds": CACHE_GAP, "runs": out},
                   open(MIRROR / f"run12-{LABEL}.json", "w"), indent=2)
 
     log(f"=== done in {int(time.time()-t0)}s; {len(out)} runs -> {MIRROR}/run12-{LABEL}.json")
