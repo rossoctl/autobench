@@ -31,7 +31,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: autobench-service
-          image: ghcr.io/rossoctl/autobench:v1.27
+          image: ghcr.io/rossoctl/autobench:v1.28
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
