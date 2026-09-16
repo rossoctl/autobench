@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-16T05:26:55Z
+**Last modified:** 2026-09-16T15:04:47Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -388,11 +388,21 @@ Run fields (`RunRequest`) are all **run-time** knobs:
 
 | Field | Default | Notes |
 |---|---|---|
-| `max_tasks` | `1` | number of benchmark tasks to evaluate |
+| `max_tasks` | `1` | number of benchmark tasks to evaluate; **capped by the task pool, silently** — see below |
 | `max_parallel_sessions` | `1` | concurrency |
 | `timeout_seconds` | `300` | whole-run wall-clock ceiling; raise for large tau2 runs |
 | `agent` / `namespace` / `experiment` | — | must match a deployed agent |
 | `model` | `null` | **not** forwarded per-session; model is fixed at deploy time |
+
+> **`max_tasks` above the benchmark's task pool is not an error.** The runner asks the MCP for the
+> task list and slices it — `task_ids[:max_tasks]` — so a request for more tasks than exist yields
+> the whole pool with no warning, and `summary.total` then reports the pool size rather than what you
+> asked for. There is no upper bound on the field to catch it. The pools differ by an order of
+> magnitude (gsm8k ~8.5K from HuggingFace, tau2 **114** in the default `retail` domain, appworld
+> grouped scenarios), so check the size before requesting a large run:
+> [`BENCHMARKS_PRIMER.md`](./BENCHMARKS_PRIMER.md) has them in one table. Selection is
+> **deterministic** — the first `max_tasks` of the pool — which is what makes a smaller run's tasks a
+> prefix of a larger one's.
 
 > **Timeout tuning (learned e2e):** tau2 with `max_tasks=20 max_parallel_sessions=4` exceeded
 > the 900s default and failed; re-running with `timeout_seconds=1800` succeeded (~915s).
@@ -823,7 +833,7 @@ tool serves "just run it" and "show me one HTTP call".
 | Option | Default | Meaning |
 |---|---|---|
 | `--benchmark` | `gsm8k` | `gsm8k` \| `tau2` \| `appworld` |
-| `--tasks N` | `1` | `max_tasks` — **how many** benchmark problems to attempt |
+| `--tasks N` | `1` | `max_tasks` — **how many** benchmark problems to attempt (capped by the pool, §5.3) |
 | `--parallel N` | `1` | `max_parallel_sessions` — **how many at once** |
 | `--timeout S` | `300` | `timeout_seconds` — wall budget for the **whole run** |
 | `--task-timeout S` | *unset* | `task_timeout_seconds` — ceiling for **one** task, clamped to `--timeout` |
