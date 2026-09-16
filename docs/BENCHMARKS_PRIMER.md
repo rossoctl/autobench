@@ -5,13 +5,17 @@ They are not three interchangeable test suites — they form a deliberate diffic
 one stresses a different part of the agent stack. This note explains what each is, what a single
 task actually involves, and what they look like in practice.
 
-All the "measured" figures below come from our own v1.23 runs (272 tasks across two clusters:
-OpenShift `ykt3→ykt2` and single-node KinD), not from the benchmarks' published papers.
+All the "measured" figures below come from our own **v1.28** runs of 2026-09-15 (282 tasks attempted
+across two clusters: OpenShift `ykt3→ykt2` and single-node KinD), not from the benchmarks' published
+papers. Those runs are published under
+[`docs/results/v1.28-2026-09-15/`](results/v1.28-2026-09-15/), and every figure here is traceable to
+their artifacts.
 
-Per-task token averages are computed over the **237 rows with intact telemetry**, excluding 15 rows
-whose usage-bearing span was lost (see the last bullet of "How to read our reports"). Including them
-understates tau2 by 17% and appworld by 12%; pass rates and latencies use all 272 rows, since those
-are unaffected.
+Per-task averages are computed over all **267 task rows** the two matrices produced, **none of which
+lost telemetry** — so unlike earlier measurements there is no intact/damaged split to correct for.
+The 15 missing rows are all appworld tasks killed by the 600 s per-task timeout, and a killed task
+leaves no `report.ndjson` row at all: **pass rates are over the 282 tasks attempted, while token and
+latency figures describe the 267 that finished.**
 
 <!-- Regenerate this list: python3 reference/gen_toc.py docs/BENCHMARKS_PRIMER.md -->
 <!-- toc -->
@@ -34,21 +38,22 @@ are unaffected.
 | | **gsm8k** | **tau2** | **appworld** |
 |---|---|---|---|
 | What it tests | multi-step arithmetic reasoning | multi-turn dialogue + tool use | long-horizon app automation |
-| Tasks measured | 172 | 60 (50 clean) | 40 (35 clean) |
-| **Pass rate** | **0.98** | **0.83** | **0.00** |
-| Input tokens / task | **343** | **82,966** | **210,792** |
-| Output tokens / task | 205 | 1,955 | 21,499 |
-| LLM calls / task † | 2.1 | 11.4 | 23.6 |
-| Tool calls / task | 1.1 | 11.2 | 13.4 |
-| Median task latency | **5.3s** | **92s** | **232s** |
-| Slowest task seen | 62s | 425s | 581s |
+| Task rows measured | 172 of 172 | 60 of 60 | 35 of 50 (15 timed out) |
+| Rows with lost telemetry | 0 | 0 | 0 |
+| **Pass rate** | **0.97** | **0.83** | **0.00** |
+| Input tokens / task | **341** | **90,902** | **269,953** |
+| Output tokens / task | 180 | 2,061 | 25,140 |
+| LLM calls / task † | 1.1 | 11.4 | 29.2 |
+| Tool calls / task | 1.1 | 11.4 | 14.6 |
+| Median task latency | **4.9s** | **84s** | **264s** |
+| Slowest task seen | 39s | 136s | 592s |
 | Model we use | gpt-5-mini (or gpt-4.1) | claude-sonnet-5 | gemini-2.5-pro |
 | Task pool | 8.5K problems (HuggingFace) | 114 (`retail` domain) | grouped scenarios |
 | `task_id` format | integer (`0`, `1`, …) | integer (`0`, `1`, …) | `21abae1_1` |
 
-The headline is the **scale gap**: a tau2 task costs ~240× the input tokens of a gsm8k task, and an
-appworld task ~615×. Choose accordingly — a 50-task gsm8k run is a couple of minutes; a 20-task
-appworld run is half an hour and millions of tokens.
+The headline is the **scale gap**: a tau2 task costs ~267× the input tokens of a gsm8k task, and an
+appworld task ~792×. Choose accordingly — a 50-task gsm8k run is about a minute; a 20-task appworld
+run is 30–45 minutes and millions of tokens.
 
 ---
 
@@ -73,9 +78,10 @@ the simplest possible agentic loop.
 gsm8k fails, the problem is infrastructure (deploy, auth, LLM reachability, telemetry), not agent
 capability. It is our canary.
 
-**What to expect.** ~0.98 pass rate, ~5s per task, ~343 input tokens. Deterministic enough that the
-same task produces the *same token count* on different clusters — we use that as a correctness check
-that two environments are genuinely comparable.
+**What to expect.** ~0.97 pass rate, ~5s per task, ~341 input tokens. Deterministic enough that the
+same task produces the *same token count* on different clusters — **6 of the 12 legs in the v1.28 pair
+have byte-identical input-token totals across OpenShift and KinD** — and we use that as a correctness
+check that two environments are genuinely comparable.
 
 ---
 
@@ -93,18 +99,23 @@ from the absence of an override. Switching domains would change the numbers, and
 
 **The key architectural difference.** tau2 introduces a **second LLM — a user simulator** that plays
 the customer. So each task involves two models talking to each other, plus tool calls. That single
-fact explains most of tau2's profile: ~11 LLM calls and ~11 tool calls per task, and ~83k input
+fact explains most of tau2's profile: ~11 LLM calls and ~11 tool calls per task, and ~91k input
 tokens because the whole growing conversation is re-sent on every turn.
 
 **What it stresses.** Conversation state, tool selection over many turns, and the agent's ability to
 stay on task. It is also the first benchmark where **model choice dominates the result** — see below.
 
-**What to expect.** ~0.83 pass rate with claude-sonnet-5, ~92s median per task (some tasks 7×
-that). Results are inherently a little noisy run-to-run because episodes are nondeterministic; ±0.05
-across a 10–20 task run is normal variance, not a regression.
+**What to expect.** ~0.83 pass rate with claude-sonnet-5 and ~84s median per task, in a fairly narrow
+band — the fastest task in the v1.28 pair took 44s and the slowest 136s, so tau2 does not have the
+long tail appworld does. Results are inherently a little noisy run-to-run because episodes are
+nondeterministic: inside that single pair the same 10 tasks scored **0.90 on one cluster and 1.00 on
+the other**, and the same 20 tasks 0.75 vs 0.80. A 0.05–0.10 gap across a 10–20 task run is normal
+variance, not a regression.
 
 > **Model sensitivity is dramatic here.** On the same 10 tasks, tau2 scored **0.1 with gpt-5-mini**
-> and **0.9 with claude-sonnet-5**. That is not a small tuning difference — it is the benchmark being
+> and **0.9 with claude-sonnet-5** (a one-off comparison from an earlier image, not part of the v1.28
+> pair — the model has been pinned ever since, so no current matrix re-measures it). That is not a
+> small tuning difference — it is the benchmark being
 > effectively unsolvable for one model and mostly solved by another. The Service therefore pins tau2
 > to claude-sonnet-5 via a `model_override`. If you see a tau2 number, check which model produced it
 > before comparing anything.
@@ -121,14 +132,18 @@ APIs, chaining many calls, and handling intermediate state.
 so ids look like `21abae1_1`, `21abae1_2`, `21abae1_3` — a scenario hash plus a sub-task number. Each
 still runs as an independent session.
 
-**What it stresses.** Long-horizon planning and composition. ~24 LLM calls and ~13 tool calls per
-task, ~211k input tokens, and a median of **4 minutes per task**.
+**What it stresses.** Long-horizon planning and composition. ~29 LLM calls and ~15 tool calls per
+task, ~270k input tokens, and a median of **4.4 minutes per task** — with a real tail: the slowest
+task that finished took 592s, and **15 of the 50 attempted tasks hit the 600 s per-task timeout** and
+so left no report row at all.
 
 **Expect a pass rate of 0.0 — and that is the honest result.** We run appworld with a *generic*
 `tool_calling` agent, which is not specialised for it. 0.0 does not mean the platform is broken; the
 runs complete cleanly, tasks execute, tokens are recorded, evaluation simply says the agent did not
-accomplish the goal. appworld's role in our matrix is as a **stress test of the pipeline at scale**
-(long tasks, big contexts, real timeouts) rather than a capability score we expect to move.
+accomplish the goal — and it is not giving up early either: **34 of the 35 tasks that finished called
+the `finish` tool**, so the agent believed it was done. appworld's role in our matrix is as a **stress
+test of the pipeline at scale** (long tasks, big contexts, real timeouts) rather than a capability
+score we expect to move.
 
 ---
 
@@ -138,28 +153,30 @@ A few things that trip people up:
 
 - **`pass_rate` = `evaluated_pass / total`.** A task that errors before evaluation counts as not
   passed, so a low pass rate can mean "failed the task" *or* "never got to be judged".
-- **† The `llm` figures in the table above are one call per task too high, and current runs are
-  not.** Agents up to `exgentic 0.3.5.dev131` issued a `max_tokens=1` capability probe before the
-  real work, and it was counted as a `chat` span — so the tabulated 2.1 / 11.4 / 23.6 are really
-  ~1.1 / ~10.4 / ~22.6 real calls. As of `0.3.5.dev145` it is *replaced* by an unbilled
-  `GET /v1/models` reachability check, which emits no `chat` span — measured absent across all 869
-  `chat` spans of a full 12-leg matrix, all four model classes. (That replacement has a sharp edge of
-  its own: it runs per task with a hard 10 s cap and no retry, and on a high-latency gateway it fails
-  tasks outright. See Bug 3 in `docs/exgentic-agent-bug-report-20260901.md`.) **A current
-  run's `llm` column counts real calls one-for-one, with no offset to subtract.** The table has not
-  been re-measured on the new agent, which is why the correction is stated rather than applied. The
-  practical trap: **do not compare `llm` counts across runs that straddle the change** — a leg will
-  look like it made one fewer call per task when only the instrumentation changed.
+- **† The `llm` column changed meaning between agent versions, so never compare across it.** The
+  table above is measured on `exgentic 0.3.5.dev146` and its `llm` figures count real calls
+  **one-for-one, with no offset to subtract**. Agents up to `0.3.5.dev131` issued a `max_tokens=1`
+  capability probe before the real work and counted it as a `chat` span, so ***their* gsm8k `llm=2`
+  means one real call** — subtract one per task before comparing an older number with these. As of
+  `0.3.5.dev145` the probe is *replaced* by an unbilled `GET /v1/models` reachability check that emits
+  no `chat` span, verified absent across all **1,895 `chat` spans** of this v1.28 pair (1,122
+  OpenShift + 773 KinD, all four model classes): not one carries `request_max_tokens = 1`. (That
+  replacement had a sharp edge of its own — it ran per task with a hard 10 s cap and no retry, and on
+  a high-latency gateway it failed tasks outright, killing 12 of 141 KinD tasks on `dev145`. Fixed in
+  `dev146`, which these runs used, and both matrices record **zero** probe failures. See Bug 3 in
+  `docs/exgentic-agent-bug-report-20260901.md`.) The practical trap: **do not compare `llm` counts
+  across runs that straddle the change** — a leg will look like it made one fewer call per task when
+  only the instrumentation changed.
 - **Input tokens grow faster than output.** Every LLM call re-sends the whole conversation, so
   cumulative input scales roughly with the square of the turn count while output is bounded per
   call. That is why tau2/appworld input *totals* dwarf output.
-- **But output is usually the more *variable* direction** — measured at OUT CV > IN CV in **27 of 33
-  legs**. This corrects an earlier claim here that input variance is always wider; it is not. On
-  single-turn gsm8k the prompt is near-constant (IN CV 0.06–0.09) while answer length swings with
-  how much the model reasons (OUT CV 0.4–1.0), so output varies ~8× more in relative terms. Only
-  long-horizon **appworld** inverts it (IN CV 0.30–0.93, above OUT), because its tasks differ
-  enormously in turn count and compounding context then dominates. Don't assume a direction —
-  check the CV columns.
+- **But output is usually the more *variable* direction** — OUT CV > IN CV in **15 of the 22 v1.28
+  legs that ran more than one task**. This corrects an earlier claim here that input variance is
+  always wider; it is not. On single-turn gsm8k the prompt is near-constant (IN CV 0.06–0.10 on the
+  gpt-5-mini legs) while answer length swings with how much the model reasons (OUT CV 0.49–0.86), so
+  output varies ~8× more in relative terms. Only long-horizon **appworld** inverts it in every leg
+  (IN CV 0.15–0.69 against OUT CV 0.13–0.52), because its tasks differ enormously in turn count and
+  compounding context then dominates. Don't assume a direction — check the CV columns.
 - **Task selection is deterministic.** A run takes the first `max_tasks` tasks, so the same
   `task_id` is the same task across runs and clusters, and a smaller run's tasks are a prefix of a
   larger one's. Cross-run comparisons on the same benchmark are therefore like-for-like.
