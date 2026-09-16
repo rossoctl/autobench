@@ -352,6 +352,11 @@ def main():
         s = by_n[n]
         log(f"=== Run #{n}: {s['title'][:70]}")
         slept = wait_out_cache(s, last_finish)
+        # Refresh AFTER the cache gap, not only after the previous leg: a 900s sleep in front of a
+        # half-hour leg outlives a 30-minute access token, and the poll loop would then 401 mid-leg
+        # and take the leg down with it.
+        tok = token()
+        H["Authorization"] = f"Bearer {tok}"
         try:
             rec = execute(s, H)
         except Exception as e:  # never let one run abort the set
@@ -363,9 +368,6 @@ def main():
             rec["cache_gap_slept_seconds"] = round(slept, 1)
         last_finish[cache_group(s)] = time.time()
         out.append(rec)
-        # refresh the token: the full set outlives a 30-minute access token
-        tok = token()
-        H["Authorization"] = f"Bearer {tok}"
         json.dump({"label": LABEL, "base": BASE, "order": order,
                    "cache_gap_seconds": CACHE_GAP, "runs": out},
                   open(MIRROR / f"run12-{LABEL}.json", "w"), indent=2)

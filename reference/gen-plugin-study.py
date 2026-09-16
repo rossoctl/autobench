@@ -73,7 +73,11 @@ data = json.loads(SRC.read_text())
 spec = json.loads(SPEC.read_text())
 runs = {r["n"]: r for r in data["runs"]}
 legs = {s["n"]: s for s in spec["legs"]}
-ORDER = [n for n in spec["order"] if n in runs]
+# The driver records the order it ACTUALLY executed, which `BM_ORDER` can override (the cache-gap
+# runs interleave the tau2 legs so they absorb the gsm8k rest periods). Prefer it: `POS` feeds the
+# crossover-balance table and every drift-vs-position argument, and the spec's order would silently
+# mis-attribute both.
+ORDER = [n for n in (data.get("order") or spec["order"]) if n in runs]
 POS = {n: i for i, n in enumerate(ORDER, 1)}
 
 judge_ts = []
@@ -299,6 +303,43 @@ L += ["",
        "**output**-token total is expected and harmless — the model is sampled, not deterministic."),
       ""]
 
+# --- gateway completion cache ----------------------------------------------
+# The second precondition for a latency comparison, and the one that silently broke the first
+# execution of this design: every gsm8k leg here sends the SAME 50 prompts to the same model, so
+# inside the gateway's ~10 min cache TTL a later leg is served the earlier leg's completions. That
+# does not merely add noise — it removes the model call from the very quantity being measured, and it
+# does so in run order, which is exactly the shape of a plugin effect.
+GAP = data.get("cache_gap_seconds") or 0
+_slept = sum(1 for r in runs.values() if (r.get("cache_gap_slept_seconds") or 0) > 0)
+_groups = sorted({r.get("cache_group") for r in runs.values() if r.get("cache_group")})
+L += ["## The gateway's completion cache is spaced out (the other precondition)", "",
+      "Every gsm8k leg in this study sends the **same 50 prompts to the same model** — that is what "
+      "makes the conditions comparable — and the LLM gateway caches completions keyed on the request "
+      "body for a **measured TTL of ~10 minutes**. Two legs run back to back therefore do not both "
+      "pay for their completions: the second is served the first's, `usage` and all. For a study "
+      "whose outcome *is* latency this is not noise, it is the measurement disappearing, and it "
+      "disappears **in run order**, which is indistinguishable from a plugin effect by shape.", "",
+      "The tell needs no statistics: the conditions are **nested**, so a leg cannot beat the leg it "
+      "is nested above. An unspaced execution of this same design put `auth-only` at 20.8 s against "
+      "a 112.6 s `baseline` run immediately before it — a proxy hop does not make a leg five times "
+      "faster. Compare the wall times below against each other in nesting order before believing any "
+      "of them, and remember the ibac judge is itself a call through the same gateway.", ""]
+if GAP >= 660:
+    L += [f"**✅ This execution was spaced.** The driver rested each prompt set for at least "
+          f"**{int(GAP)} s** before reusing it — against the ~10 min TTL, a "
+          f"{GAP / 600:.1f}x margin — across {len(_groups)} prompt "
+          f"group(s) ({', '.join(f'`{g}`' for g in _groups)}), sleeping out the remainder on "
+          f"{_slept} of {len(runs)} legs. The gap is measured from the previous leg's *finish*, which "
+          f"errs safe: a shared task set is always a prefix, so the colliding prompts were sent near "
+          f"that leg's start and are older still. **Every leg below paid for its own completions**, "
+          f"so the latency it reports is the latency of doing the work.", ""]
+else:
+    L += ["⚠️ **This execution was NOT spaced** (`cache_gap_seconds` is "
+          f"{int(GAP)}), so legs sharing prompts could have replayed each other's completions and "
+          "**the per-task latencies below are not independent measurements**. Read the condition "
+          "comparison as indicative only, and re-run with `BM_CACHE_GAP=900` before quoting a "
+          "per-task cost.", ""]
+
 # --- serial diagnostic -----------------------------------------------------
 L += ["## The decisive security question: caching, or fail-open?", ""]
 if DIAG:
@@ -392,13 +433,25 @@ for n in [x for x in GS if cond(x) == "baseline"]:
         v = [non_llm(x) for x in rr if a <= x["_rank"] and (b is None or x["_rank"] <= b)]
         cells.append(f(st.median(v) if v else None))
     L.append(f"| {n} | {legs[n]['rep']} | {warm_cutoff(n)} | " + " | ".join(cells) + " |")
+
+# The alternative cutoff, computed rather than asserted: a fixed 10 tasks mixes steady-state tasks
+# into the "warm" bucket whenever num_parallel < 10, which is the whole point.
+_wave, _fixed = [], []
+for n in [x for x in GS if cond(x) == "baseline"]:
+    rr = ok(ranked(n))
+    for cut, acc in ((warm_cutoff(n), _wave), (10, _fixed)):
+        a = [non_llm(x) for x in rr if x["_rank"] <= cut]
+        b = [non_llm(x) for x in rr if x["_rank"] > cut]
+        acc.append((st.median(a) / st.median(b)) if a and b and st.median(b) else None)
+_r = lambda xs: ", ".join(f"{x:.2f}x" if x else "n/a" for x in xs)
 L += ["",
       "The cost drops to steady state **after the first bucket** and stays there — the transient is "
       "one wave of `max_parallel_sessions` tasks, all of which start before any connection is warm. "
-      "Splitting at the wave gives a reproducible ratio; splitting at a fixed 10 tasks buries it by "
-      "mixing six steady-state tasks into the warm bucket, and on one leg even inverts its sign "
-      "(0.72x). **The cutoff below is therefore derived per leg from the artifacts' own "
-      "`num_parallel`, not fixed.**", "",
+      "The choice of cutoff is not cosmetic. On the baseline legs above, splitting at the wave gives "
+      f"{_r(_wave)}; splitting at a fixed 10 tasks gives {_r(_fixed)} — the fixed cutoff buries the "
+      "effect by mixing steady-state tasks into the 'warm' bucket, and can drive the ratio below 1, "
+      "reporting warm-up as a *speed-up*. **The cutoff below is therefore derived per leg from the "
+      "artifacts' own `num_parallel`, not fixed.**", "",
       "### Warm-up vs steady state, per leg", "",
       "| # | condition | rep | cutoff | first wave (med) | steady (med) | steady n | ratio |",
       "|---|---|---:|---:|---:|---:|---:|---:|"]
@@ -710,6 +763,8 @@ L += ["## Confidence and limitations", "",
       "exclusion safe, and it is verified above rather than assumed.", "",
       "### Reproducing this", "",
       "```sh", f"BM_SPECS=reference/plugin_study_specs.json BM_LABEL={data.get('label')} \\",
+      f"  BM_CACHE_GAP={int(GAP) or 900} "
+      f"BM_ORDER={','.join(str(n) for n in ORDER)} \\",
       "  python3 reference/run-12.py        # detached; see feedback_long_runs_detach_and_adopt",
       f"python3 reference/gen-plugin-study.py {SRC.name} reference/plugin_study_specs.json "
       f"{VERSION} '{PLATFORM}' out.md judge.ts", "```", ""]

@@ -1,7 +1,7 @@
 # AuthBridge plugin overhead — designed experiment (KinD — single-node local cluster)
 
-**Report generated:** 2026-09-12T20:12:29Z  
-**Service version:** `v1.27`  
+**Report generated:** 2026-09-16T03:41:59Z  
+**Service version:** `v1.28`  
 **Platform:** KinD — single-node local cluster  
 **Legs executed:** 13 of 13  
 **Judge-call evidence:** included  
@@ -12,6 +12,7 @@
 - [What this measures, and why it needed its own runs](#what-this-measures-and-why-it-needed-its-own-runs)
 - [Run order was balanced by design (the crossover)](#run-order-was-balanced-by-design-the-crossover)
 - [The comparison is like-for-like (identical work)](#the-comparison-is-like-for-like-identical-work)
+- [The gateway's completion cache is spaced out (the other precondition)](#the-gateways-completion-cache-is-spaced-out-the-other-precondition)
 - [The decisive security question: caching, or fail-open?](#the-decisive-security-question-caching-or-fail-open)
 - [Warm-up is one concurrency wave, and must be excluded rather than averaged in](#warm-up-is-one-concurrency-wave-and-must-be-excluded-rather-than-averaged-in)
   - [The transient is the first wave, not the first N tasks](#the-transient-is-the-first-wave-not-the-first-n-tasks)
@@ -43,11 +44,11 @@ Replicate 2 runs the five conditions in **reverse** order. That makes each condi
 
 | condition | rep 1 position | rep 2 position | position sum |
 |---|---:|---:|---:|
-| baseline | 2 | 11 | 13 |
-| auth-only | 3 | 10 | 13 |
-| ibac-only | 4 | 9 | 13 |
-| full | 5 | 8 | 13 |
-| full+ibac:observe | 6 | 7 | 13 |
+| baseline | 3 | 13 | 16 |
+| auth-only | 4 | 12 | 16 |
+| ibac-only | 5 | 11 | 16 |
+| full | 6 | 10 | 16 |
+| full+ibac:observe | 7 | 9 | 16 |
 
 **Balanced** — every condition has the same position sum, so run order cannot favour any one of them.
 
@@ -57,18 +58,26 @@ If every leg did the same work, a latency difference is attributable to the plug
 
 | # | pos | condition | rep | tasks | OK | input tok | output tok | LLM calls | tool calls | p | model |
 |---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 101 | 2 | baseline | 1 | 50 | 50 | 16030 | 9560 | 101 | 51 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
-| 102 | 3 | auth-only | 1 | 50 | 50 | 16030 | 9560 | 101 | 51 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
-| 103 | 4 | ibac-only | 1 | 50 | 50 | 16030 | 9560 | 101 | 51 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
-| 104 | 5 | full | 1 | 50 | 50 | 16361 | 9777 | 102 | 52 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
-| 105 | 6 | full+ibac:observe | 1 | 50 | 50 | 16015 | 8278 | 101 | 51 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
-| 106 | 7 | full+ibac:observe | 2 | 50 | 50 | 16015 | 8278 | 101 | 51 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
-| 107 | 8 | full | 2 | 50 | 50 | 15684 | 8575 | 100 | 50 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
-| 108 | 9 | ibac-only | 2 | 50 | 50 | 15684 | 9151 | 100 | 50 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
-| 109 | 10 | auth-only | 2 | 50 | 50 | 15684 | 9151 | 100 | 50 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
-| 110 | 11 | baseline | 2 | 50 | 50 | 15684 | 8319 | 100 | 50 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
+| 101 | 3 | baseline | 1 | 50 | 50 | 15684 | 8654 | 50 | 50 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
+| 102 | 4 | auth-only | 1 | 50 | 50 | 15684 | 8462 | 50 | 50 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
+| 103 | 5 | ibac-only | 1 | 50 | 48 | 15422 | 9027 | 49 | 49 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
+| 104 | 6 | full | 1 | 50 | 50 | 15684 | 8398 | 50 | 50 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
+| 105 | 7 | full+ibac:observe | 1 | 50 | 50 | 15684 | 9678 | 50 | 50 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
+| 106 | 9 | full+ibac:observe | 2 | 50 | 50 | 15684 | 8526 | 50 | 50 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
+| 107 | 10 | full | 2 | 50 | 50 | 15684 | 9102 | 50 | 50 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
+| 108 | 11 | ibac-only | 2 | 50 | 50 | 15684 | 7950 | 50 | 50 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
+| 109 | 12 | auth-only | 2 | 50 | 50 | 16016 | 9510 | 51 | 51 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
+| 110 | 13 | baseline | 2 | 50 | 50 | 16010 | 9123 | 51 | 51 | 4 | `openai/Azure/gpt-5-mini-2025-08-07` |
 
 ⚠️ **The legs did not do byte-identical work.** Input-token totals are the sensitive signature; where they differ, the corresponding latency delta is confounded by workload and the per-condition figures below should be read as indicative only. Note that a differing **output**-token total is expected and harmless — the model is sampled, not deterministic.
+
+## The gateway's completion cache is spaced out (the other precondition)
+
+Every gsm8k leg in this study sends the **same 50 prompts to the same model** — that is what makes the conditions comparable — and the LLM gateway caches completions keyed on the request body for a **measured TTL of ~10 minutes**. Two legs run back to back therefore do not both pay for their completions: the second is served the first's, `usage` and all. For a study whose outcome *is* latency this is not noise, it is the measurement disappearing, and it disappears **in run order**, which is indistinguishable from a plugin effect by shape.
+
+The tell needs no statistics: the conditions are **nested**, so a leg cannot beat the leg it is nested above. An unspaced execution of this same design put `auth-only` at 20.8 s against a 112.6 s `baseline` run immediately before it — a proxy hop does not make a leg five times faster. Compare the wall times below against each other in nesting order before believing any of them, and remember the ibac judge is itself a call through the same gateway.
+
+**✅ This execution was spaced.** The driver rested each prompt set for at least **900 s** before reusing it — against the ~10 min TTL, a 1.5x margin — across 2 prompt group(s) (`gsm8k:default`, `tau2:default`), sleeping out the remainder on 8 of 13 legs. The gap is measured from the previous leg's *finish*, which errs safe: a shared task set is always a prefix, so the colliding prompts were sent near that leg's start and are older still. **Every leg below paid for its own completions**, so the latency it reports is the latency of doing the work.
 
 ## The decisive security question: caching, or fail-open?
 
@@ -107,25 +116,25 @@ This matters more than it sounds, because it determines what to exclude. Median 
 
 | # | rep | p | rank 1–4 | rank 5–8 | rank 9–12 | rank 13–50 |
 |---|---:|---:|---:|---:|---:|---:|
-| 101 | 1 | 4 | 0.271 | 0.109 | 0.125 | 0.135 |
-| 110 | 2 | 4 | 0.301 | 0.114 | 0.115 | 0.109 |
+| 101 | 1 | 4 | 0.808 | 0.101 | 0.130 | 0.093 |
+| 110 | 2 | 4 | 2.239 | 0.099 | 0.109 | 0.101 |
 
-The cost drops to steady state **after the first bucket** and stays there — the transient is one wave of `max_parallel_sessions` tasks, all of which start before any connection is warm. Splitting at the wave gives a reproducible ratio; splitting at a fixed 10 tasks buries it by mixing six steady-state tasks into the warm bucket, and on one leg even inverts its sign (0.72x). **The cutoff below is therefore derived per leg from the artifacts' own `num_parallel`, not fixed.**
+The cost drops to steady state **after the first bucket** and stays there — the transient is one wave of `max_parallel_sessions` tasks, all of which start before any connection is warm. The choice of cutoff is not cosmetic. On the baseline legs above, splitting at the wave gives 8.38x, 22.55x; splitting at a fixed 10 tasks gives 1.52x, 0.94x — the fixed cutoff buries the effect by mixing steady-state tasks into the 'warm' bucket, and can drive the ratio below 1, reporting warm-up as a *speed-up*. **The cutoff below is therefore derived per leg from the artifacts' own `num_parallel`, not fixed.**
 
 ### Warm-up vs steady state, per leg
 
 | # | condition | rep | cutoff | first wave (med) | steady (med) | steady n | ratio |
 |---|---|---:|---:|---:|---:|---:|---:|
-| 101 | baseline | 1 | 4 | 0.271 | 0.125 | 46 | 2.17x |
-| 102 | auth-only | 1 | 4 | 0.527 | 0.192 | 46 | 2.75x |
-| 103 | ibac-only | 1 | 4 | 2.436 | 2.014 | 46 | 1.21x |
-| 104 | full | 1 | 4 | 2.097 | 2.107 | 46 | 1.00x |
-| 105 | full+ibac:observe | 1 | 4 | 2.911 | 1.785 | 46 | 1.63x |
-| 106 | full+ibac:observe | 2 | 4 | 4.775 | 2.338 | 46 | 2.04x |
-| 107 | full | 2 | 4 | 2.864 | 2.036 | 46 | 1.41x |
-| 108 | ibac-only | 2 | 4 | 3.942 | 2.149 | 46 | 1.83x |
-| 109 | auth-only | 2 | 4 | 0.390 | 0.201 | 46 | 1.94x |
-| 110 | baseline | 2 | 4 | 0.301 | 0.110 | 46 | 2.73x |
+| 101 | baseline | 1 | 4 | 0.808 | 0.096 | 46 | 8.38x |
+| 102 | auth-only | 1 | 4 | 3.879 | 0.132 | 46 | 29.40x |
+| 103 | ibac-only | 1 | 4 | 6.615 | 1.555 | 45 | 4.25x |
+| 104 | full | 1 | 4 | 3.198 | 1.853 | 46 | 1.73x |
+| 105 | full+ibac:observe | 1 | 4 | 2.094 | 1.767 | 46 | 1.19x |
+| 106 | full+ibac:observe | 2 | 4 | 1.902 | 1.922 | 46 | 0.99x |
+| 107 | full | 2 | 4 | 2.182 | 1.676 | 46 | 1.30x |
+| 108 | ibac-only | 2 | 4 | 6.518 | 1.830 | 46 | 3.56x |
+| 109 | auth-only | 2 | 4 | 5.788 | 0.171 | 46 | 33.85x |
+| 110 | baseline | 2 | 4 | 2.239 | 0.099 | 46 | 22.55x |
 
 Ratios above 1 are the transient. The **baseline** legs have no sidecar, so whatever ratio they show is a property of the deployment; a preset leg's ratio is only evidence about AuthBridge to the extent that it *exceeds* the baseline's. This is the specific reason a 'fixed per-task plugin cost' derived from a 5-task leg is not a plugin cost at all — at `p=4`, four of those five tasks *are* the transient.
 
@@ -137,11 +146,11 @@ Replicates pooled. A bare median invites over-reading; the interval is what says
 
 | condition | n | median non-LLM s | 90% CI | vs baseline (Δ median) | Δ CI | perm p |
 |---|---:|---:|---|---:|---|---:|
-| **baseline** | 92 | 0.117 | [0.109, 0.125] | — | — | — |
-| auth-only | 92 | 0.196 | [0.174, 0.208] | +0.079 | [+0.056, +0.096] | 0.0000 |
-| ibac-only | 92 | 2.107 | [1.730, 2.295] | +1.991 | [+1.618, +2.175] | 0.0000 |
-| full | 92 | 2.058 | [1.944, 2.256] | +1.941 | [+1.828, +2.134] | 0.0000 |
-| full+ibac:observe | 92 | 1.999 | [1.779, 2.284] | +1.882 | [+1.661, +2.160] | 0.0000 |
+| **baseline** | 92 | 0.099 | [0.096, 0.103] | — | — | — |
+| auth-only | 92 | 0.152 | [0.137, 0.172] | +0.053 | [+0.037, +0.073] | 0.0000 |
+| ibac-only | 91 | 1.688 | [1.643, 1.903] | +1.589 | [+1.543, +1.803] | 0.0000 |
+| full | 92 | 1.824 | [1.676, 1.930] | +1.725 | [+1.578, +1.831] | 0.0000 |
+| full+ibac:observe | 92 | 1.826 | [1.744, 1.970] | +1.727 | [+1.645, +1.875] | 0.0000 |
 
 A Δ CI that straddles zero means **no difference was resolved** at this n — which, unlike the n=5 case, is now a meaningful statement rather than a limit of the instrument. With 92 baseline samples the tests are comparisons of medians by permutation, so they make no normality assumption. Note that this table is 4 simultaneous tests against one baseline, so the Bonferroni-corrected threshold is 0.0125 rather than 0.05.
 
@@ -151,10 +160,10 @@ The conditions nest: `baseline` ⊂ `auth-only` ⊂ ... The interesting quantity
 
 | step | Δ median s | Δ CI | perm p | resolved? |
 |---|---:|---|---:|---|
-| baseline → auth-only | +0.079 | [+0.056, +0.096] | 0.0000 | **yes** |
-| auth-only → ibac-only | +1.912 | [+1.543, +2.098] | 0.0000 | **yes** |
-| ibac-only → full | -0.049 | [-0.270, +0.364] | 0.7845 | no — CI straddles 0 |
-| full → full+ibac:observe | -0.059 | [-0.338, +0.227] | 0.5579 | no — CI straddles 0 |
+| baseline → auth-only | +0.053 | [+0.037, +0.073] | 0.0000 | **yes** |
+| auth-only → ibac-only | +1.536 | [+1.487, +1.743] | 0.0000 | **yes** |
+| ibac-only → full | +0.136 | [-0.109, +0.255] | 0.3719 | no — CI straddles 0 |
+| full → full+ibac:observe | +0.002 | [-0.135, +0.207] | 0.9781 | no — CI straddles 0 |
 
 ### The unit of replication is the deploy, not the task
 
@@ -162,20 +171,22 @@ The intervals above treat each task as an independent replicate of its condition
 
 | condition | rep 1 leg median | rep 2 leg median | \|Δ\| between deploys |
 |---|---:|---:|---:|
-| baseline | 0.125 | 0.110 | **0.015** |
-| auth-only | 0.192 | 0.201 | **0.009** |
-| ibac-only | 2.014 | 2.149 | **0.135** |
-| full | 2.107 | 2.036 | **0.071** |
-| full+ibac:observe | 1.785 | 2.338 | **0.553** |
+| baseline | 0.096 | 0.099 | **0.003** |
+| auth-only | 0.132 | 0.171 | **0.039** |
+| ibac-only | 1.555 | 1.830 | **0.274** |
+| full | 1.853 | 1.676 | **0.176** |
+| full+ibac:observe | 1.767 | 1.922 | **0.155** |
 
-Median \|Δ\| between two deploys of the *same* condition is **0.07 s** (max 0.55 s), implying a between-deploy SD of roughly **0.07 s**. Compare that with the marginal effects in the table above — every preset-to-preset step is *smaller than the noise between two deploys of one preset*.
+Median \|Δ\| between two deploys of the *same* condition is **0.16 s** (max 0.27 s), implying a between-deploy SD of roughly **0.16 s**. Compare that with the marginal effects in the table above — every preset-to-preset step is *smaller than the noise between two deploys of one preset*.
 
 So the correct reading of this experiment is:
 
-- **auth-only → ibac-only: +1.91 s — real.** That is 25.8x the between-deploy SD, far outside what deployment variability can manufacture.
-- **baseline → auth-only (+0.08 s); ibac-only → full (-0.05 s); full → full+ibac:observe (-0.06 s) — below the noise floor.** Not 'probably small': **unresolvable** with two deploys per condition, regardless of how many tasks each deploy runs. Adding tasks tightens the wrong interval.
+- **auth-only → ibac-only: +1.54 s — real.** That is 9.4x the between-deploy SD, far outside what deployment variability can manufacture.
+- **baseline → auth-only (+0.05 s); ibac-only → full (+0.14 s); full → full+ibac:observe (+0.00 s) — below the noise floor.** Not 'probably small': **unresolvable** with two deploys per condition, regardless of how many tasks each deploy runs. Adding tasks tightens the wrong interval.
 
-**What it would actually take.** At ~16·σ²/δ² deploys per condition for 80% power, σ=0.074 s here is small enough that the **2 deploys already run suffice** to resolve a 1 s effect. So the unresolved steps above are not under-replicated — they are genuinely smaller than 1 s. Resolving them would mean pinning down effects of ~0.1 s, which needs ~9 deploys per condition, and at that scale cluster drift over the required hours becomes the dominant error rather than deployment variability.
+**What it would actually take.** At ~16·σ²/δ² deploys per condition for 80% power, σ=0.163 s here is small enough that the **2 deploys already run suffice** to resolve a 1 s effect. So the unresolved steps above are not under-replicated — they are genuinely smaller than 1 s. Resolving them would mean pinning down effects of ~0.1 s, which needs ~42 deploys per condition, and at that scale cluster drift over the required hours becomes the dominant error rather than deployment variability.
+
+**A side finding worth recording:** the two *baseline* deploys differ by only **0.003 s**, while sidecar-injected deploys differ by 0.04–0.27 s. Deployment variability is not a background property of the cluster — it is **introduced by the sidecar**. AuthBridge costs not only latency but *reproducibility*, which matters for anyone using these benchmarks to detect regressions.
 
 ## Replicate agreement (the order-effect test)
 
@@ -183,15 +194,15 @@ Each condition ran twice, once early and once late, in reversed order. Agreement
 
 | condition | rep 1 med | rep 2 med | Δ | Δ CI | perm p |
 |---|---:|---:|---:|---|---:|
-| baseline | 0.125 | 0.110 | -0.015 | [-0.046, +0.003] | 0.1050 |
-| auth-only | 0.192 | 0.201 | +0.009 | [-0.025, +0.043] | 0.7769 |
-| ibac-only | 2.014 | 2.149 | +0.135 | [-0.569, +0.591] | 0.7650 |
-| full | 2.107 | 2.036 | -0.071 | [-0.753, +0.171] | 0.6387 |
-| full+ibac:observe | 1.785 | 2.338 | +0.553 | [+0.016, +0.892] | 0.0405 |
+| baseline | 0.096 | 0.099 | +0.003 | [-0.003, +0.022] | 0.3996 |
+| auth-only | 0.132 | 0.171 | +0.039 | [+0.001, +0.069] | 0.0635 |
+| ibac-only | 1.555 | 1.830 | +0.274 | [+0.025, +0.782] | 0.0669 |
+| full | 1.853 | 1.676 | -0.176 | [-0.294, +0.198] | 0.2310 |
+| full+ibac:observe | 1.767 | 1.922 | +0.155 | [-0.081, +0.676] | 0.2626 |
 
-⚠️ **Replicates disagree for: `full+ibac:observe`.** By the per-task test these are separate populations, so the per-task intervals in the previous section are too narrow — which is the pseudo-replication point made there, arriving here as direct evidence rather than as a caveat.
+⚠️ **Replicates disagree for: `auth-only`, `ibac-only`.** By the per-task test these are separate populations, so the per-task intervals in the previous section are too narrow — which is the pseudo-replication point made there, arriving here as direct evidence rather than as a caveat.
 
-**But the disagreement is not run-order drift.** The rep-2 minus rep-1 differences go in **both directions** (`baseline` -0.01 s, `auth-only` +0.01 s, `ibac-only` +0.13 s, `full` -0.07 s, `full+ibac:observe` +0.55 s), and a monotone session effect — gateway warm-up, cache fill, node contention — would have to push every condition the same way, since replicate 2 ran entirely later than replicate 1. A non-monotone pattern instead points at **deploy-to-deploy variability**: each leg is a fresh deployment, and that is the nuisance variable, not elapsed time.
+**But the disagreement is not run-order drift.** The rep-2 minus rep-1 differences go in **both directions** (`baseline` +0.00 s, `auth-only` +0.04 s, `ibac-only` +0.27 s, `full` -0.18 s, `full+ibac:observe` +0.16 s), and a monotone session effect — gateway warm-up, cache fill, node contention — would have to push every condition the same way, since replicate 2 ran entirely later than replicate 1. A non-monotone pattern instead points at **deploy-to-deploy variability**: each leg is a fresh deployment, and that is the nuisance variable, not elapsed time.
 
 This is a more useful conclusion than 'order matters', and it is only available because the reversal was built in: run order was **balanced by design** (equal position sums above), so it cannot be what produced a two-directional pattern.
 
@@ -201,16 +212,16 @@ The IBAC judge is itself an LLM call, so judge latency inherits inference varian
 
 | # | pos | condition | rep | tool calls | judge calls | judged / call |
 |---|---:|---|---:|---:|---:|---:|
-| 101 | 2 | baseline | 1 | 51 | 0 | 0.00 |
-| 102 | 3 | auth-only | 1 | 51 | 0 | 0.00 |
-| 103 | 4 | ibac-only | 1 | 51 | 51 | 1.00 |
-| 104 | 5 | full | 1 | 52 | 51 | 0.98 |
-| 105 | 6 | full+ibac:observe | 1 | 51 | 48 | 0.94 |
-| 106 | 7 | full+ibac:observe | 2 | 51 | 48 | 0.94 |
-| 107 | 8 | full | 2 | 50 | 50 | 1.00 |
-| 108 | 9 | ibac-only | 2 | 50 | 47 | 0.94 |
-| 109 | 10 | auth-only | 2 | 50 | 0 | 0.00 |
-| 110 | 11 | baseline | 2 | 50 | 0 | 0.00 |
+| 101 | 3 | baseline | 1 | 50 | 0 | 0.00 |
+| 102 | 4 | auth-only | 1 | 50 | 0 | 0.00 |
+| 103 | 5 | ibac-only | 1 | 49 | 47 | 0.96 |
+| 104 | 6 | full | 1 | 50 | 48 | 0.96 |
+| 105 | 7 | full+ibac:observe | 1 | 50 | 47 | 0.94 |
+| 106 | 9 | full+ibac:observe | 2 | 50 | 49 | 0.98 |
+| 107 | 10 | full | 2 | 50 | 48 | 0.96 |
+| 108 | 11 | ibac-only | 2 | 50 | 47 | 0.94 |
+| 109 | 12 | auth-only | 2 | 51 | 0 | 0.00 |
+| 110 | 13 | baseline | 2 | 51 | 0 | 0.00 |
 
 A ratio near 0 is a preset that does not engage IBAC (correct for `auth-only`); near 1 is full enforcement. **Intermediate ratios are the finding**, and the serial diagnostic above is what interprets them.
 
@@ -222,14 +233,14 @@ There is a tempting shortcut for pricing a plugin on an expensive benchmark with
 
 | leg | condition | tasks OK | tool calls/task | non-LLM s/task (med) | per tool call (s) |
 |---|---|---:|---:|---:|---:|
-| #112 | baseline | 10 | 11.0 | 22.29 | 2.026 |
-| #113 | full+ibac:observe | 10 | 11.0 | 69.08 | 6.280 |
+| #112 | baseline | 10 | 11.5 | 25.38 | 2.207 |
+| #113 | full+ibac:observe | 10 | 12.0 | 76.94 | 6.412 |
 
-**Measured on tau2:** `full+ibac:observe` adds **+46.79 s/task**, i.e. **+4.254 s per tool call**.
+**Measured on tau2:** `full+ibac:observe` adds **+51.56 s/task**, i.e. **+4.204 s per tool call**.
 
-**Projected from gsm8k** by that shortcut: the same condition costs +1.882 s/task on gsm8k over ~1 tool call, which scaled by tau2's 11.0 tool calls/task predicts **+20.71 s/task**.
+**Projected from gsm8k** by that shortcut: the same condition costs +1.727 s/task on gsm8k over ~1 tool call, which scaled by tau2's 12.0 tool calls/task predicts **+20.73 s/task**.
 
-**Measured / projected = 2.26x.**
+**Measured / projected = 2.49x.**
 
 **The shortcut does not hold, so do not price a benchmark this way.** Per-call cost is not a constant across benchmarks: whatever drives the difference (session reuse, connection amortisation, cache behaviour across many calls in one session) is not captured by a per-call constant. Measure the benchmark instead — it costs two legs.
 
@@ -252,7 +263,8 @@ What it still does **not** support:
 ### Reproducing this
 
 ```sh
-BM_SPECS=reference/plugin_study_specs.json BM_LABEL=pstudy-kind \
+BM_SPECS=reference/plugin_study_specs.json BM_LABEL=pstudy-kind-v128 \
+  BM_CACHE_GAP=900 BM_ORDER=111,112,101,102,103,104,105,113,106,107,108,109,110 \
   python3 reference/run-12.py        # detached; see feedback_long_runs_detach_and_adopt
-python3 reference/gen-plugin-study.py run12-pstudy-kind.json reference/plugin_study_specs.json v1.27 'KinD — single-node local cluster' out.md judge.ts
+python3 reference/gen-plugin-study.py run12-pstudy-kind-v128.json reference/plugin_study_specs.json v1.28 'KinD — single-node local cluster' out.md judge.ts
 ```

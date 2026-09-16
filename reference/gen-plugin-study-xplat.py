@@ -104,7 +104,8 @@ def load(pl):
             "par": par, "run_id": r.get("run_id"),
             "wall": (r.get("summary") or {}).get("wall_seconds"),
         }
-    return {"legs": out, "judge": ts, "base": d.get("base"), "label": pl["label"]}
+    return {"legs": out, "judge": ts, "base": d.get("base"), "label": pl["label"],
+            "cache_gap": d.get("cache_gap_seconds") or 0}
 
 
 def judged(P, n):
@@ -146,7 +147,19 @@ L = [f"# AuthBridge plugin overhead — {A['label']} vs {B['label']}", "",
      f"**Service version:** `{VERSION}`  ",
      f"**Experiment:** `{SPEC.name}` — {len(ORDER)} legs, identical specs on both platforms  ",
      f"**Companion reports:** the per-platform analyses, which carry the intervals and the "
-     f"design rationale this document does not repeat.", "", "<!--TOC-->", ""]
+     f"design rationale this document does not repeat.", "",
+     # Both sides must have rested their prompt sets past the gateway's ~10 min completion-cache TTL,
+     # or a latency comparison is comparing one platform's cache-hit rate with the other's.
+     (f"**Gateway completion cache:** both platforms rested each prompt set for "
+      f"**{int(A['cache_gap'])} s** between legs sharing it, against a measured TTL of ~10 min — so "
+      f"every leg on both sides paid for its own completions."
+      if A["cache_gap"] >= 660 and A["cache_gap"] == B["cache_gap"] else
+      f"⚠️ **Gateway completion cache:** the two runs used different or absent spacing "
+      f"({A['label']} {int(A['cache_gap'])} s, {B['label']} {int(B['cache_gap'])} s). Legs sharing "
+      f"prompts can replay each other's completions inside a ~10 min TTL, so a cross-platform "
+      f"latency comparison here is partly comparing cache-hit rates. Re-run both with "
+      f"`BM_CACHE_GAP=900` before quoting per-task costs."),
+     "", "<!--TOC-->", ""]
 
 # --- why -------------------------------------------------------------------
 L += ["## Why compare, when both reports already agree on method", "",
@@ -427,8 +440,11 @@ L += ["## What this means for how plugin cost gets quoted", "",
       "portable ones.", ""]
 
 L += ["## Reproducing this", "", "```sh",
-      "# one platform at a time -- they front the same LLM gateways, so parallel runs contend",
+      "# one platform at a time -- separate gateways, but the SAME upstream model providers behind",
+      "# both, so parallel runs contend and the latency numbers stop meaning anything",
       "BM_SPECS=reference/plugin_study_specs.json BM_LABEL=pstudy-<platform> \\",
+      f"  BM_CACHE_GAP={int(A['cache_gap']) or 900} "
+      "BM_ORDER=111,112,101,102,103,104,105,113,106,107,108,109,110 \\",
       "  python3 reference/run-12.py          # detached; see feedback_long_runs_detach_and_adopt",
       "python3 reference/gen-plugin-study-xplat.py reference/plugin_study_specs.json "
       f"{VERSION} {OUT.name} \\", ]

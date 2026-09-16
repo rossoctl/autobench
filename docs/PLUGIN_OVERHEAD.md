@@ -12,6 +12,7 @@ the reason why is the most useful thing we learned. If you want the raw reports 
 - [The vocabulary first](#the-vocabulary-first)
   - [One piece of syntax that reads backwards](#one-piece-of-syntax-that-reads-backwards)
 - [The headline: the two clusters disagree about which layer costs anything](#the-headline-the-two-clusters-disagree-about-which-layer-costs-anything)
+  - [One precondition that is easy to skip and invalidates everything](#one-precondition-that-is-easy-to-skip-and-invalidates-everything)
   - [It is not a timeout — we checked](#it-is-not-a-timeout--we-checked)
 - [What does travel between clusters](#what-does-travel-between-clusters)
 - [Two traps in reading any of our latency numbers](#two-traps-in-reading-any-of-our-latency-numbers)
@@ -66,10 +67,11 @@ in the same deterministic order, the same model. Steady-state non-LLM time per t
 
 | condition | OpenShift median | KinD median | OpenShift step | KinD step |
 |---|---:|---:|---:|---:|
-| `baseline` | 0.649 s | 0.117 s | — | — |
-| `auth-only` | 12.424 s | 0.196 s | **+11.77** | +0.08 |
-| `ibac-only` | 13.310 s | 2.107 s | +0.89 | **+1.91** |
-| `full` | 15.235 s | 2.058 s | +1.92 | −0.05 |
+| `baseline` | 0.423 s | 0.099 s | — | — |
+| `auth-only` | 14.101 s | 0.152 s | **+13.68** | +0.05 |
+| `ibac-only` | 14.148 s | 1.688 s | +0.05 | **+1.54** |
+| `full` | 14.446 s | 1.824 s | +0.30 | +0.14 |
+| `full+ibac:observe` | 14.598 s | 1.826 s | +0.15 | +0.00 |
 
 Read the two right-hand columns against each other. On OpenShift the entire expense appears at
 `auth-only` — that is, at the *sidecar's mere presence* — and the judge is lost in the noise. On KinD
@@ -77,8 +79,31 @@ the sidecar is nearly free and the judge is the whole expense.
 
 **Both readings are correct about their own cluster.** Someone who read only the OpenShift report
 would tell you the judge is cheap and the proxy hop is what hurts; someone who read only the KinD
-report would tell you the exact opposite. The same condition on the same image differs by 6–64x
+report would tell you the exact opposite. The same condition on the same image differs by 4–93x
 between the two.
+
+### One precondition that is easy to skip and invalidates everything
+
+Every gsm8k leg in this design sends the *same* 50 prompts to the same model — that is what makes the
+conditions comparable — and the LLM gateway caches completions keyed on the request body for a
+measured TTL of about ten minutes. Run the legs back to back and the later ones are served the
+earlier ones' completions. For a study whose outcome *is* latency, that is not noise; it is the
+measurement disappearing, and it disappears **in run order**, which is the same shape as a plugin
+effect.
+
+The first execution of this design had exactly that defect, and the tell needed no statistics: the
+conditions are nested, so a leg cannot beat the leg it is nested above, yet KinD's `auth-only` came
+in at 20.8 s against a 112.6 s `baseline` run minutes earlier. A proxy hop does not make a leg five
+times faster. Its per-layer numbers were withdrawn rather than corrected.
+
+Spacing the legs (`BM_CACHE_GAP=900`, see [Reproducing](#reproducing)) fixed it, and the repair was
+worth more than the numbers it corrected. The between-deploy noise floor on OpenShift fell from
+1.57 s to **0.23 s** — an eightfold tightening, because deploy-to-deploy "variability" had partly
+been cache state. The OpenShift sidecar's cost came out *larger* than before (+13.68 s against
++11.77 s), since replays had been deflating the very condition they made look cheap. And one
+incidental artifact vanished: identical token totals across legs, which had looked like reassuring
+determinism, were partly replayed `usage`. The spaced legs show a few percent of genuine sampling
+variance instead, which is what a sampled model should show.
 
 So: **never quote an absolute per-task plugin figure without naming the cluster it came from.** That
 is the practical rule, and it is the one thing from this study most likely to save you from a wrong
@@ -86,12 +111,18 @@ decision.
 
 ### It is not a timeout — we checked
 
-A ~12 s per-task cost on one cluster and ~0.1 s on the other invites an obvious guess: a timeout or
+A ~14 s per-task cost on one cluster and ~0.1 s on the other invites an obvious guess: a timeout or
 a failing retry in the sidecar's egress path. A timeout leaves a signature — values piled on a round
-number with a small spread. OpenShift's `auth-only` distribution runs 4.45–20.44 s with an SD of
-3.57 s, broad and unimodal with nothing on a round number. That is contention and queueing. The
+number with a small spread. OpenShift's `auth-only` distribution runs 8.05–17.93 s with an SD of
+1.92 s, broad and unimodal with nothing on a round number. That is contention and queueing. The
 timeout hypothesis is dead, and the thing to investigate on a busy cluster is *why the intercepted
 path is slow and jittery there*, which is a different question.
+
+The quiet cluster deserves more than a reassuring one-liner, because its variance moves to a
+different layer. KinD's `auth-only` is genuinely tight (SD 0.07 s), but its `full` distribution is
+not: median 1.82 s against a **14.00 s** maximum, SD 2.50 s. That right tail is the judge — an LLM
+call, inheriting inference variance. So on a busy cluster the judge's variability is buried under
+contention, and on a quiet one it *is* the spread.
 
 Note also that on both clusters the spread grows with the median. **Enabling the sidecar costs
 reproducibility, not only latency** — which matters if you are using these benchmarks to detect
@@ -103,10 +134,10 @@ The magnitudes did not reproduce. The structure did, and the structural findings
 consequences.
 
 **Every serial tool call is authorized.** With `max_parallel_sessions=1`, no two calls can race for
-one cache entry. OpenShift: 10 tasks attempted, 9 OK, 9 serial tool calls, 10 judge calls. KinD:
-10/10/10/10. A judge cache with a time-to-live would have collapsed ten same-shape serial calls to
-roughly one judge call on *either* cluster; it did not, twice, independently. **TTL decision caching
-is ruled out.**
+one cache entry. Both clusters returned 10 tasks attempted, 10 serial tool calls, 10 judge calls — a
+ratio of exactly 1.00 each. A judge cache with a time-to-live would have collapsed ten same-shape
+serial calls to roughly one judge call on *either* cluster; it did not, twice, independently.
+**TTL decision caching is ruled out.**
 
 That leaves an open item worth naming, because it has a security consequence. At `p=4` the judge
 count falls slightly short of the tool count. Two mechanisms explain that equally well — benign
@@ -114,7 +145,7 @@ single-flight deduplication, or fail-open under race — and they produce *ident
 Distinguishing them is a code-reading task, not a measurement task. It is the one thing this study
 could not settle.
 
-**The judged-call ratio is ~1.** For every IBAC preset it lands at 0.94–1.00 on both clusters; for
+**The judged-call ratio is ~1.** For every IBAC preset it lands at 0.90–0.98 on both clusters; for
 `baseline` and `auth-only` it is exactly 0.00, which is correct and also confirms nothing else is
 consulting the judge. This is worth knowing because the ratio looks alarming on small runs: a 5-task
 leg can easily show "3 of 5 calls authorized," which invites the conclusion that the judge is being
@@ -127,12 +158,17 @@ makes ~11 tool calls per task against gsm8k's ~1, so it tests the assumption dir
 
 | cluster | tau2 measured Δ/task | projected from gsm8k | measured/projected |
 |---|---:|---:|---:|
-| OpenShift | +70.8 s | 155.0 s | 0.46x |
-| KinD | +46.8 s | 20.7 s | 2.26x |
+| OpenShift | +48.4 s | 155.9 s | 0.31x |
+| KinD | +51.6 s | 20.7 s | 2.49x |
 
 The shortcut is not merely imprecise — it is **wrong in opposite directions on the two clusters**,
 which rules out fixing it with a correction factor. Per-call cost is not the constant the arithmetic
 needs it to be. Measuring a benchmark's plugin cost directly costs two legs; do that instead.
+
+Worth noticing what *did* travel here: the two clusters measure tau2's plugin cost within 7% of each
+other (+48.4 s and +51.6 s per task) while their gsm8k costs differ by 8x. So the disagreement is not
+a blanket "these clusters are incomparable" — it is specific to where the cost lands, and a
+tool-call-heavy benchmark washes it out.
 
 ## Two traps in reading any of our latency numbers
 
@@ -140,11 +176,12 @@ These generalize past the plugin question, and they are the reason the designed 
 
 ### Warm-up is one concurrency wave, not "the first few tasks"
 
-Across three *no-sidecar* baseline legs, splitting the tasks at the first concurrency wave (the first
-`num_parallel` tasks) gives a consistent warm-up penalty of 2.03x, 2.17x and 2.24x. Splitting at a
-fixed cutoff of 10 tasks gives 1.09x, 1.40x and **0.72x** — the sign inverts. The wave is the real
-boundary; a fixed task count is not, and our analyzers now derive the cutoff per leg from the
-artifacts.
+Across the *no-sidecar* baseline legs, splitting the tasks at the first concurrency wave (the first
+`num_parallel` tasks) gives a consistent warm-up penalty — 2.46x and 2.05x on OpenShift. Splitting at
+a fixed cutoff of 10 tasks gives 1.18x and 1.22x, most of the effect buried by mixing six
+steady-state tasks into the "warm" bucket; on an earlier execution the same fixed cutoff drove one
+leg to **0.72x**, reporting warm-up as a speed-up. The wave is the real boundary; a fixed task count
+is not, and our analyzers derive the cutoff per leg from the artifacts' own `num_parallel`.
 
 The consequence for small runs is severe. At `p=4`, a 5-task leg spends *four of its five tasks*
 inside the warm-up transient. A per-task average from such a leg is mostly measuring startup.
@@ -153,29 +190,34 @@ inside the warm-up transient. A per-task average from such a leg is mostly measu
 
 Every task in a leg shares one deployment. So a per-task confidence interval answers "how variable
 are tasks within this one deploy?" — not "how variable is this configuration?" The honest noise
-floor is the spread between two independent deploys of the *same* condition: **1.57 s** on OpenShift
-and **0.071 s** on KinD, typically.
+floor is the spread between two independent deploys of the *same* condition: typically **0.22 s** on
+OpenShift and **0.155 s** on KinD.
 
 On both clusters that floor **exceeds every preset-to-preset step except the single dominant layer**.
 So with two deploys per condition, a *ranking* of presets against each other is unavailable at any
 task count. Adding tasks tightens the wrong interval. If you need the ranking, add deploys: roughly
 `16 · σ² / δ²` deploys per condition for 80% power at effect size `δ`.
 
-A side observation that falls out of the same table: OpenShift's two *baseline* deploys differ by
-0.038 s, while its sidecar deploys differ by 1.5–2.6 s. The sidecar degrades deploy-to-deploy
-reproducibility by roughly an order of magnitude.
+That formula cuts the other way too, and it is the useful half. With σ ≈ 0.23 s, **the two deploys
+already run are enough to resolve a 1 s effect** — so the sub-second steps in the headline table are
+not under-replicated, they are genuinely smaller than a second. Resolving a 0.1 s step would need
+~83 deploys per condition, by which point cluster drift over the necessary hours is a larger error
+term than deployment variability. This is a stronger statement than the earlier, cache-contaminated
+execution could make: with a 1.57 s floor, "unresolved" and "small" were indistinguishable.
 
 ## Recommendations
 
 1. **Measure on the cluster whose numbers you intend to quote.** Use
    `reference/plugin_study_specs.json` unchanged so the design (nesting, crossover, n=50) is
-   preserved. Two runs, one per platform, one at a time.
+   preserved, and **space the legs past the gateway's cache** — an unspaced execution measures the
+   cache, not the plugins. Two runs, one per platform, one at a time.
 2. **Quote the structural findings freely** — serial calls are all authorized, TTL caching is ruled
    out, the judged ratio is ~1, per-call cost is not a cross-benchmark constant. These reproduced.
 3. **Never quote an absolute per-task second figure, or a claim about which layer is expensive,
    without naming the cluster.** Both are cluster-local facts.
 4. **Do not rank presets** from a two-deploy study. Say "the dominant layer is X and everything else
-   is below the noise floor," which is what the data supports.
+   is below the noise floor" — and, with the cache spaced, you can add "and below one second," which
+   is a budgeting answer rather than a shrug.
 5. **Budget from the dominant layer only.** On a contended cluster, plan for the sidecar's presence;
    on a quiet one, plan for the judge's LLM call. The other layers are rounding error either way.
 6. **If you need per-benchmark plugin cost, measure that benchmark.** Two legs.
@@ -194,19 +236,30 @@ reproducibility by roughly an order of magnitude.
 
 ## Reproducing
 
-One platform at a time — both clusters front the same LLM gateways, so parallel runs contend and the
-latency numbers stop meaning anything.
+One platform at a time. The two clusters have *separate* LiteLLM deployments — separate caches,
+separate key tables — but the **same upstream model providers sit behind both**, so parallel runs
+contend where it matters and the latency numbers stop meaning anything.
+
+`BM_CACHE_GAP` is not optional here. Every gsm8k leg in this design sends the same 50 prompts to the
+same model, so without it each leg replays the previous one's completions out of the gateway's cache
+(TTL ~10 min) — which removes the model call from the very quantity being measured, in run order, and
+mimics exactly the kind of per-condition effect the study is looking for. `BM_ORDER` interleaves the
+two tau2 legs into the gsm8k sequence so two of the gaps are absorbed by real work rather than slept.
 
 ```sh
 BM_SPECS=reference/plugin_study_specs.json BM_LABEL=pstudy-<platform> \
-  python3 reference/run-12.py        # ~1.5-2 h; detach it, see CLAUDE.md on long runs
+  BM_CACHE_GAP=900 BM_ORDER=111,112,101,102,103,104,105,113,106,107,108,109,110 \
+  python3 reference/run-12.py        # ~4 h, most of it the cache gaps; detach it (CLAUDE.md)
 
 python3 reference/gen-plugin-study.py <run.json> reference/plugin_study_specs.json \
-  v1.27 '<platform label>' out.md <judge.ts>
+  v1.28 '<platform label>' out.md <judge.ts>
 
-python3 reference/gen-plugin-study-xplat.py reference/plugin_study_specs.json v1.27 xplat.md \
+python3 reference/gen-plugin-study-xplat.py reference/plugin_study_specs.json v1.28 xplat.md \
   '<label A>' <runA.json> <judgeA.ts> -- '<label B>' <runB.json> <judgeB.ts>
 ```
+
+Both generators check the spacing themselves and print the ⚠ / ✅ verdict into the report, so an
+unspaced execution cannot be published as if it were clean.
 
 The cross-platform generator deliberately does **not** pool the two clusters into a single interval.
 Pooling would assume the platforms are interchangeable, which is precisely the assumption this study

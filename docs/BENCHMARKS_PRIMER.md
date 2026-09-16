@@ -198,17 +198,18 @@ Three more that apply specifically to the **latency** columns, all measured in t
 study ([docs/PLUGIN_OVERHEAD.md](PLUGIN_OVERHEAD.md)):
 
 - **Warm-up is exactly the first concurrency wave** — the first `num_parallel` tasks — not "the first
-  few tasks". Splitting three no-sidecar baseline legs at the wave gives a consistent 2.03/2.17/2.24×
-  penalty; splitting at a fixed 10 tasks gives 1.09/1.40/**0.72**×, inverting the sign. The
-  consequence for small runs is blunt: at `p=4`, a 5-task leg spends four of its five tasks inside
-  the transient, so its per-task average is mostly measuring startup.
+  few tasks". Splitting the no-sidecar baseline legs at the wave gives a consistent 2.46/2.05×
+  penalty; splitting at a fixed 10 tasks gives 1.18/1.22×, and on an earlier execution drove one leg
+  to **0.72×** — reporting warm-up as a speed-up. The consequence for small runs is blunt: at `p=4`, a
+  5-task leg spends four of its five tasks inside the transient, so its per-task average is mostly
+  measuring startup.
 - **The deploy is the unit of replication, not the task.** Every task in a leg shares one deployment,
   so a per-task interval answers "how variable are tasks within this deploy?" — not "how variable is
   this configuration?". The real noise floor is the spread between two independent deploys of the
   same condition, and on both clusters it exceeded every effect we were trying to resolve except the
   single dominant one. Adding tasks tightens the wrong interval; add deploys.
 - **Absolute latencies are not portable across clusters.** The same condition on the same image
-  measured 6–64× apart on our two clusters, and the two disagreed about *which* component the cost
+  measured 4–93× apart on our two clusters, and the two disagreed about *which* component the cost
   belonged to. Pass rates and token counts do travel; seconds do not. Always name the cluster.
 
 ## Picking a benchmark
