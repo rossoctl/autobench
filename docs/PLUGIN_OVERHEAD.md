@@ -91,19 +91,22 @@ earlier ones' completions. For a study whose outcome *is* latency, that is not n
 measurement disappearing, and it disappears **in run order**, which is the same shape as a plugin
 effect.
 
-The first execution of this design had exactly that defect, and the tell needed no statistics: the
-conditions are nested, so a leg cannot beat the leg it is nested above, yet KinD's `auth-only` came
-in at 20.8 s against a 112.6 s `baseline` run minutes earlier. A proxy hop does not make a leg five
-times faster. Its per-layer numbers were withdrawn rather than corrected.
+There is a cheap check for it that needs no statistics, and it is worth applying to any latency
+report of a nested design. The conditions **nest** — every non-baseline condition is baseline *plus*
+the sidecar — so no leg carrying the sidecar can be faster than a leg without one. A replayed leg
+breaks that ordering outright, because it skips work the leg it nests above actually did. Both
+per-platform reports compute the check and print the verdict rather than arguing it; on the runs
+reported here the fastest sidecar-carrying leg sits 1.4x (KinD) to 41.8x (OpenShift) above the
+fastest baseline leg, so the ordering holds.
 
-Spacing the legs (`BM_CACHE_GAP=900`, see [Reproducing](#reproducing)) fixed it, and the repair was
-worth more than the numbers it corrected. The between-deploy noise floor on OpenShift fell from
-1.57 s to **0.23 s** — an eightfold tightening, because deploy-to-deploy "variability" had partly
-been cache state. The OpenShift sidecar's cost came out *larger* than before (+13.68 s against
-+11.77 s), since replays had been deflating the very condition they made look cheap. And one
-incidental artifact vanished: identical token totals across legs, which had looked like reassuring
-determinism, were partly replayed `usage`. The spaced legs show a few percent of genuine sampling
-variance instead, which is what a sampled model should show.
+Spacing the legs (`BM_CACHE_GAP=900`, see [Reproducing](#reproducing)) is what buys that, and it is
+cheaper than it sounds: only the shortfall is slept, and interleaving the two tau2 legs into the
+gsm8k sequence lets real work absorb two of the gaps. What it buys extends past latency. The
+between-deploy noise floor on OpenShift is **0.23 s** — tight enough that this study can say the
+sub-second layers are genuinely small rather than merely unresolved, which is a budgeting answer
+instead of a shrug. And the token totals across legs differ by a few percent, which is the sampling
+variance a sampled model should show; **byte-identical totals across legs would be the warning
+sign**, since replayed `usage` is reported verbatim.
 
 So: **never quote an absolute per-task plugin figure without naming the cluster it came from.** That
 is the practical rule, and it is the one thing from this study most likely to save you from a wrong
@@ -204,8 +207,9 @@ That formula cuts the other way too, and it is the useful half. With σ ≈ 0.23
 already run are enough to resolve a 1 s effect** — so the sub-second steps in the headline table are
 not under-replicated, they are genuinely smaller than a second. Resolving a 0.1 s step would need
 ~83 deploys per condition, by which point cluster drift over the necessary hours is a larger error
-term than deployment variability. This is a stronger statement than the earlier, cache-contaminated
-execution could make: with a 1.57 s floor, "unresolved" and "small" were indistinguishable.
+term than deployment variability. Note that this conclusion depends entirely on the floor being
+tight: at a floor of a second or more, "unresolved" and "small" are indistinguishable and the honest
+report is the shrug.
 
 ## Recommendations
 

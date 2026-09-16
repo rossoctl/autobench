@@ -1,6 +1,6 @@
 # AuthBridge plugin overhead — designed experiment (OpenShift — ykt3 Service / ykt2 workloads)
 
-**Report generated:** 2026-09-16T03:58:55Z  
+**Report generated:** 2026-09-16T04:12:02Z  
 **Service version:** `v1.28`  
 **Platform:** OpenShift — ykt3 Service / ykt2 workloads  
 **Legs executed:** 13 of 13  
@@ -75,7 +75,7 @@ If every leg did the same work, a latency difference is attributable to the plug
 
 Every gsm8k leg in this study sends the **same 50 prompts to the same model** — that is what makes the conditions comparable — and the LLM gateway caches completions keyed on the request body for a **measured TTL of ~10 minutes**. Two legs run back to back therefore do not both pay for their completions: the second is served the first's, `usage` and all. For a study whose outcome *is* latency this is not noise, it is the measurement disappearing, and it disappears **in run order**, which is indistinguishable from a plugin effect by shape.
 
-The tell needs no statistics: the conditions are **nested**, so a leg cannot beat the leg it is nested above. An unspaced execution of this same design put `auth-only` at 20.8 s against a 112.6 s `baseline` run immediately before it — a proxy hop does not make a leg five times faster. Compare the wall times below against each other in nesting order before believing any of them, and remember the ibac judge is itself a call through the same gateway.
+The tell needs no statistics, and it is checked here rather than argued: the conditions are **nested** — every non-baseline condition is baseline *plus* the sidecar — so no leg carrying the sidecar can be faster than a leg without one. Replay contamination breaks that ordering outright, because a leg served from cache skips work the leg it nests above actually did. On this run the fastest `baseline` leg's steady median is **0.325 s** and the fastest sidecar-carrying leg's is **13.585 s** (41.8x above it): **no leg violates the ordering.** Still compare the wall times in nesting order before believing any of them, and remember the ibac judge is itself a call through the same gateway.
 
 **✅ This execution was spaced.** The driver rested each prompt set for at least **900 s** before reusing it — against the ~10 min TTL, a 1.5x margin — across 2 prompt group(s) (`gsm8k:default`, `tau2:default`), sleeping out the remainder on 8 of 13 legs. The gap is measured from the previous leg's *finish*, which errs safe: a shared task set is always a prefix, so the colliding prompts were sent near that leg's start and are older still. **Every leg below paid for its own completions**, so the latency it reports is the latency of doing the work.
 

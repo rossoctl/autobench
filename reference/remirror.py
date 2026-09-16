@@ -8,7 +8,7 @@ emitting "_No exported artifacts._" and "_(no trace)_" for the missing sections.
 tracked report against a pruned mirror therefore silently deletes most of its content. Run this first.
 
 Usage:
-    python3 reference/remirror.py results/baseline-v1.27/run12-ykt3-to-ykt2.json [more.json ...]
+    python3 reference/remirror.py results/v1.28-dev146/run12-ocp-dev146.json [more.json ...]
 
 Needs no credentials: the sink is public (anonymous read). Each run JSON already carries the exact
 `artifacts_prefix` and artifact list per run, so nothing is guessed and no bucket listing is needed.

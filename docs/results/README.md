@@ -53,30 +53,29 @@ answers split 2 (OCP) to 1 (KinD), while timeouts split 4 to 11 and are all appw
 runner did not retry transport failures when these legs ran, and now does (`send_prompt` in
 `runner/a2a_agent.py`), so a repeat would self-heal rather than cost a task.
 
-The three **plugin-study** reports are the designed AuthBridge experiment re-executed on this same
-image with the cache spaced out — 13 legs per platform, 26 legs total, all `succeeded`. Spacing
-changed the answer in ways worth knowing: the between-deploy noise floor on OpenShift fell from
-1.57 s to **0.23 s**, so the study can now say the sub-second layers are genuinely small rather than
-merely under-replicated; the serial diagnostic reached a clean 10 tool calls / 10 judge calls on
-*both* platforms; and the sidecar's OpenShift cost came out *larger* (+13.68 s/task against the
-earlier +11.77 s), because replays had been deflating it. The one finding that got stronger rather
-than merely cleaner is the disagreement itself: the same condition on the same image now differs by
-**4–93x** between the two clusters.
+The three **plugin-study** reports are the designed AuthBridge experiment on this same image with the
+cache spaced out — 13 legs per platform, 26 legs total, all `succeeded`. What the spacing buys is
+worth knowing: the between-deploy noise floor on OpenShift is **0.23 s**, tight enough for the study
+to say the sub-second layers are genuinely small rather than merely under-replicated; the serial
+diagnostic lands on a clean 10 tool calls / 10 judge calls on *both* platforms; and each report
+verifies the nesting invariant from its own artifacts — no leg carrying the sidecar is faster than a
+leg without one — which is the cheap check that a latency comparison of a nested design has not been
+served out of a cache. The headline finding is the disagreement: the same condition on the same image
+differs by **4–93x** between the two clusters.
 
 ## What is deliberately not here
 
 **Earlier versions' 12-runs and plugin studies.** v1.27 and before are superseded on the same two
 platforms, and keeping them would invite comparisons across an image change that nothing controls
-for. The v1.27 plugin study has a second and stronger reason to be gone: it ran before the gateway's
+for. The earlier plugin study has a second and stronger reason to be gone: it ran before the gateway's
 completion cache was understood, with no spacing, so all eleven of its gsm8k legs sent the *same* 50
-prompts inside the ~10 min TTL. The contamination is visible without any statistics — on KinD the
-`auth-only` leg finished in **20.8 s** against the 112.6 s `baseline` it is nested above, immediately
-after it. Adding a proxy hop cannot make a leg five times faster; that leg was replaying the previous
-one's completions. OpenShift's two `baseline` deploys likewise sit 2.8x apart (135.6 s run first,
-47.8 s run last, after eight legs had warmed the cache). Because the warming is monotone in run
-order, the crossover design cannot absorb it, and the judge is itself a call through that same
-gateway. Its per-layer figures were withdrawn rather than corrected; the v1.28 study above is the
-same design executed with the cache spaced out.
+prompts inside the ~10 min TTL and the later ones were served the earlier ones' completions. For a
+study whose outcome *is* latency that is the measurement disappearing, in run order, which is the
+same shape as a plugin effect — and the crossover design cannot absorb it, because the warming is
+monotone in run order and the judge is itself a call through that same gateway. Its per-layer figures
+were **withdrawn rather than corrected**, and none of its numbers are quoted anywhere in this repo.
+The v1.28 study above is the same design executed with the cache spaced out, and it verifies the
+nesting invariant from its own artifacts so the defect cannot recur unnoticed.
 
 **The `dev145` re-run of 2026-09-14.** It looked like a baseline and was not: the agent's per-task
 health probe killed 12 of 141 tasks on KinD and 0 on OpenShift, and a killed task still leaves a

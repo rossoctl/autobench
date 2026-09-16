@@ -14,12 +14,12 @@ rather than assumed:
   * **Every n=5 per-task figure is warm-up.** In a 50-task baseline leg -- which has no sidecar at
     all -- the first concurrency wave costs a multiple of the steady-state per-task time, and the
     transient is gone by the second wave. A 5-task leg at p=4 measures only that transient.
-
-Both of those figures are COMPUTED from the run being analysed and written into the report; they are
-deliberately not quoted from an earlier execution, because the pre-v1.28 runs of this design were
-cache-contaminated (see the cache-spacing section the report emits).
   * **Run order aliases onto the plugin variable.** The legs run sequentially in a fixed sequence,
     so any monotone drift over the session loads entirely onto whichever preset ran last.
+
+The first two figures are COMPUTED from the run being analysed and written into the report, never
+quoted from another execution: a report that cites its own artifacts for everything else must not
+smuggle in a figure a reader cannot trace.
 
 So this script reports things the retrospective one structurally cannot:
 
@@ -62,8 +62,8 @@ JUDGE_TS = pathlib.Path(sys.argv[6]) if len(sys.argv) > 6 else None
 # The warm-up transient is exactly the FIRST CONCURRENCY WAVE, not a fixed task count. Both cutoffs
 # are recomputed per run and printed into the report: splitting at the first `num_parallel` tasks
 # gives a consistent ratio, while splitting at a fixed 10 buries the effect by mixing 6 steady-state
-# tasks into the "warm" bucket -- on one leg of an earlier execution it inverted the sign outright,
-# reporting warm-up as a speed-up. So the cutoff is derived per leg from the artifacts.
+# tasks into the "warm" bucket, and it can invert the sign outright, reporting warm-up as a speed-up.
+# So the cutoff is derived per leg from the artifacts.
 # PSTUDY_WARM forces a fixed cutoff instead, for re-deriving the decay profile.
 WARM_ENV = os.environ.get("PSTUDY_WARM")
 DECAY_BUCKETS = [(1, 4), (5, 8), (9, 12), (13, None)]
@@ -176,7 +176,7 @@ def boot_median_spread(v, k, conf=CONF, B=B_BOOT, seed=SEED):
     This is the *resolving power* of a leg of size `k`: under the null (two legs of the same
     condition) two medians can already differ by this factor, so it is the smallest
     preset-to-preset ratio that a leg of that size could detect. Computed from this run's own
-    steady-state samples so the report never asserts an earlier execution's figure.
+    steady-state samples, so the report never asserts a figure from outside its own artifacts.
     """
     if len(v) < 3:
         return None
@@ -254,7 +254,7 @@ if missing:
           "legs that did land; a missing leg is a gap in the design, not a null result.", ""]
 
 # Both figures in the design table below are computed from THIS run's own artifacts rather than
-# quoted from an earlier execution: the resolving power of an n=5 leg, and the warm-up ratio. The
+# quoted from elsewhere: the resolving power of an n=5 leg, and the warm-up ratio. The
 # warm-up lists are reused verbatim in the warm-up section further down.
 BASE_LEGS = [x for x in GS if cond(x) == "baseline"]
 _wave, _fixed = [], []
@@ -349,12 +349,20 @@ L += ["",
       ""]
 
 # --- gateway completion cache ----------------------------------------------
-# The second precondition for a latency comparison, and the one that silently broke the first
-# execution of this design: every gsm8k leg here sends the SAME 50 prompts to the same model, so
+# The second precondition for a latency comparison, and the easiest one to skip: every gsm8k leg
+# here sends the SAME 50 prompts to the same model, so
 # inside the gateway's ~10 min cache TTL a later leg is served the earlier leg's completions. That
 # does not merely add noise — it removes the model call from the very quantity being measured, and it
 # does so in run order, which is exactly the shape of a plugin effect.
 GAP = data.get("cache_gap_seconds") or 0
+# The nesting check, computed: a sidecar-carrying leg faster than the FASTEST baseline leg is an
+# ordering violation, and replay contamination is the way that happens. Comparing against the
+# fastest baseline is the conservative direction -- it cannot flag ordinary deploy-to-deploy noise.
+_base_meds = [st.median(steady(n)) for n in BASE_LEGS if steady(n)]
+_side_meds = [(n, st.median(steady(n))) for n in GS if cond(n) != "baseline" and steady(n)]
+_nest_base = min(_base_meds) if _base_meds else None
+_nest_side = min((m for _, m in _side_meds), default=None)
+_nest_viol = [n for n, m in _side_meds if _nest_base and m < _nest_base]
 _slept = sum(1 for r in runs.values() if (r.get("cache_gap_slept_seconds") or 0) > 0)
 _groups = sorted({r.get("cache_group") for r in runs.values() if r.get("cache_group")})
 L += ["## The gateway's completion cache is spaced out (the other precondition)", "",
@@ -364,11 +372,18 @@ L += ["## The gateway's completion cache is spaced out (the other precondition)"
       "pay for their completions: the second is served the first's, `usage` and all. For a study "
       "whose outcome *is* latency this is not noise, it is the measurement disappearing, and it "
       "disappears **in run order**, which is indistinguishable from a plugin effect by shape.", "",
-      "The tell needs no statistics: the conditions are **nested**, so a leg cannot beat the leg it "
-      "is nested above. An unspaced execution of this same design put `auth-only` at 20.8 s against "
-      "a 112.6 s `baseline` run immediately before it — a proxy hop does not make a leg five times "
-      "faster. Compare the wall times below against each other in nesting order before believing any "
-      "of them, and remember the ibac judge is itself a call through the same gateway.", ""]
+      "The tell needs no statistics, and it is checked here rather than argued: the conditions are "
+      "**nested** — every non-baseline condition is baseline *plus* the sidecar — so no leg carrying "
+      "the sidecar can be faster than a leg without one. Replay contamination breaks that ordering "
+      "outright, because a leg served from cache skips work the leg it nests above actually did. On "
+      f"this run the fastest `baseline` leg's steady median is **{f(_nest_base)} s** and the fastest "
+      f"sidecar-carrying leg's is **{f(_nest_side)} s**"
+      + (f" ({_nest_side / _nest_base:.1f}x above it): **no leg violates the ordering.**"
+         if _nest_base and _nest_side and _nest_side >= _nest_base
+         else f": ⚠️ **{len(_nest_viol)} leg(s) violate the ordering** "
+              f"({', '.join('#%d' % n for n in _nest_viol)}) — treat every latency below as suspect.")
+      + " Still compare the wall times in nesting order before believing any of them, and remember "
+      "the ibac judge is itself a call through the same gateway.", ""]
 if GAP >= 660:
     L += [f"**✅ This execution was spaced.** The driver rested each prompt set for at least "
           f"**{int(GAP)} s** before reusing it — against the ~10 min TTL, a "
