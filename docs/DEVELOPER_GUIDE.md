@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-16T05:03:52Z
+**Last modified:** 2026-09-16T05:14:22Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -1233,9 +1233,14 @@ Three rules prevent that — `white-space: pre-wrap`, a hanging indent per *logi
 mid-word by measured length; applying it to every cell shrinks narrow columns until two-digit
 numbers stack vertically.
 
-Two artifacts here are **not** covered by any generator and are still exported by hand when they
-matter: `docs/DEVELOPER_GUIDE.docx` and `docs/openapi.yaml.pdf` (both LibreOffice exports). The
-OpenAPI documents themselves — `docs/openapi.json` / `docs/openapi.yaml` — are dumps of the schema
+One artifact here is **not** covered by any generator and is still exported by hand when it matters:
+`docs/openapi.yaml.pdf` (a LibreOffice export). A `docs/DEVELOPER_GUIDE.docx` used to sit beside it
+and was **deleted on 2026-09-16**, because a hand export of a file that changes weekly is stale
+within days: it had drifted eight commits behind this document and was still describing a
+plugin-overhead method that has since been withdrawn — a stale copy of a doc does not just go out of
+date, it keeps publishing advice the current text retracted. Read the `.md` or the generated `.pdf`;
+if you need Word, convert on the spot (`pandoc docs/DEVELOPER_GUIDE.md -o /tmp/guide.docx`) rather
+than committing the result. The OpenAPI documents themselves — `docs/openapi.json` / `docs/openapi.yaml` — are dumps of the schema
 `_install_openapi()` builds in [`src/autobench/app.py`](../src/autobench/app.py) rather than
 hand-written text, but no dump script is committed either: refresh them from a running Service's
 `/openapi.json`.
