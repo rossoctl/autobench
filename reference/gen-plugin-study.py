@@ -8,12 +8,16 @@ not its arithmetic -- limits what it can say. It mines the canonical 12-run, whe
 once at `max_tasks=5`, in a fixed order, with no replication. Three consequences, all measured
 rather than assumed:
 
-  * **n=5 has no resolving power.** Bootstrapping the pooled v1.26+v1.27 samples puts the minimum
-    detectable preset-to-preset difference at roughly 3x. Every preset pair of interest differs by
-    far less than that, so "no difference found" there was uninformative, not reassuring.
-  * **Every n=5 per-task figure is warm-up.** In the 50-task baseline leg -- which has no sidecar at
-    all -- the first five tasks cost 2.1x (OCP) to 3.0x (KinD) the steady-state per-task time, with
-    the transient gone by task ~10. A 5-task leg measures only that transient.
+  * **n=5 has no resolving power.** Resampling the run's own steady-state baseline tasks down to
+    n=5 puts the minimum detectable preset-to-preset difference far above every preset pair of
+    interest, so "no difference found" there is uninformative, not reassuring.
+  * **Every n=5 per-task figure is warm-up.** In a 50-task baseline leg -- which has no sidecar at
+    all -- the first concurrency wave costs a multiple of the steady-state per-task time, and the
+    transient is gone by the second wave. A 5-task leg at p=4 measures only that transient.
+
+Both of those figures are COMPUTED from the run being analysed and written into the report; they are
+deliberately not quoted from an earlier execution, because the pre-v1.28 runs of this design were
+cache-contaminated (see the cache-spacing section the report emits).
   * **Run order aliases onto the plugin variable.** The legs run sequentially in a fixed sequence,
     so any monotone drift over the session loads entirely onto whichever preset ran last.
 
@@ -55,11 +59,11 @@ PLATFORM = sys.argv[4]
 OUT = pathlib.Path(sys.argv[5]) if len(sys.argv) > 5 else None
 JUDGE_TS = pathlib.Path(sys.argv[6]) if len(sys.argv) > 6 else None
 
-# The warm-up transient is exactly the FIRST CONCURRENCY WAVE, not a fixed task count. Measured
-# across three independent 50-task no-sidecar baseline legs: splitting at the first `num_parallel`
-# tasks gives ratios 2.03x / 2.17x / 2.24x, while splitting at a fixed 10 gives 1.09x / 1.40x /
-# 0.72x -- the fixed cutoff buries the effect by mixing 6 steady-state tasks into the "warm" bucket,
-# and in one leg even inverts its sign. So the cutoff is derived per leg from the artifacts.
+# The warm-up transient is exactly the FIRST CONCURRENCY WAVE, not a fixed task count. Both cutoffs
+# are recomputed per run and printed into the report: splitting at the first `num_parallel` tasks
+# gives a consistent ratio, while splitting at a fixed 10 buries the effect by mixing 6 steady-state
+# tasks into the "warm" bucket -- on one leg of an earlier execution it inverted the sign outright,
+# reporting warm-up as a speed-up. So the cutoff is derived per leg from the artifacts.
 # PSTUDY_WARM forces a fixed cutoff instead, for re-deriving the decay profile.
 WARM_ENV = os.environ.get("PSTUDY_WARM")
 DECAY_BUCKETS = [(1, 4), (5, 8), (9, 12), (13, None)]
@@ -166,6 +170,26 @@ def boot_median_ci(v, conf=CONF, B=B_BOOT, seed=SEED):
     return (meds[int(a * B)], meds[min(B - 1, int((1 - a) * B))])
 
 
+def boot_median_spread(v, k, conf=CONF, B=B_BOOT, seed=SEED):
+    """Ratio hi/lo of the `conf` interval on the median of `k` draws from `v`.
+
+    This is the *resolving power* of a leg of size `k`: under the null (two legs of the same
+    condition) two medians can already differ by this factor, so it is the smallest
+    preset-to-preset ratio that a leg of that size could detect. Computed from this run's own
+    steady-state samples so the report never asserts an earlier execution's figure.
+    """
+    if len(v) < 3:
+        return None
+    rng = random.Random(seed + 3)
+    n, meds = len(v), []
+    for _ in range(B):
+        meds.append(st.median([v[rng.randrange(n)] for _ in range(k)]))
+    meds.sort()
+    a = (1 - conf) / 2
+    lo, hi = meds[int(a * B)], meds[min(B - 1, int((1 - a) * B))]
+    return (hi / lo) if lo else None
+
+
 def boot_diff_ci(a, b, conf=CONF, B=B_BOOT, seed=SEED):
     """CI on median(b) - median(a). Straddling zero == no detectable difference."""
     if len(a) < 3 or len(b) < 3:
@@ -229,6 +253,25 @@ if missing:
           f"{', '.join('#%d' % n for n in missing)}. Every conclusion below is conditional on the "
           "legs that did land; a missing leg is a gap in the design, not a null result.", ""]
 
+# Both figures in the design table below are computed from THIS run's own artifacts rather than
+# quoted from an earlier execution: the resolving power of an n=5 leg, and the warm-up ratio. The
+# warm-up lists are reused verbatim in the warm-up section further down.
+BASE_LEGS = [x for x in GS if cond(x) == "baseline"]
+_wave, _fixed = [], []
+for n in BASE_LEGS:
+    rr = ok(ranked(n))
+    for cut, acc in ((warm_cutoff(n), _wave), (10, _fixed)):
+        a = [non_llm(x) for x in rr if x["_rank"] <= cut]
+        b = [non_llm(x) for x in rr if x["_rank"] > cut]
+        acc.append((st.median(a) / st.median(b)) if a and b and st.median(b) else None)
+_r = lambda xs: ", ".join(f"{x:.2f}x" if x else "n/a" for x in xs)
+_rng = lambda xs: (f"{min(xs):.1f}x–{max(xs):.1f}x" if len(set(f"{x:.1f}" for x in xs)) > 1
+                   else f"{xs[0]:.1f}x") if xs else "—"
+_pct = lambda xs: (f"{(min(xs)-1)*100:.0f}–{(max(xs)-1)*100:.0f}%"
+                   if len(set(f"{x:.2f}" for x in xs)) > 1 else f"{(xs[0]-1)*100:.0f}%") if xs else "—"
+MDE5 = [x for x in (boot_median_spread(steady(n), 5) for n in BASE_LEGS) if x]
+MDE50 = [x for x in (boot_median_spread(steady(n), 50) for n in BASE_LEGS) if x]
+
 # --- design ----------------------------------------------------------------
 L += ["## What this measures, and why it needed its own runs", "",
       "This is a **designed experiment**: the conditions, the task count and the run order were all "
@@ -238,11 +281,13 @@ L += ["## What this measures, and why it needed its own runs", "",
       "defects make those numbers unresolvable, and each was measured rather than assumed:", "",
       f"| defect when mining the 12-run matrix | evidence | fixed here by |",
       "|---|---|---|",
-      "| each preset runs **once at `max_tasks=5`** | bootstrap puts the minimum detectable "
-      "preset-to-preset difference at ~**3x**; the pairs of interest differ by far less, so a null "
-      "result there is *underpowered*, not reassuring | `max_tasks=50` |",
+      "| each preset runs **once at `max_tasks=5`** | resampling *this run's own* steady-state "
+      f"baseline tasks down to n=5 puts the minimum detectable preset-to-preset difference at "
+      f"**{_rng(MDE5)}**; at n=50 the same calculation gives **{_pct(MDE50)}**. The pairs of interest "
+      "differ by far less than the n=5 figure, so a null result there is *underpowered*, not "
+      "reassuring | `max_tasks=50` |",
       "| per-task figures are dominated by **warm-up** | in 50-task baseline legs, which have **no "
-      "sidecar at all**, the first concurrency wave costs ~**2.0–2.2x** steady state and the "
+      f"sidecar at all**, the first concurrency wave costs **{_r(_wave)}** steady state and the "
       "transient is gone by the second wave; at `p=4` that is *four of the five tasks* an n=5 leg "
       "measures | excluding the first wave, and reporting it **separately** |",
       "| **run order** aliases onto the plugin variable | the legs run in one fixed sequence, so any "
@@ -426,7 +471,7 @@ L += ["## Warm-up is one concurrency wave, and must be excluded rather than aver
       "warm-up):", "",
       "| # | rep | p | " + " | ".join(f"rank {a}–{b or '50'}" for a, b in DECAY_BUCKETS) + " |",
       "|---|---:|---:|" + "---:|" * len(DECAY_BUCKETS)]
-for n in [x for x in GS if cond(x) == "baseline"]:
+for n in BASE_LEGS:
     rr = ok(ranked(n))
     cells = []
     for a, b in DECAY_BUCKETS:
@@ -434,16 +479,8 @@ for n in [x for x in GS if cond(x) == "baseline"]:
         cells.append(f(st.median(v) if v else None))
     L.append(f"| {n} | {legs[n]['rep']} | {warm_cutoff(n)} | " + " | ".join(cells) + " |")
 
-# The alternative cutoff, computed rather than asserted: a fixed 10 tasks mixes steady-state tasks
-# into the "warm" bucket whenever num_parallel < 10, which is the whole point.
-_wave, _fixed = [], []
-for n in [x for x in GS if cond(x) == "baseline"]:
-    rr = ok(ranked(n))
-    for cut, acc in ((warm_cutoff(n), _wave), (10, _fixed)):
-        a = [non_llm(x) for x in rr if x["_rank"] <= cut]
-        b = [non_llm(x) for x in rr if x["_rank"] > cut]
-        acc.append((st.median(a) / st.median(b)) if a and b and st.median(b) else None)
-_r = lambda xs: ", ".join(f"{x:.2f}x" if x else "n/a" for x in xs)
+# The alternative cutoff, computed rather than asserted (`_wave` / `_fixed` above): a fixed 10 tasks
+# mixes steady-state tasks into the "warm" bucket whenever num_parallel < 10, which is the point.
 L += ["",
       "The cost drops to steady state **after the first bucket** and stays there — the transient is "
       "one wave of `max_parallel_sessions` tasks, all of which start before any connection is warm. "

@@ -198,9 +198,11 @@ Three more that apply specifically to the **latency** columns, all measured in t
 study ([docs/PLUGIN_OVERHEAD.md](PLUGIN_OVERHEAD.md)):
 
 - **Warm-up is exactly the first concurrency wave** — the first `num_parallel` tasks — not "the first
-  few tasks". Splitting the no-sidecar baseline legs at the wave gives a consistent 2.46/2.05×
-  penalty; splitting at a fixed 10 tasks gives 1.18/1.22×, and on an earlier execution drove one leg
-  to **0.72×** — reporting warm-up as a speed-up. The consequence for small runs is blunt: at `p=4`, a
+  few tasks". Splitting the no-sidecar baseline legs at the wave gives a penalty that is consistent
+  within a cluster — 2.46/2.05× on OpenShift, 8.38/22.55× on KinD, whose ~0.1 s steady state makes the
+  same startup cost a bigger multiple; splitting at a fixed 10 tasks instead gives 1.18/1.22× and
+  1.52/**0.94**× — the last one below 1, reporting warm-up as a speed-up. The consequence for small
+  runs is blunt: at `p=4`, a
   5-task leg spends four of its five tasks inside the transient, so its per-task average is mostly
   measuring startup.
 - **The deploy is the unit of replication, not the task.** Every task in a leg shares one deployment,

@@ -1,6 +1,6 @@
 # AuthBridge plugin overhead — designed experiment (OpenShift — ykt3 Service / ykt2 workloads)
 
-**Report generated:** 2026-09-16T00:32:18Z  
+**Report generated:** 2026-09-16T03:58:55Z  
 **Service version:** `v1.28`  
 **Platform:** OpenShift — ykt3 Service / ykt2 workloads  
 **Legs executed:** 13 of 13  
@@ -32,8 +32,8 @@ This is a **designed experiment**: the conditions, the task count and the run or
 
 | defect when mining the 12-run matrix | evidence | fixed here by |
 |---|---|---|
-| each preset runs **once at `max_tasks=5`** | bootstrap puts the minimum detectable preset-to-preset difference at ~**3x**; the pairs of interest differ by far less, so a null result there is *underpowered*, not reassuring | `max_tasks=50` |
-| per-task figures are dominated by **warm-up** | in 50-task baseline legs, which have **no sidecar at all**, the first concurrency wave costs ~**2.0–2.2x** steady state and the transient is gone by the second wave; at `p=4` that is *four of the five tasks* an n=5 leg measures | excluding the first wave, and reporting it **separately** |
+| each preset runs **once at `max_tasks=5`** | resampling *this run's own* steady-state baseline tasks down to n=5 puts the minimum detectable preset-to-preset difference at **1.7x–2.0x**; at n=50 the same calculation gives **14–33%**. The pairs of interest differ by far less than the n=5 figure, so a null result there is *underpowered*, not reassuring | `max_tasks=50` |
+| per-task figures are dominated by **warm-up** | in 50-task baseline legs, which have **no sidecar at all**, the first concurrency wave costs **2.46x, 2.05x** steady state and the transient is gone by the second wave; at `p=4` that is *four of the five tasks* an n=5 leg measures | excluding the first wave, and reporting it **separately** |
 | **run order** aliases onto the plugin variable | the legs run in one fixed sequence, so any monotone drift loads onto whichever preset ran last | a **reversed-order replicate** |
 
 One property of the 12-run design is worth keeping, and this experiment inherits it: **task selection is deterministic**, so every leg runs the same tasks in the same order with the same model. That is verified below before any latency figure is quoted.

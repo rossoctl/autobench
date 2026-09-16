@@ -1,10 +1,10 @@
 {
   "study": "AuthBridge plugin overhead — designed experiment (supersedes the retrospective mining of the 12-run matrix)",
   "why": [
-    "The 12-run matrix runs each preset ONCE at max_tasks=5. Bootstrapping the v1.26+v1.27 samples shows that",
+    "The 12-run matrix runs each preset ONCE at max_tasks=5. Resampling a clean 50-task leg down to n=5 shows it",
     "buys no resolving power at all: no preset-to-preset difference below 3x is detectable, and the per-leg",
     "median of a judged/unjudged MIXTURE is a step function of the judged count rather than an estimate of",
-    "anything. Worse, the 50-task baseline leg shows the first 5 tasks cost 2.1x (OCP) to 3.0x (KinD) more per",
+    "anything. Worse, the 50-task baseline leg shows the first CONCURRENCY WAVE costs a multiple more per",
     "task than steady state WITH NO SIDECAR AT ALL, so every n=5 'fixed cost per task' figure is warm-up.",
     "This file fixes the three defects that matter: n, replication, and run order.",
     "",

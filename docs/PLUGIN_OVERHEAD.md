@@ -177,11 +177,13 @@ These generalize past the plugin question, and they are the reason the designed 
 ### Warm-up is one concurrency wave, not "the first few tasks"
 
 Across the *no-sidecar* baseline legs, splitting the tasks at the first concurrency wave (the first
-`num_parallel` tasks) gives a consistent warm-up penalty — 2.46x and 2.05x on OpenShift. Splitting at
-a fixed cutoff of 10 tasks gives 1.18x and 1.22x, most of the effect buried by mixing six
-steady-state tasks into the "warm" bucket; on an earlier execution the same fixed cutoff drove one
-leg to **0.72x**, reporting warm-up as a speed-up. The wave is the real boundary; a fixed task count
-is not, and our analyzers derive the cutoff per leg from the artifacts' own `num_parallel`.
+`num_parallel` tasks) isolates a warm-up penalty that is consistent within a cluster — 2.46x and
+2.05x on OpenShift, 8.38x and 22.55x on KinD, where a ~0.1 s steady state makes the same fixed
+startup cost a far larger multiple. Splitting at a fixed cutoff of 10 tasks instead gives 1.18x and
+1.22x on OpenShift and **1.52x and 0.94x** on KinD: most of the effect is buried by mixing six
+steady-state tasks into the "warm" bucket, and one leg drops below 1 — reporting warm-up as a
+*speed-up*. The wave is the real boundary; a fixed task count is not, and our analyzers derive the
+cutoff per leg from the artifacts' own `num_parallel`.
 
 The consequence for small runs is severe. At `p=4`, a 5-task leg spends *four of its five tasks*
 inside the warm-up transient. A per-task average from such a leg is mostly measuring startup.

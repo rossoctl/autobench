@@ -1,6 +1,6 @@
 # AuthBridge plugin overhead — OpenShift — ykt3 Service / ykt2 workloads vs KinD — single-node local cluster
 
-**Report generated:** 2026-09-16T03:42:08Z  
+**Report generated:** 2026-09-16T03:59:13Z  
 **Service version:** `v1.28`  
 **Experiment:** `plugin_study_specs.json` — 13 legs, identical specs on both platforms  
 **Companion reports:** the per-platform analyses, which carry the intervals and the design rationale this document does not repeat.
@@ -170,6 +170,6 @@ BM_SPECS=reference/plugin_study_specs.json BM_LABEL=pstudy-<platform> \
   BM_CACHE_GAP=900 BM_ORDER=111,112,101,102,103,104,105,113,106,107,108,109,110 \
   python3 reference/run-12.py          # detached; see feedback_long_runs_detach_and_adopt
 python3 reference/gen-plugin-study-xplat.py reference/plugin_study_specs.json v1.28 plugin-study-xplat.md \
-  'OpenShift — ykt3 Service / ykt2 workloads' /tmp/autobench/run12-pstudy-ocp-v128.json results/v1.28-dev146/judge-ocp-v128.ts -- \
-  'KinD — single-node local cluster' /tmp/autobench/run12-pstudy-kind-v128.json results/v1.28-dev146/judge-kind-v128.ts
+  'OpenShift — ykt3 Service / ykt2 workloads' results/v1.28-dev146/run12-pstudy-ocp-v128.json results/v1.28-dev146/judge-ocp-v128.ts -- \
+  'KinD — single-node local cluster' results/v1.28-dev146/run12-pstudy-kind-v128.json results/v1.28-dev146/judge-kind-v128.ts
 ```
