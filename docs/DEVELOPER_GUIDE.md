@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-16T15:54:34Z
+**Last modified:** 2026-09-16T20:12:07Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -25,6 +25,7 @@ multi-turn) on the `ykt3` and `kind-rossoctl` clusters.
 
 - [1. Mental model (read this first)](#1-mental-model-read-this-first)
   - [Endpoint map](#endpoint-map)
+  - [The run-time data path](#the-run-time-data-path)
 - [2. Getting a caller token](#2-getting-a-caller-token)
 - [3. Onboarding a benchmark (one-time, per cluster/instance)](#3-onboarding-a-benchmark-one-time-per-clusterinstance)
   - [3.1 Instance config file (`instances/<encoded-iss-host>.json`)](#31-instance-config-file-instancesencoded-iss-hostjson)
@@ -90,6 +91,75 @@ Two consequences shape everything below:
 | Benchmark deploy | `POST /benchmarks/{name}/deploy`, `DELETE /benchmarks/{name}/deploy`, `GET /benchmarks/{name}/status` | caller JWT |
 | Run lifecycle | `POST /benchmarks/{name}/runs`, `GET …/runs`, `GET …/runs/{run_id}` | caller JWT |
 | Reporting | `GET …/runs/{run_id}/report`, `GET /benchmarks/{name}/report` | caller JWT |
+
+### The run-time data path
+
+The endpoint map above is the **control** plane — what you call. During a run a different set of
+legs carries the actual work, and none of them are HTTP calls you make. Chart 6 of
+[`AutoBench.pptx`](./AutoBench.pptx) draws this; the same eight legs in text:
+
+```
+                            +----------------------------------+
+                            |    LLM gateway (per instance)    |
+                            +---^-----------------------^------+
+                            (3) |                   (4) |
+   +-------------+    +---------+--------+     +--------+-------------+
+   |  AutoBench  |    |   A2A agent pod  |     |     MCP tool pod     |
+   |   Service   |    |                  |     |                      |
+   |        (1)  |--->| agent container  |     |  user simulator      |
+   |             |    |         |        |     |  (tau2 only)         |
+   |             |    |     (5) v        |     |                      |
+   |             |    | AuthBridge ------+---->|  MCP server          |
+   |             |    |   sidecar   (6)  |     |  tasks + evaluation  |
+   |             |    |                  |     |                      |
+   |             |    +-------+----------+     +---------------^------+
+   |             |        (7) v                                |
+   |             |        +----------------+                   |
+   |             |        |   IBAC judge   | --(8)-> gateway   |
+   +------+------+        +----------------+                   |
+          |                                                    |
+          +------------------------ (2) -----------------------+
+```
+
+| # | leg | is the sidecar on it? |
+|---|---|---|
+| 1 | Service → agent container: `send_prompt`, **once per task** | **yes, inbound** — logged as `a2a-parser`; `isAction=false`, so no judge call |
+| 2 | Service → MCP server: `list_tasks`, `create_session`, `evaluate_session`, `delete_session` | no — a different pod, and the Service does not dial through the proxy |
+| 3 | agent → LLM gateway: N chat calls per task | **no** — see below |
+| 4 | MCP tool → LLM gateway: tau2's user simulator (a *second* model) | no — a different pod |
+| 5 | agent → sidecar: the agent's own MCP tool calls | **this is the interception point** |
+| 6 | sidecar → MCP server: once the call is authorized | outbound `mcp-parser`, `method=tools/call isAction=true` |
+| 7 | sidecar → IBAC judge: one call per `isAction` tool call | — |
+| 8 | judge → LLM gateway: the verdict is itself an LLM call | — |
+
+Three things about this shape are not guessable from the API surface:
+
+**The agent has its own MCP connection, separate from the Service's.** `MCP_URL` is injected into the
+agent's env at deploy time (always `svc.cluster.local`, since agent→tool is intra-cluster even on a
+cross-cluster run). The Service opens and grades the session (leg 2); the agent's tool calls
+(legs 5–6) mutate that same session's state, correlated by `session_id` — which travels as A2A
+request metadata, *not* in the prompt text. So grading reads tool-side state, and the runner discards
+whatever the agent replies: an agent that answers in prose without making the submitting tool call
+fails the task.
+
+**Interception is a blanket forward proxy plus an allowlist, not a tool-aware hook.** With AuthBridge
+enabled the operator injects `HTTP_PROXY=HTTPS_PROXY=http://127.0.0.1:8081` — the sidecar — into the
+agent pod, which would capture *every* outbound HTTP call it makes, inference included. What keeps
+leg 3 out of it is the instance config's `no_proxy`, which names the LLM gateway host (and the OTEL
+collector, and Keycloak). IBAC additionally sets `judge_inference: false`, so even proxied inference
+would not be judged. Both would have to change for the agent's model calls to be authorized.
+
+**A ready sidecar proves nothing about enforcement.** Because the switch is a proxy-env allowlist, a
+plausible-looking config can leave the outbound plugins seeing no traffic at all: setting
+`workload_llm.disable_proxy: true` makes the Service inject `HTTP_PROXY=""` first, and the operator
+only adds a var when it is *absent*, so it skips `HTTP_PROXY` while still setting `HTTPS_PROXY`.
+`MCP_URL` is `http://`, so tool calls went direct — and a `no_proxy` containing
+`.svc.cluster.local` excluded them a second time. The sidecar was ready, the pipeline rendered, the
+judge was called **zero** times. Keep `disable_proxy` off and keep the *wildcards* out of `no_proxy`
+while keeping the named hosts in it, then verify by **counting judge completions across a run** — IBAC
+emits no log line of its own, so sidecar logs cannot tell you. `initialize` and `tools/list` are
+`isAction=false` and legitimately never reach the judge, so a zero count only means something if real
+tool calls occurred. Cost figures for each layer: [`PLUGIN_OVERHEAD.md`](./PLUGIN_OVERHEAD.md).
 
 ---
 

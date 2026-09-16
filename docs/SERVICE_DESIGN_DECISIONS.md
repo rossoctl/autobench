@@ -444,7 +444,13 @@ at a gateway has to be **config, not a manual `oc set env`** (which any redeploy
   not carry the registry default (e.g. an endpoint with no Qwen).
 - `disable_proxy` / `no_proxy` — inject `HTTP_PROXY=""`/`http_proxy=""` and a `NO_PROXY`/`no_proxy`
   bypass list on the agent, so an in-VPC (non-internet-routed) base is reachable through the egress
-  proxy. Off by default.
+  proxy. Off by default. **These two fields are also the AuthBridge interception switch**, which is
+  not obvious from their names: the operator implements interception by injecting
+  `HTTP_PROXY=HTTPS_PROXY=http://127.0.0.1:8081` (the sidecar) into the same agent pod, and it only
+  adds a var that is *absent* — so `disable_proxy: true`, or a `no_proxy` carrying
+  `.svc.cluster.local`, silently routes the agent's tool calls around the sidecar and leaves the
+  outbound plugins inert while everything still looks healthy. The mechanism and how to verify it are
+  in [`DEVELOPER_GUIDE.md` §1, "The run-time data path"](./DEVELOPER_GUIDE.md#the-run-time-data-path).
 
 This is opt-in and off by default (registry defaults apply when `workload_llm` is unset), instance-
 scoped (other instances keep the shared LiteLLM with their own secret), and agent-side (instance file,

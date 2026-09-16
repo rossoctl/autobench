@@ -4,9 +4,10 @@ Run with the project env plus python-pptx (no need to add it as a project dep):
 
     uv run --with python-pptx python docs/generate_pptx.py
 
-Produces a 16-slide 16:9 deck: title, agenda, overview + key design decisions, the
-design motif, two
-architecture diagrams (the whole system, then inside the workload), the two-token auth
+Produces a 17-slide 16:9 deck: title, agenda, overview + key design decisions, the
+design motif, three
+architecture diagrams (the whole system, inside the workload, then how the sidecar is wired into
+the path at all), the two-token auth
 model, the benchmark catalog + run lifecycle, three benchmark slides, four results slides
 (the 12-run matrix, what it measured, OpenShift vs KinD, AuthBridge overhead), and the
 enact/report boundaries.
@@ -233,7 +234,7 @@ items = [
      "the shape of the system, before the wiring detail"),
     ("Architecture", "client, Service, and the per-cluster instance selected by JWT iss"),
     ("Architecture with workload specific components",
-     "inside the workload: sidecar, user simulator, IBAC judge"),
+     "4.1 inside the workload: sidecar, user simulator, IBAC judge · 4.2 how interception is wired"),
     ("The two-token auth model", "why the caller's token is never forwarded upstream"),
     ("Benchmark catalog & run lifecycle", "the three benchmarks and the REST flow that drives them"),
     ("The three benchmarks — what they measure",
@@ -543,7 +544,7 @@ for col_x, items in ((inch(0.6), legend_l), (inch(6.7), legend_r)):
 # the workload is NOT the same shape for every benchmark: two of the four components are optional,
 # and how many LLMs a task involves depends on the benchmark and on the plugin preset.
 s = prs.slides.add_slide(BLANK)
-title_band(s, "4.  Architecture with Workload Specific Components",
+title_band(s, "4.1  Architecture with Workload Specific Components",
            "Inside the Benchmark Workload — what every benchmark has, and what only some of them add")
 
 
@@ -692,6 +693,96 @@ for i, item in enumerate(flows):
     p = ftf.paragraphs[0] if i == 0 else ftf.add_paragraph()
     p.space_after = Pt(0)  # 11 lines must fit the panel; Pt(1) overflowed past the slide edge
     r = p.add_run(); r.text = item; _set_font(r, 9.5, False, INK)
+
+# ==================== SLIDE 5b: HOW INTERCEPTION IS WIRED (and how it silently isn't)
+# The previous slide draws WHERE the sidecar sits; nothing on it says WHY traffic reaches it. That
+# mechanism is two env vars and an allowlist, and every part of it is invertible by a config that
+# looks correct — which is exactly how we shipped a matrix whose ibac legs never called the judge.
+# Sources: docs/DEVELOPER_GUIDE.md §1 "The run-time data path", docs/SERVICE_DESIGN_DECISIONS.md
+# (workload_llm.disable_proxy / no_proxy), and the measured double-bypass on KinD + ykt2.
+s = prs.slides.add_slide(BLANK)
+title_band(s, "4.2  How Interception Is Wired — and How It Silently Isn't",
+           "The sidecar sees traffic only because of two env vars; a plausible config takes it "
+           "back out of the path")
+
+# --- band 1: the three settings that decide what the sidecar sees ---
+b1 = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, inch(0.45), inch(1.22), inch(12.43), inch(1.50))
+b1.fill.solid(); b1.fill.fore_color.rgb = LTPURPLE
+b1.line.color.rgb = ROSSO; b1.shadow.inherit = False
+textbox(s, inch(0.62), inch(1.28), inch(12.1), inch(0.26),
+        [("Interception is a blanket forward proxy plus an allowlist — not a tool-aware hook. "
+          "Three settings decide what the sidecar actually sees:", 11.5, True, NAVY)])
+CHIPS = [
+    (inch(0.62), inch(3.86), "HTTP_PROXY = HTTPS_PROXY = http://127.0.0.1:8081",
+     "the OPERATOR injects this into the agent pod when AuthBridge is enabled — 127.0.0.1:8081 IS "
+     "the sidecar, so by default every outbound HTTP call the agent makes is captured"),
+    (inch(4.62), inch(3.86), "no_proxy = LLM gateway, OTEL collector, Keycloak",
+     "instance config — the hosts that stay DIRECT. This is the only reason flow 3, the agent's own "
+     "chat calls, does not go through the sidecar"),
+    (inch(8.62), inch(4.08), "judge_inference: false",
+     "IBAC's own default — even proxied inference is not judged. BOTH this and no_proxy would have "
+     "to change for the agent's model calls to be authorized"),
+]
+for cx, cw, head, sub in CHIPS:
+    box(s, cx, inch(1.60), cw, inch(1.02), head, WHITE, ROSSO,
+        font=11, font_color=NAVY, sub=sub, sub_color=RGBColor(0x3A, 0x46, 0x54))
+
+# --- band 2: captured vs direct. Same eight flows as slide 4.1, sorted by who sees them. ---
+for px, pw, fill, line, head, items in (
+    (inch(0.45), inch(6.05), LTGREEN, CLIENT, "✓  Through the sidecar", [
+        "•  agent → MCP tool calls  (flows 5 → 6) — the interception point",
+        "•  tools/call → isAction=true → one IBAC judge call each  (flow 7)",
+        "•  inbound A2A message/stream → a2a-parser, isAction=false,",
+        "    so the Service's send_prompt is logged but never judged",
+    ]),
+    (inch(6.83), inch(6.05), LTGRAY, STORE, "✗  Direct — the plugins never see it", [
+        "•  agent → LLM gateway  (flow 3) — named in no_proxy, and",
+        "    judge_inference: false would exempt it even if proxied",
+        "•  Service → MCP server  (flow 2) — a different pod; the Service",
+        "    does not dial through the agent's proxy",
+        "•  MCP tool → gateway  (flow 4, tau2's user simulator) — different pod",
+    ]),
+):
+    p = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, px, inch(2.84), pw, inch(1.58))
+    p.fill.solid(); p.fill.fore_color.rgb = fill
+    p.line.color.rgb = line; p.shadow.inherit = False
+    textbox(s, px + inch(0.17), inch(2.90), pw - inch(0.34), inch(0.26),
+            [(head, 12, True, line)])
+    textbox(s, px + inch(0.17), inch(3.20), pw - inch(0.34), inch(1.16),
+            [(it, 10.5, False, INK) for it in items])
+
+# --- band 3: the double bypass, as measured. Four steps, each individually defensible. ---
+b3 = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, inch(0.45), inch(4.54), inch(12.43), inch(1.66))
+b3.fill.solid(); b3.fill.fore_color.rgb = LTORANGE
+b3.line.color.rgb = KC; b3.shadow.inherit = False
+textbox(s, inch(0.62), inch(4.60), inch(12.1), inch(0.26),
+        [("A ready sidecar proves nothing about enforcement — the double bypass we actually shipped:",
+          11.5, True, NAVY)])
+STEPS = [
+    (inch(0.62), inch(2.94), "1.  workload_llm.disable_proxy: true makes the SERVICE inject "
+                             "HTTP_PROXY=\"\" first"),
+    (inch(3.68), inch(2.94), "2.  the operator adds a var only when ABSENT → it skips HTTP_PROXY, "
+                             "but still sets HTTPS_PROXY"),
+    (inch(6.74), inch(2.94), "3.  MCP_URL is http:// → tool calls take the empty HTTP_PROXY and go "
+                             "direct"),
+    (inch(9.80), inch(2.90), "4.  no_proxy carried .svc.cluster.local → the same calls are excluded "
+                             "a second time"),
+]
+for sx, sw, text in STEPS:
+    box(s, sx, inch(4.92), sw, inch(0.82), text, WHITE, KC, font=10, bold=False, font_color=INK)
+box(s, inch(0.62), inch(5.82), inch(12.08), inch(0.32),
+    "Result: sidecar ready = True, pipeline ConfigMap rendered, plugins loaded — and the judge "
+    "called ZERO times, on both clusters.", KC, KC, font=10.5, font_color=WHITE)
+
+# --- band 4: the only test that settles it ---
+_v = box(s, inch(0.45), inch(6.32), inch(12.43), inch(0.84),
+         "Verify by COUNTING judge chat completions across a run. IBAC emits no log line of its own, "
+         "so a healthy sidecar log proves nothing — and initialize / tools/list are isAction=false and "
+         "legitimately never reach the judge, so a zero count only means something if real tool calls "
+         "occurred.   Working config: leave disable_proxy off, keep the NAMED hosts in no_proxy, drop "
+         "the WILDCARDS (.svc, .svc.cluster.local).",
+         LTBLUE, BLUE, font=11, bold=False, font_color=INK)
+_v.text_frame.margin_left = _v.text_frame.margin_right = Pt(14)
 
 # ================================================ SLIDE 6: TWO-TOKEN AUTH
 s = prs.slides.add_slide(BLANK)
@@ -879,9 +970,14 @@ traps = [
      "preceding model turn. A zero-check misses the cases that matter — while the probe existed it "
      "was the span that SURVIVED the loss, carrying 8/1 on claude-sonnet-5 and 1/0 on gemini. The "
      "structural pair holds across agent versions; it is what the generators use."),
+    # 15-of-22 is the v1.28 re-measurement (legs that ran more than one task). It replaces an
+    # earlier 27-of-33 taken from v1.23+v1.24, where legs #1-#3 and #5-#8 shared prompts inside the
+    # gateway's ~10 min completion TTL -- some of those output columns were replayed usage rather
+    # than fresh generations, which understates output spread. Do not restore the older figure.
     ("Output varies MORE than input, in most runs",
-     "Measured OUT CV > IN CV in 27 of 33 legs. gsm8k's prompt is near-constant while answer "
-     "length swings; only long-horizon appworld inverts it. Do not infer a direction — read the CV."),
+     "Measured OUT CV > IN CV in 15 of the 22 legs that ran more than one task. gsm8k's prompt is "
+     "near-constant while answer length swings; only long-horizon appworld inverts it, in all four "
+     "of its legs. Do not infer a direction from the mechanism — read the CV."),
     ("Task selection is deterministic",
      "A run takes the first max_tasks tasks, so the same task_id is the same task across runs "
      "and clusters, and a smaller run is a prefix of a larger one. That is what makes cross-platform "
