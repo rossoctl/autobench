@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-16T20:12:07Z
+**Last modified:** 2026-09-16T20:42:30Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -99,26 +99,26 @@ legs carries the actual work, and none of them are HTTP calls you make. Chart 6 
 [`AutoBench.pptx`](./AutoBench.pptx) draws this; the same eight legs in text:
 
 ```
-                            +----------------------------------+
-                            |    LLM gateway (per instance)    |
-                            +---^-----------------------^------+
-                            (3) |                   (4) |
-   +-------------+    +---------+--------+     +--------+-------------+
-   |  AutoBench  |    |   A2A agent pod  |     |     MCP tool pod     |
-   |   Service   |    |                  |     |                      |
-   |        (1)  |--->| agent container  |     |  user simulator      |
-   |             |    |         |        |     |  (tau2 only)         |
-   |             |    |     (5) v        |     |                      |
-   |             |    | AuthBridge ------+---->|  MCP server          |
-   |             |    |   sidecar   (6)  |     |  tasks + evaluation  |
-   |             |    |                  |     |                      |
-   |             |    +-------+----------+     +---------------^------+
-   |             |        (7) v                                |
-   |             |        +----------------+                   |
-   |             |        |   IBAC judge   | --(8)-> gateway   |
-   +------+------+        +----------------+                   |
-          |                                                    |
-          +------------------------ (2) -----------------------+
+                            ┌──────────────────────────────────┐
+                            │    LLM gateway (per instance)    │
+                            └───▲───────────────────────▲──────┘
+                            (3) │                   (4) │
+   ┌─────────────┐    ┌─────────┴────────┐     ┌────────┴─────────────┐
+   │  AutoBench  │    │   A2A agent pod  │     │     MCP tool pod     │
+   │   Service   │    │                  │     │                      │
+   │        (1)  │───►│ agent container  │     │  user simulator      │
+   │             │    │         │        │     │  (tau2 only)         │
+   │             │    │     (5) ▼        │     │                      │
+   │             │    │ AuthBridge ──────┼────►│  MCP server          │
+   │             │    │   sidecar   (6)  │     │  tasks + evaluation  │
+   │             │    │                  │     │                      │
+   │             │    └───────┴──────────┘     └───────────────▲──────┘
+   │             │        (7) ▼                                │
+   │             │        ┌────────────────┐                   │
+   │             │        │   IBAC judge   │ ──(8)─► gateway   │
+   └──────┬──────┘        └────────────────┘                   │
+          │                                                    │
+          └──────────────────────── (2) ───────────────────────┘
 ```
 
 | # | leg | is the sidecar on it? |

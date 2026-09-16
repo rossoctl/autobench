@@ -134,6 +134,15 @@ pre > code { padding: 0; background: none; border: 0; font-size: inherit;
 pre > code > span[id^="cb"], pre > code > span.cl {
   display: block; padding-left: 3.2ch; text-indent: -3.2ch;
 }
+/* An ASCII diagram drawn with U+2500 box-drawing glyphs only TILES at a line height of ~1:
+   Menlo's box glyphs reach a little past the em box but nowhere near the 1.45 used for code, so
+   at that spacing every vertical rule breaks into dashes and the corners pull apart -- the boxes
+   stop reading as boxes. gen_pdf.py tags these blocks automatically (see tag_diagrams), so a
+   diagram never forces a line-height change on real code. Verify by RENDERING: the XML and the
+   extracted text both look perfect either way. */
+pre.diagram { line-height: 1.0; }
+pre.diagram > code > span.cl { padding-left: 0; text-indent: 0; }
+
 /* a blank line must still occupy a row */
 pre > code > span[id^="cb"]:empty::after,
 pre > code > span.cl:empty::after { content: "\200b"; }
@@ -362,6 +371,23 @@ def md_to_html_body(md: pathlib.Path) -> str:
 
     out = re.sub(r'(<pre[^>]*><code[^>]*>)(.*?)</code></pre>', add_line_spans, out,
                  flags=re.S)
+
+    # Tag code blocks that draw a picture, so the CSS can tighten their line height without
+    # touching any other block (see the `pre.diagram` rule). Detection is the box-drawing range
+    # itself -- a block either contains those glyphs, in which case it is a diagram, or it does
+    # not and nothing changes.
+    def tag_diagrams(m: re.Match) -> str:
+        open_tag, body = m.group(1), m.group(2)
+        if not re.search(r"[─-╿]", body):
+            return m.group(0)
+        pre, rest = open_tag.split(">", 1)
+        if 'class="' in pre:
+            pre = pre.replace('class="', 'class="diagram ', 1)
+        else:
+            pre += ' class="diagram"'
+        return f"{pre}>{rest}{body}</code></pre>"
+
+    out = re.sub(r'(<pre[^>]*><code[^>]*>)(.*?)</code></pre>', tag_diagrams, out, flags=re.S)
 
     # Tag long table cells so the CSS can let them break mid-word without narrowing every
     # other column (see the `.wrapany` rule).

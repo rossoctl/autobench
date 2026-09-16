@@ -618,11 +618,13 @@ box(s, inch(8.32), inch(3.70), inch(4.26), inch(0.80), "MCP server", WORK, WORK,
 # 1 Service -> agent container (A2A send_prompt, once per task)
 connector(s, inch(2.55), inch(3.42), inch(3.12), inch(3.12), color=BLUE)
 dot(inch(2.84), inch(3.27), 1)
-# 2 Service -> MCP server. Routed down the gap beside the container and along its bottom band: the
-# Service calls create_session / evaluate_session / delete_session on the MCP tool ITSELF -- it does
-# not reach the MCP tool via the agent.
-connector(s, inch(2.64), inch(4.20), inch(2.64), inch(4.82), color=BLUE, arrow=False)
-connector(s, inch(2.64), inch(4.82), inch(9.10), inch(4.82), color=BLUE, arrow=False)
+# 2 Service -> MCP server. Leaves the MIDDLE of the Service box's bottom edge (x = 0.45 + 2.10/2)
+# and runs along the container's bottom band: the Service calls create_session / evaluate_session /
+# delete_session on the MCP tool ITSELF -- it does not reach the MCP tool via the agent. Dropping it
+# from a box EDGE rather than from the corner gap is what makes it read as leaving the Service; the
+# earlier 2.64 start sat 0.09" clear of the lower-right corner and looked unattached.
+connector(s, inch(1.50), inch(4.20), inch(1.50), inch(4.82), color=BLUE, arrow=False)
+connector(s, inch(1.50), inch(4.82), inch(9.10), inch(4.82), color=BLUE, arrow=False)
 connector(s, inch(9.10), inch(4.82), inch(9.10), inch(4.50), color=BLUE)
 dot(inch(6.00), inch(4.82), 2)
 # 3 agent -> LLM gateway (N real chat calls per task)
