@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-16T05:23:02Z
+**Last modified:** 2026-09-16T05:26:55Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -1233,16 +1233,12 @@ Three rules prevent that — `white-space: pre-wrap`, a hanging indent per *logi
 mid-word by measured length; applying it to every cell shrinks narrow columns until two-digit
 numbers stack vertically.
 
-**Every artifact in `docs/` is now covered by the table above — no hand export survives.** Two did
-until 2026-09-16, and both were deleted for the same reason: a hand export of a file that keeps
-changing is stale within days, and a stale copy does not merely go out of date, it keeps publishing
-what the current text retracted. `DEVELOPER_GUIDE.docx` had drifted eight commits behind this
-document and still described a plugin-overhead method since withdrawn. `openapi.yaml.pdf` was a
-35-page LibreOffice Writer print of `openapi.yaml`, verified character-identical to it at deletion
-(whitespace-blind, 26,941 characters each) — so it carried nothing the source did not, while its
-wrapped lines and injected page headers made it unusable *as* YAML. Add nothing back here by hand:
-if you need another format, convert on the spot (`pandoc docs/DEVELOPER_GUIDE.md -o /tmp/guide.docx`)
-and leave the result out of the repo. The OpenAPI documents themselves — `docs/openapi.json` / `docs/openapi.yaml` — are dumps of the schema
+**Every artifact in `docs/` is covered by the table above, and it is worth keeping that way: if no
+generator rebuilds it, don't commit it.** A hand-made export does not merely go out of date — it
+keeps publishing what the current text has retracted, and nothing in the build output will tell you.
+That is why there is no Word copy of this guide and no rendered PDF of the OpenAPI documents. If you
+need another format, convert on demand (`pandoc docs/DEVELOPER_GUIDE.md -o /tmp/guide.docx`) and
+leave the result out of the repo. The OpenAPI documents themselves — `docs/openapi.json` / `docs/openapi.yaml` — are dumps of the schema
 `_install_openapi()` builds in [`src/autobench/app.py`](../src/autobench/app.py) rather than
 hand-written text, but no dump script is committed either: refresh them from a running Service's
 `/openapi.json`.
