@@ -63,8 +63,11 @@ def _lost(x):
 
     The primary signal is structural, because it holds under any model and any agent version: every
     tool call must be decided by a preceding model turn, so `llm_count <= 1` alongside
-    `tool_count >= 2` is impossible for a task that genuinely made those tool calls. Verified against
-    all 272 rows of the v1.23 matrices: it flags exactly the 15 damaged rows and no healthy one.
+    `tool_count >= 2` is impossible for a task that genuinely made those tool calls. Sensitivity was
+    verified on the v1.23 matrices, the last pair that actually carried the defect: over all 272 rows
+    it flagged exactly the 15 damaged ones and no healthy one. That pair is still the only positive
+    evidence available — the loss was fixed in exgentic 0.3.5.dev145, so the current v1.28 matrices
+    can only re-check specificity, and do: 0 of 267 rows flagged, with none damaged to find.
     Healthy rows may still have `tool_count > llm_count` — up to +21 on appworld — which is why a
     plain `tool > llm` test is NOT usable.
 
@@ -77,8 +80,9 @@ def _lost(x):
     reported `llm_count == 1` — which the `llm_count == 0` test cannot see, and which is why the
     structural pair test was needed in the first place. As of 0.3.5.dev145 the probe is *replaced*
     (not deleted) by an unbilled `GET /v1/models` reachability check, which emits no `chat` span —
-    measured absent across all 869 chat spans of a full 12-leg matrix, all four model classes — so a
-    damaged task now drops to zero `chat` spans. Both clauses are kept: the completion probe is still
+    measured absent across all 1,895 chat spans of the v1.28 pair (1,122 OpenShift + 773 KinD), all
+    four model classes, not one carrying `request_max_tokens=1` — so a damaged task now drops to zero
+    `chat` spans. Both clauses are kept: the completion probe is still
     reachable via `strict=True` in the agent's `health.py`, so a future config could reintroduce it,
     and the structural test is the one that survives either way.
 

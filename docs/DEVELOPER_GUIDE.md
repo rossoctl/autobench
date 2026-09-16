@@ -943,44 +943,77 @@ export BM_ISS=https://keycloak-keycloak.apps.ykt2.hcp.res.ibm.com/realms/rossoct
 export BM_PASSWORD_FILE="$HOME/.rossoctl-ykt3/benchmarker.pass"
 export BM_INSECURE=1
 export BM_CARD_TEMPLATE="https://{service}-{namespace}.apps.ykt2.hcp.res.ibm.com/.well-known/agent-card.json"
-export BM_LABEL=ocp-v124
+export BM_LABEL=ocp-dev146
 
-python3 reference/run-12.py            # ~1h55m; log it: ... 2>&1 | tee /tmp/run12-ocp.log
+# Space the legs that share prompts past the LLM gateway's completion cache, and interleave the
+# cache groups so the gaps overlap real work instead of being slept through. Without these two the
+# matrix still runs -- and its latency and output-token columns are partly replays. See below.
+export BM_CACHE_GAP=900
+export BM_ORDER=1,12,2,10,3,11,5,9,6,4,7,8
+
+python3 reference/run-12.py            # ~2h10m; log it: ... 2>&1 | tee /tmp/run12-ocp.log
 ```
+
+**`BM_CACHE_GAP` defaults to `0`, and that default silently costs you two columns.** The gateway
+caches completions keyed on the request body for **~10 minutes** (measured by survival curve), and
+task selection is deterministic, so legs #1–#3 and #5–#8 all open with the *same* five gsm8k
+prompts — a later leg is served the earlier leg's completions, replaying its `usage` and measuring a
+cache lookup instead of a call. Input tokens and pass rates are unaffected; **per-call latency and
+output tokens are not comparable across those legs** unless they are spaced. `900` gives a 50%
+margin, only the *shortfall* is slept, and an interleaving `BM_ORDER` is what keeps the cost down:
+the v1.28 matrices slept **33 minutes** per platform on top of ~1h35m of leg time, where the
+spec-file order would have slept about twice that. **Latency is the wrong detector for a replay** —
+one measured replay took 3.0 s, the same as a miss — so compare response `id`s, not durations.
 
 It ends with a per-leg summary and the state file path:
 
 ```
-[21:03:57] === done in 6884s; 12 runs -> /tmp/autobench/run12-ocp-v124.json
+[21:03:57] === done in 7845s; 12 runs -> /tmp/autobench/run12-ocp-dev146.json
 [21:03:57]   #1  gsm8k     succeeded      pass=1.0   tasks=1
 [21:03:57]   #2  gsm8k     succeeded      pass=1.0   tasks=10
 ...
 [21:03:57]   #12 appworld  succeeded      pass=0.0   tasks=20
 ```
 
-Then turn that state file into the three documents (all numbers derived from the mirrored
+Then turn that state file into the two documents (all numbers derived from the mirrored
 artifacts — nothing transcribed):
 
 ```bash
 # 1. the 12-run report. <date> is the date the RUNS executed, from the modal run_id prefix.
-python3 reference/gen-12run-report.py /tmp/autobench/run12-ocp-v124.json v1.24 \
-  "OpenShift — Service on ykt3, workloads on ykt2" results/12run-report-v1.24-20260901-ocp.md
+python3 reference/gen-12run-report.py /tmp/autobench/run12-ocp-dev146.json v1.28 \
+  "OpenShift — ykt3 Service, ykt2 workloads (cross-cluster)" \
+  results/12run-report-v1.28-20260915-ocp.md
 
 # 2. OCP vs KinD, once both matrices exist
 python3 reference/gen-12run-comparison.py \
-  /tmp/autobench/run12-ocp-v124.json OCP \
-  /tmp/autobench/run12-kind-v124.json KinD v1.24 \
-  results/12run-comparison-v1.24-20260902.md
+  /tmp/autobench/run12-ocp-dev146.json "OpenShift (ykt3 Service, ykt2 workloads)" \
+  /tmp/autobench/run12-kind-dev146.json "KinD (single-node local)" v1.28 \
+  results/12run-comparison-v1.28-20260915.md
+```
 
-# 3. AuthBridge plugin overhead. The judge log is what tells it how many tool calls were actually
-#    authorized — without it, per-preset medians mix judged and unjudged calls and mislead.
+**Do not mine plugin overhead out of this matrix.** `reference/gen-plugin-overhead.py` does exactly
+that — it compares the no-plugin leg #3 against the preset legs #5–#8 — and it is kept only because
+its source comments record why the approach fails. The canonical matrix runs each preset **once at
+`max_tasks=5` in a fixed order**, which cannot separate a plugin's cost from run-order drift, and its
+cross-benchmark projection was falsified **in both directions** (over-estimating by 2.2× on one
+cluster, under-estimating by 2.2× on the other). Its per-layer figures are withdrawn, not corrected.
+The designed replacement is a separate 13-leg experiment with its own spec file, reversed-order
+replicates and n=50 — see [PLUGIN_OVERHEAD.md](PLUGIN_OVERHEAD.md) for the findings and
+`reference/gen-plugin-study.py` / `gen-plugin-study-xplat.py` for the generators:
+
+```bash
+BM_SPECS=reference/plugin_study_specs.json BM_LABEL=pstudy-ocp-v128 \
+  BM_CACHE_GAP=900 BM_ORDER=111,112,101,102,103,104,105,113,106,107,108,109,110 \
+  python3 reference/run-12.py        # ~3h40m, most of it cache gaps; detach it
+
+# The judge log is what tells the analyzer how many tool calls were actually authorized —
+# without it, per-preset medians mix judged and unjudged calls and mislead.
 oc -n rossoctl-system logs deploy/ibac-judge --since=6h --timestamps \
   | grep -vi healthz | awk '{print $1}' > /tmp/judge-ocp.ts
-PEER_JSON=/tmp/autobench/run12-kind-v124.json PEER_LABEL="single-node KinD" \
-PEER_JUDGE_TS=/tmp/judge-kind.ts \
-python3 reference/gen-plugin-overhead.py /tmp/autobench/run12-ocp-v124.json v1.24 \
-  "OpenShift — Service on ykt3, workloads on ykt2" \
-  results/12run-plugin-overhead-v1.24-20260901-ocp.md /tmp/judge-ocp.ts
+python3 reference/gen-plugin-study.py /tmp/autobench/run12-pstudy-ocp-v128.json \
+  reference/plugin_study_specs.json v1.28 \
+  "OpenShift — ykt3 Service / ykt2 workloads" \
+  results/12run-plugin-study-v1.28-20260915-ocp.md /tmp/judge-ocp.ts
 ```
 
 Switching to KinD is the same three-line change as §6.1 plus a new label:
@@ -990,17 +1023,22 @@ export BM_BASE=http://autobench.localtest.me:8080
 export BM_ISS=http://keycloak.localtest.me:8080/realms/rossoctl
 export BM_PASSWORD_FILE="$HOME/.rossoctl-kind/benchmarker.pass"
 unset BM_INSECURE BM_CARD_TEMPLATE
-export BM_LABEL=kind-v124
-python3 reference/run-12.py            # ~1h55m on a single node too
+export BM_LABEL=kind-dev146
+python3 reference/run-12.py            # ~2h13m on a single node too
 ```
 
-**Run the two platforms sequentially, not in parallel** — they share the external LLM gateway, so
-overlapping them makes the wall-time comparison meaningless.
+**Run the two platforms sequentially, not in parallel.** Each platform has its *own* litellm
+deployment — hence its own completion cache and its own key table, which is why a key copied between
+them always 401s — but the **same upstream model providers** sit behind both. Concurrent runs
+therefore contend exactly where it matters and the latency numbers stop meaning anything.
 
 Other knobs, all optional:
 
 | Variable | Default | Use |
 |---|---|---|
+| `BM_CACHE_GAP` | `0` | seconds a (benchmark, model) prompt set must rest between legs so the gateway's completion cache expires. **Set it to `900`** — the default measures replays on legs #1–#3 and #5–#8 |
+| `BM_ORDER` | the spec file's | comma-separated execution order. Interleave the cache groups (`1,12,2,10,3,11,5,9,6,4,7,8`) so `BM_CACHE_GAP` overlaps real work: 33 min slept instead of ~68 |
+| `BM_SPECS` | `reference/run12_specs.json` | an alternate spec file, so an experiment reuses this driver without touching the canonical matrix. Accepts a bare list of legs or `{"order": [...], "legs": [...]}` |
 | `BM_ONLY` | all 12 | comma-separated leg numbers, e.g. `BM_ONLY=7` to re-run one leg, `BM_ONLY=1,2,3` for a smoke pass |
 | `BM_STABLE_POLLS` | `4` | consecutive ready polls required before a run is submitted |
 | `BM_SETTLE_PLAIN` / `BM_SETTLE_SIDECAR` | `15` / `45` | post-ready settle seconds; sidecar deploys need longer |
