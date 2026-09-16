@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-16T15:04:47Z
+**Last modified:** 2026-09-16T15:54:34Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -393,6 +393,36 @@ Run fields (`RunRequest`) are all **run-time** knobs:
 | `timeout_seconds` | `300` | whole-run wall-clock ceiling; raise for large tau2 runs |
 | `agent` / `namespace` / `experiment` | — | must match a deployed agent |
 | `model` | `null` | **not** forwarded per-session; model is fixed at deploy time |
+
+> **What `max_tasks: N` actually means.** N **independent episodes against one deployment** — not one
+> long session, and not N deploys. The runner fetches the task list, slices off the first N, and for
+> each id runs the same three-step sequence — `MCP.CreateSession` → `Agent.Call` (A2A `send_prompt`) →
+> `Evaluator.Evaluate` — inside its own `Agent.Session` OTEL span keyed by that `task_id`
+> (`runner/engine.py`). Nothing carries over between tasks: no shared conversation, no shared MCP
+> session, no ordering dependence. Failures are isolated per task (each `_one` has its own
+> `asyncio.timeout` and the batch is gathered with `return_exceptions=True`), so one wedged task costs
+> you that task, not the run — and the summary is republished after **every** task, so even a run the
+> wall clock kills leaves usable partial results. That independence is what makes `pass_rate =
+> evaluated_pass / total` a rate rather than an average of correlated trials.
+>
+> `max_tasks` is **how many**; `max_parallel_sessions` is **how many at once** (a separate semaphore).
+> They are orthogonal: `max_tasks: 50, max_parallel_sessions: 4` is fifty problems with four in
+> flight. The agent and MCP pods are shared by all N tasks, which is what makes a multi-task run cheap
+> relative to its task count — and also why per-task *latency* from a short run is dominated by the
+> first concurrency wave's warm-up.
+
+> **`max_tasks: 1` against a 114-task pool is not an error either** — it is the same slice seen from
+> the other side. You get `task_id` `0` and only `task_id` `0`; the other 113 are never created, and
+> nothing reports them as skipped. Both directions of mismatch are silent, and `summary.total` is the
+> one field that tells you what actually ran: your number when you under-ask, the pool size when you
+> over-ask. The habit to build: **a 1-task run is a smoke test, not a measurement.** It proves the
+> deploy, auth, LLM reachability and telemetry path work end to end — that is exactly why leg #1 of
+> the canonical matrix is one gsm8k task — but it says nothing about capability, because it is a
+> single pass/fail on the *same* problem every time. Because the slice is a prefix, every leg of a
+> benchmark re-runs that first task: legs #1 ⊂ #2 ⊂ #3, and #5–#8 are all the same first five. That
+> is deliberate — it is what makes legs comparable across configurations and clusters — but it has a
+> sharp edge: legs sharing prompts also share the LLM gateway's completion cache, so they must be
+> spaced ([§6.4](#64-the-whole-12-run-matrix-in-one-command-referencerun-12py)).
 
 > **`max_tasks` above the benchmark's task pool is not an error.** The runner asks the MCP for the
 > task list and slices it — `task_ids[:max_tasks]` — so a request for more tasks than exist yields
@@ -843,6 +873,8 @@ concurrently. Task selection is **deterministic**, so `--tasks 1` runs the *same
 time — which is why it is the standard smoke test (a 1-task gsm8k run reproduces 320 input / 87
 output tokens). Set `--task-timeout` on multi-turn work: without it one wedged task can consume the
 entire `--timeout`, which is why the canonical matrix gives tau2 600s per task under a 2100s wall.
+§5.3 has the semantics in full — what a multi-task run is, and why both over- and under-asking on
+`--tasks` are silent.
 
 **Where it goes.** `--namespace` (`team1`), `--agent` (`tool_calling`), `--experiment` (`default`)
 form the scope that `deploy`/`wait`/`teardown` address.
