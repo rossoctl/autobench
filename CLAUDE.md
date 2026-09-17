@@ -147,5 +147,8 @@ Assisted-By: Claude Opus 5 <noreply@anthropic.com>
 Signed-off-by: Your Name <you@example.com>
 ```
 
-Commits before `dfa9af8` use the wrong trailer; they stay as they are, because fixing 46 of 61
-commits means rewriting nearly the whole history of a pushed branch.
+The 46 commits that carried `Co-Authored-By` were rewritten on 2026-09-17 (`git filter-branch
+--msg-filter`, trailer key substituted, everything else byte-identical: same trees, same author and
+committer identities and dates) and force-pushed. **So SHAs before that rewrite are stale** — a
+pre-rewrite hash quoted in an issue, a doc or a report resolves to nothing. If you ever need the old
+history it is a local ref only, `refs/original/refs/heads/main`, on the machine that did it.
