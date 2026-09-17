@@ -111,14 +111,17 @@ def per_task(platforms):
                 a["legs"].add((P["label"], leg["n"]))
     order = {"gsm8k": 0, "tau2": 1, "appworld": 2}
     L += [f"{'bench':9} {'model':30} {'n':>4} {'in tok':>9} {'out tok':>8} "
-          f"{'$/task':>10} {'$/100 tasks':>12}"]
-    L += ["-" * 88]
+          f"{'$/task':>10} {'$/100 tasks':>12} {'in % of $':>10}"]
+    L += ["-" * 99]
     rank = sorted(agg.items(), key=lambda kv: (order.get(kv[0][0], 9), kv[0][1]))
     for (bench, model), a in rank:
         mc = st.mean(a["c"])
+        # Input's share of the bill is what decides how much an unmodelled cache discount
+        # could move this row. Carried here so section 6 does not have to recompute it.
+        a["in_share"] = (st.mean(a["in"]) * PRICES[model]["input_per_1m"] / 1e6) / mc
         L += [f"{bench:9} {PRICES[model]['public_name']:30} {len(a['c']):>4} "
               f"{st.mean(a['in']):>9,.0f} {st.mean(a['out']):>8,.0f} "
-              f"{money(mc):>10} {money(mc * 100):>12}"]
+              f"{money(mc):>10} {money(mc * 100):>12} {a['in_share'] * 100:>9.0f}%"]
     cheapest, cheap_cost = min(((k, st.mean(v["c"])) for k, v in agg.items()),
                               key=lambda kv: kv[1])
     L += ["", f"Multiples of the cheapest row above "
@@ -236,6 +239,46 @@ def unbilled(platforms, agg, cheap_cost, cheapest):
     return L
 
 
+def cache_exposure(agg):
+    """How wrong could the input side be if the gateway discounts cached input?
+
+    We know the accounting EXISTS -- a probe of the gateway returns
+    `usage.prompt_tokens_details.cached_tokens` -- but not whether the rate card
+    discounts it, and `report.ndjson` records one undifferentiated
+    `llm_input_tokens`, so no run of ours can be re-priced after the fact. What is
+    computable is the size of the exposure: it is bounded by input's share of the bill,
+    which differs by nearly 5x across our benchmarks.
+    """
+    L = section("6. The unmodelled cache discount, bounded")
+    L += ["The gateway REPORTS cached input (`usage.prompt_tokens_details.cached_tokens`,",
+          "verified by probe); whether the rate card discounts it is not published on the",
+          "model pages, and `report.ndjson` carries a single undifferentiated",
+          "`llm_input_tokens` -- so a past run cannot be re-priced. The exposure is capped by",
+          "input's share of the bill, and a full 100% discount is the worst case:", ""]
+    order = {"gsm8k": 0, "tau2": 1, "appworld": 2}
+    L += [f"{'bench':9} {'model':30} {'in % of $':>10} {'$/task':>10} "
+          f"{'floor if input were free':>26}"]
+    L += ["-" * 90]
+    for (bench, model), a in sorted(agg.items(), key=lambda kv: (order.get(kv[0][0], 9), kv[0][1])):
+        mc = st.mean(a["c"])
+        L += [f"{bench:9} {PRICES[model]['public_name']:30} {a['in_share'] * 100:>9.0f}% "
+              f"{money(mc):>10} {money(mc * (1 - a['in_share'])):>26}"]
+    hi = max(agg.items(), key=lambda kv: kv[1]["in_share"])
+    lo = min(agg.items(), key=lambda kv: kv[1]["in_share"])
+    # Name the model, not just the benchmark: gsm8k appears twice here and its two models
+    # sit at opposite ends of this table.
+    L += ["",
+          f"So the figures are most fragile on {hi[0][0]}/{PRICES[hi[0][1]]['public_name']} "
+          f"({hi[1]['in_share'] * 100:.0f}% of its cost is input) and most solid on "
+          f"{lo[0][0]}/{PRICES[lo[0][1]]['public_name']} ({lo[1]['in_share'] * 100:.0f}%).",
+          "That ordering is not a coincidence: caching pays off on a long conversation whose",
+          "prefix is re-sent every call, which is exactly the pattern that makes input",
+          "dominate the bill. A single-call gsm8k prompt of a few hundred tokens is both",
+          "cheap on the input side AND below the prefix length at which the vendors document",
+          "automatic caching, so its number is the one to trust."]
+    return L
+
+
 def main(argv):
     mirror = pathlib.Path("/tmp/autobench")
     specs = []
@@ -261,6 +304,7 @@ def main(argv):
     L += per_leg(platforms)
     L += model_compare(platforms)
     L += unbilled(platforms, agg, cheap_cost, cheapest)
+    L += cache_exposure(agg)
     print("\n".join(L))
 
 
