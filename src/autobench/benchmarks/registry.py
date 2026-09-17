@@ -355,10 +355,13 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
         ],
         # Multi-turn: the MCP pod runs a user-simulator LLM (model injected by build_tool_request).
         user_simulator=True,
-        # claude-sonnet-5 is strong AND fast here: it triples the pass rate over the instance
-        # default gpt-5-mini (0.1 -> 0.30, 0 errors, all 10 tasks completed) without the timeout
-        # regression seen with the slower reasoning model gpt-5 (6/10 "timed out"). Validated
-        # 2026-08-31. Beats the instance default but an explicit per-run model still overrides it.
+        # claude-sonnet-5 is strong AND fast here: it lifts the pass rate far above the instance
+        # default gpt-5-mini (~0.1 on the same 10 tasks) without the timeout regression seen with the
+        # slower reasoning model gpt-5 (6/10 "timed out"). Validated 2026-08-31 with 0 errors and all
+        # 10 tasks completed; the v1.28 matrix measures 0.90 (OpenShift) and 1.00 (KinD) on that same
+        # 10-task prefix, so treat those as the current figures -- an earlier version of this comment
+        # claimed 0.30, which nothing since has reproduced. See docs/BENCHMARKS_PRIMER.md, "tau2".
+        # Beats the instance default but an explicit per-run model still overrides it.
         model_override="openai/aws/claude-sonnet-5",
         tool_resources=_TOOL_RESOURCES,
         agents={

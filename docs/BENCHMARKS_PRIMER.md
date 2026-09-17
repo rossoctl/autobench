@@ -173,8 +173,12 @@ A few things that trip people up:
 - **But output is usually the more *variable* direction** — OUT CV > IN CV in **15 of the 22 v1.28
   legs that ran more than one task**. This corrects an earlier claim here that input variance is
   always wider; it is not. On single-turn gsm8k the prompt is near-constant (IN CV 0.06–0.10 on the
-  gpt-5-mini legs) while answer length swings with how much the model reasons (OUT CV 0.49–0.86), so
-  output varies ~8× more in relative terms. Only long-horizon **appworld** inverts it in every leg
+  gpt-5-mini legs that ran clean) while answer length swings with how much the model reasons (OUT CV
+  0.49–0.86), so output varies ~8× more in relative terms. **One errored task is enough to break that
+  IN range**: OCP leg #6 (`ibac-only`, 2 of 5 tasks errored) carries a row with `llm_input_tokens = 0`
+  from a task that failed before its first model call, which lifts that leg alone to IN CV 0.51. That
+  is the legitimate zero — not the telemetry bug two bullets down — so read the error count beside a
+  CV before believing it. Only long-horizon **appworld** inverts it in every leg
   (IN CV 0.15–0.69 against OUT CV 0.13–0.52), because its tasks differ enormously in turn count and
   compounding context then dominates. Don't assume a direction — check the CV columns.
 - **Task selection is deterministic.** A run takes the first `max_tasks` tasks, so the same
