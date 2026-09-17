@@ -19,7 +19,11 @@ Rossoctl over `httpx`.
 
 **gsm8k** (single-turn arithmetic reasoning — the smoke test), **tau2** (multi-turn dialogue with a
 server-side user simulator), and **appworld** (long-horizon app automation). See
-[docs/BENCHMARKS_PRIMER.md](docs/BENCHMARKS_PRIMER.md).
+[docs/BENCHMARKS_PRIMER.md](docs/BENCHMARKS_PRIMER.md) — including
+[which one to pick](docs/BENCHMARKS_PRIMER.md#picking-a-benchmark) and
+[what a run of it costs](docs/BENCHMARKS_PRIMER.md#what-a-run-costs) in tokens and minutes, measured.
+They are not interchangeable: a tau2 task costs ~179× the tokens of a gsm8k task and an appworld task
+~567×.
 
 ## Getting started
 
