@@ -137,3 +137,15 @@ outputs — and `span_report.*` publishes a fixed whitelist of fields for that r
 
 Push directly to `main` while there is a single committer; open a PR once that changes.
 Sign off commits (DCO is enforced on the upstream repos this work feeds).
+
+Attribute AI assistance with **`Assisted-By:`**, never `Co-Authored-By:` — GitHub reads the latter as
+a structural trailer and adds a second *author* to the commit and to the repo's contributor stats.
+So a message ends:
+
+```
+Assisted-By: Claude Opus 5 <noreply@anthropic.com>
+Signed-off-by: Your Name <you@example.com>
+```
+
+Commits before `dfa9af8` use the wrong trailer; they stay as they are, because fixing 46 of 61
+commits means rewriting nearly the whole history of a pushed branch.
