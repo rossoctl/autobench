@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-17T16:03:12Z
+**Last modified:** 2026-09-17T21:59:56Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -170,13 +170,13 @@ tool calls occurred. Cost figures for each layer: [`PLUGIN_OVERHEAD.md`](./PLUGI
 
 ### Picking a benchmark, and what a run costs
 
-| If you want to… | use |
-|---|---|
-| check a cluster/deploy/auth/telemetry path works | **gsm8k**, 1–10 tasks |
-| exercise concurrency and volume cheaply | **gsm8k**, 50 tasks at `max_parallel_sessions=4` |
-| compare models meaningfully | **tau2** (it discriminates; gsm8k saturates at ~1.0) |
-| stress long contexts, long tasks, timeouts | **appworld** |
-| get a fast signal that nothing regressed | **gsm8k** — if it fails, stop and fix infrastructure |
+| If you want to… | use | costs about |
+|---|---|---:|
+| check a cluster/deploy/auth/telemetry path works | **gsm8k**, 1–10 tasks | < $0.01 |
+| exercise concurrency and volume cheaply | **gsm8k**, 50 tasks at `max_parallel_sessions=4` | $0.02 |
+| compare models meaningfully | **tau2** (it discriminates; gsm8k saturates at ~1.0) | $1.70 / 10 tasks |
+| stress long contexts, long tasks, timeouts | **appworld** | $1.90–2.80 / 5 tasks |
+| get a fast signal that nothing regressed | **gsm8k** — if it fails, stop and fix infrastructure | < $0.01 |
 
 **What one task costs.** Pooled over the 267 task rows of the published v1.28 pair
 ([`docs/results/v1.28-2026-09-15/`](results/v1.28-2026-09-15/)); `latency` is the median, tokens are
@@ -188,32 +188,65 @@ the mean:
 | input tokens | 341 | 90,902 | 269,953 |
 | output tokens | 180 | 2,061 | 25,140 |
 | **total tokens** | **520** | **92,963** | **295,093** |
-| × a gsm8k task | 1× | 179× | 567× |
+| × a gsm8k task, in **tokens** | 1× | 179× | 567× |
+| **cost at our gateway's rates** | **$0.00055** | **$0.154** | **$0.589** |
+| × a gsm8k task, in **dollars** | 1× | 279× | 1,069× |
+| cost of 100 tasks | $0.06 | $15.38 | $58.88 |
 | input share of tokens | 66% | 98% | 92% |
+| input share of **cost** | 31% | 90% | 57% |
 | median task latency | 4.9 s | 84 s | 264 s |
 | …of it inside model calls | 90% | 58% | 96% |
 | pass rate | 0.97 | 0.83 | 0.00 |
 | tokens per **passed** task | 537 | ~112 K | no finite value |
 
+**Money amplifies the ladder rather than tracking it**, because the harder benchmarks also run the
+dearer models: tau2 is 179× a gsm8k task in tokens but **279×** in dollars, appworld 567× but
+**1,069×**. Any budget scaled off the token ratios is short by 1.6–1.9×. And **the cost share, not the
+token share, names the cost driver** — output is priced 4–8× input everywhere, so input is 66% of
+gsm8k's tokens but only 31% of its bill. Only tau2 is genuinely input-dominated in money (90%), and it
+is the one benchmark where a cheaper-input model really does beat a terser one.
+
+The dollar rows cover 266 of the 267 rows: one task on OpenShift leg #6 died before its first model
+call, so it carries `model: unknown` and no cost.
+
+**The rate card.** Read off the LiteLLM admin UI's per-model pages on **2026-09-17** and kept in
+[`reference/model_prices.json`](../reference/model_prices.json), which is the single source every
+figure here is computed from — no generator hardcodes a price. **These are our gateway's posted rates,
+not an invoice and not a vendor's list price.**
+
+| model | provider | in $/1M | out $/1M | out/in | used by |
+|---|---|---:|---:|---:|---|
+| `Azure/gpt-5-mini-2025-08-07` | azure | 0.25 | 2.00 | 8.0× | gsm8k default |
+| `gemini-2.5-pro` | vertex_ai | 1.25 | 10.00 | 8.0× | appworld |
+| `aws/claude-sonnet-5` | bedrock | 1.52 | 7.60 | 5.0× | tau2 |
+| `Azure/gpt-4.1` | azure | 2.00 | 8.00 | 4.0× | leg #4, **and the IBAC judge** |
+
+```sh
+# regenerate every dollar figure in this section rather than editing one
+python3 reference/gen-cost-analysis.py /tmp/autobench/run12-{ocp,kind}-dev146.json
+```
+
 **What one leg costs.** Measured totals for the canonical legs (§6.4), both platforms:
 
-| leg | tokens (OpenShift) | tokens (KinD) |
-|---|---:|---:|
-| #1 gsm8k, 1 task | 470 | 790 |
-| #2 gsm8k, 10 tasks | 5.1 K | 5.1 K |
-| #3 gsm8k, 50 tasks `p=4` | 25 K | 24 K |
-| #9 tau2, 10 tasks | 1.01 M | 1.04 M |
-| #10 tau2, 20 tasks `p=4` | 1.74 M | 1.78 M |
-| #11 appworld, 5 tasks | 1.49 M | 0.93 M |
-| #12 appworld, 20 tasks `p=4` | 5.71 M | 2.20 M |
-| **all 12 legs** | **10.0 M** | **6.0 M** |
+| leg | tokens (OpenShift) | $ (OpenShift) | tokens (KinD) | $ (KinD) |
+|---|---:|---:|---:|---:|
+| #1 gsm8k, 1 task | 470 | $0.0004 | 790 | $0.0010 |
+| #2 gsm8k, 10 tasks | 5.1 K | $0.0046 | 5.1 K | $0.0047 |
+| #3 gsm8k, 50 tasks `p=4` | 25 K | $0.0225 | 24 K | $0.0212 |
+| #9 tau2, 10 tasks | 1.01 M | $1.66 | 1.04 M | $1.73 |
+| #10 tau2, 20 tasks `p=4` | 1.74 M | $2.90 | 1.78 M | $2.94 |
+| #11 appworld, 5 tasks | 1.49 M | $2.79 | 0.93 M | $1.90 |
+| #12 appworld, 20 tasks `p=4` | 5.71 M | $11.52 | 2.20 M | $4.40 |
+| **all 12 legs** | **10.0 M** | **$18.91** | **6.0 M** | **$11.02** |
 
-**Budget by benchmark, not by task count.** All eight gsm8k legs together are **0.4%** of the
-matrix's token bill (0.8% on KinD), while appworld's two legs are **72%** of it (52% on KinD) — a
-50-task gsm8k leg is cheaper than one appworld *task*. And the same request body is not the same bill
-on two clusters: #12 cost 2.6× more on OpenShift, because appworld turn counts are nondeterministic
-and the slower cluster's tasks ran longer before the 600 s per-task timeout. Size appworld against
-your own cluster.
+**Budget by benchmark, not by task count.** All eight gsm8k legs together are **0.2%** of the
+matrix's bill on OpenShift and 0.4% on KinD; appworld's two legs are **76%** and 57%; tau2's two are
+24% and 42%. A 50-task gsm8k leg costs 2 cents — less than one twenty-fifth of a single appworld task.
+And the same request body is not the same bill on two clusters: #12 cost 2.6× more on OpenShift,
+because appworld turn counts are nondeterministic and the slower cluster's tasks ran longer before the
+600 s per-task timeout. That is also why the two matrix totals are not a platform comparison —
+OpenShift completed 18 appworld tasks against KinD's 10, so it did more work, not just dearer work.
+Size appworld against your own cluster.
 
 **Model choice is a cost decision too.** Legs #4 and #5 ran the **identical five gsm8k tasks** at
 `p=4`, differing only in model:
@@ -223,34 +256,40 @@ your own cluster.
 | pass rate (OpenShift / KinD) | 0.80 / 1.00 | 1.00 / 1.00 |
 | LLM calls per task | 2.8 – 3.0 | 1.0 |
 | input tokens per task | 775 – 837 | 313 |
-| output tokens per task | 57 – 63 | 137 – 355 |
-| total tokens per task | 832 – 900 | 450 – 668 |
+| output tokens per task | 57 – 63 | 125 – 368 |
+| total tokens per task | 832 – 900 | 438 – 681 |
 | median task latency | 10.4 – 10.8 s | 11.2 – 16.4 s |
+| **cost per task** | **$0.0020 – 0.0022** | **$0.00033 – 0.00081** |
 
 The reasoning model answers in **one** call; gpt-4.1 takes ~3 tool round-trips, so it sends 2.6× the
-input and emits about a quarter of the output. **Which one is cheaper therefore depends on your price
-ratio, not on the token totals**: equating the two bills solves for break-even at
-`P_out / P_in ≈ 2.7` (the two platforms bracket it at 1.8 and 5.8, because gpt-5-mini's output swings
-with reasoning effort). Above that ratio gpt-4.1 is the cheaper choice; below it, gpt-5-mini. In
-money terms:
+input and emits about a quarter of the output. **gpt-4.1 costs 4.1× gpt-5-mini on this identical
+work** — mean of its 2 legs against gpt-5-mini's 7, the ratio spanning 2.5–6.7× depending on which
+pair of legs you compare, because gpt-5-mini's output length swings with reasoning effort. On our card
+the input side decides it alone: 2.6× the tokens at 8× the price is a **21×** input bill, and the
+output side cannot offset it (gpt-5-mini emits 3.6× more output at a quarter the rate, so the two
+output bills land within 10% of each other).
+
+**Which model is cheaper is a property of your price list, not of the models.** Compute it rather than
+inheriting our answer:
 
 ```
 cost per task  =  (input_tokens × P_in  +  output_tokens × P_out) / 1e6
 ```
 
-We publish the token counts and no prices: the gateway does not bill us, so any dollar figure here
-would be someone else's rate card. Note which term dominates — for tau2 and appworld the bill *is*
-the input side, so the cost driver is turn count and context compounding rather than verbosity, and a
-cheaper-input model beats a terser one.
-
-**Every number above is a floor, for four reasons.** A task killed by `task_timeout_seconds` burns
+**Every number above is a floor, for five reasons.** A task killed by `task_timeout_seconds` burns
 tokens but leaves no `report.ndjson` row, so appworld's 15 timed-out tasks are missing from these
 totals. tau2's user simulator runs in the **MCP** pod, which is not instrumented — its inference is
 billed by the gateway and counted nowhere here (the tell: 27% of a tau2 task's wall time sits inside
 tool calls, against <1% for the other two, and every `chat` span carries the *agent's* model). A leg
 that replays the gateway's completion cache re-reports stored `usage` for calls that were never made
-upstream, so a cache-contaminated leg can also read *high*. And plugins add judge calls that are
-billed but not in the agent's spans — see [`PLUGIN_OVERHEAD.md`](./PLUGIN_OVERHEAD.md).
+upstream, so a cache-contaminated leg can also read *high*. Plugins add judge calls that are billed
+but not in the agent's spans: the IBAC judge runs `Azure/gpt-4.1` on a fixed 1,577-char system prompt,
+so **≥ $0.00111 per authorized tool call** — 2.4× the whole gsm8k task it guards, and 1.4–4.4× the
+agent's own bill across legs #6–#8 (see [`PLUGIN_OVERHEAD.md`](./PLUGIN_OVERHEAD.md)). Conversely the
+*input* figures are an upper bound: the gateway reports `usage.prompt_tokens_details.cached_tokens`
+but publishes no cached-input rate, and `report.ndjson` stores one undifferentiated
+`llm_input_tokens`, so no past run can be re-priced. If cached input were free, tau2 would floor at
+$0.0157 a task and appworld at $0.251 — the `input share of cost` row is the bound.
 
 Newcomer-facing versions of these tables, with what each benchmark actually is:
 [`BENCHMARKS_PRIMER.md`](./BENCHMARKS_PRIMER.md).

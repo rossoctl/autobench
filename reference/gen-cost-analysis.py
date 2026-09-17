@@ -155,6 +155,19 @@ def per_leg(platforms):
             L += [f"{leg['n']:>3} {leg['bench']:9} {len(pr):>5} {ti:>10,} {to:>9,} "
                   f"{money(c):>10}  {note}"]
         L += ["-" * 78, f"{'':3} {'ALL LEGS':9} {'':5} {'':10} {'':9} {money(tot):>10}", ""]
+        # Which benchmark the matrix's bill actually goes to. Quoted in the primer, so it
+        # is computed here rather than in prose.
+        share = {}
+        for leg in P["legs"]:
+            if leg["missing"]:
+                continue
+            share[leg["bench"]] = share.get(leg["bench"], 0.0) + sum(
+                cost(x["model"], x["llm_input_tokens"], x.get("llm_output_tokens") or 0)
+                for x in priced(leg["rows"]))
+        for b, c in sorted(share.items(), key=lambda kv: -kv[1]):
+            legs = sum(1 for leg in P["legs"] if leg["bench"] == b and not leg["missing"])
+            L += [f"    {b:9} {legs:>2} leg(s) {money(c):>9} = {c / tot * 100:>5.1f}% of the matrix"]
+        L += [""]
     return L
 
 
@@ -181,20 +194,28 @@ def model_compare(platforms):
         L += [f"{bench}, the same {len(ids)} task ids:", ""]
         L += [f"  {'model':30} {'platform/leg':22} {'in':>9} {'out':>8} {'$/task':>10}"]
         L += ["  " + "-" * 82]
-        rows = []
+        # Per-model MEANS across that model's legs. Comparing the dearest leg of one model
+        # to the cheapest leg of the other inflates the ratio -- these legs replicate, and
+        # gpt-5-mini's output length swings a lot between replicates.
+        rows = {}
         for label, n, model, pr in sorted(entries, key=lambda e: e[2]):
             ci = st.mean([x["llm_input_tokens"] for x in pr])
             co = st.mean([x.get("llm_output_tokens") or 0 for x in pr])
             pc = st.mean([cost(model, x["llm_input_tokens"], x.get("llm_output_tokens") or 0)
                           for x in pr])
-            rows.append((model, pc))
+            rows.setdefault(model, []).append(pc)
             L += [f"  {PRICES[model]['public_name']:30} {label + ' #' + str(n):22} "
                   f"{ci:>9,.0f} {co:>8,.0f} {money(pc):>10}"]
-        cheap = min(rows, key=lambda r: r[1])
-        dear = max(rows, key=lambda r: r[1])
-        if cheap[0] != dear[0]:
-            L += ["", f"  {PRICES[dear[0]]['public_name']} costs {dear[1] / cheap[1]:,.1f}x "
-                      f"{PRICES[cheap[0]]['public_name']} on identical work.", ""]
+        means = {m: st.mean(v) for m, v in rows.items()}
+        if len(means) > 1:
+            cheap = min(means, key=means.get)
+            dear = max(means, key=means.get)
+            lo = min(rows[dear]) / max(rows[cheap])
+            hi = max(rows[dear]) / min(rows[cheap])
+            L += ["", f"  {PRICES[dear]['public_name']} costs {means[dear] / means[cheap]:,.1f}x "
+                      f"{PRICES[cheap]['public_name']} on identical work "
+                      f"(mean of {len(rows[dear])} vs {len(rows[cheap])} legs; "
+                      f"leg-to-leg the ratio spans {lo:,.1f}x-{hi:,.1f}x).", ""]
     if not found:
         L += ["No two legs shared a task set across models.", ""]
     return L

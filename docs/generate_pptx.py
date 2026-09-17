@@ -240,7 +240,7 @@ items = [
      "6.1 the three benchmarks and the REST flow that drives them · 6.2 what each image bakes in"),
     ("The three benchmarks — what they measure",
      "7.1 the ladder · 7.2 what each stresses · 7.3 the traps · 7.4 picking one · "
-     "7.5 what it costs"),
+     "7.5 what it costs · 7.6 the rate card"),
     ("The canonical 12-run matrix",
      "8.1 what the 12 runs parameterize · 8.2 what they measured"),
     ("Cross-platform & plugin overhead",
@@ -925,6 +925,7 @@ grid(s, inch(0.45), inch(1.30), inch(12.4), inch(4.35), [
     ("Pass rate", "0.97", "0.83", "0.00"),
     ("Input tokens / task", "341", "90,902", "269,953"),
     ("Output tokens / task", "180", "2,061", "25,140"),
+    ("Cost / task, our rates", "$0.00055", "$0.154", "$0.589"),
     ("LLM calls / task", "1.1", "11.4", "29.2"),
     ("Tool calls / task", "1.1", "11.4", "14.6"),
     ("Median task latency", "4.9 s", "84 s", "264 s"),
@@ -934,8 +935,9 @@ grid(s, inch(0.45), inch(1.30), inch(12.4), inch(4.35), [
 ], col_w=[inch(2.5), inch(3.3), inch(3.3), inch(3.3)], font=11)
 _ban = box(s, inch(0.45), inch(6.05), inch(12.4), inch(0.95),
     "The scale gap is the headline: a tau2 task costs ~267x the input tokens of a gsm8k task, an "
-    "appworld task ~792x. A 50-task gsm8k run is a minute; a 20-task appworld run is 30-45 minutes "
-    "and millions of tokens. Budget by benchmark, not by task count.",
+    "appworld task ~792x — and in MONEY 279x and 1,069x, because the harder benchmarks also run the "
+    "dearer models (7.6). A 50-task gsm8k run is a minute and 2 cents; a 20-task appworld run is "
+    "30-45 minutes, millions of tokens and dollars. Budget by benchmark, not by task count.",
     LTGRAY, STORE, font=12.5, bold=True, font_color=INK)
 _ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
 
@@ -1058,41 +1060,43 @@ for i, (head, body_text) in enumerate(traps, 1):
 # to "what will this cost me", which the difficulty ladder on 7.1 gives only per task.
 s = prs.slides.add_slide(BLANK)
 title_band(s, "7.4  Picking a Benchmark — and What That Leg Costs",
-           "The actionable summary: what each benchmark is FOR, and the token bill it hands you")
+           "The actionable summary: what each benchmark is FOR, and the bill it hands you — "
+           "in tokens and in dollars")
 grid(s, inch(0.45), inch(1.30), inch(6.55), inch(2.55), [
-    ("If you want to …", "use"),
-    ("check a cluster / deploy / auth / telemetry path works", "gsm8k, 1–10 tasks"),
-    ("exercise concurrency and volume cheaply", "gsm8k, 50 tasks at p=4"),
-    ("compare models meaningfully", "tau2 — it discriminates; gsm8k saturates at ~1.0"),
-    ("stress long contexts, long tasks, timeouts", "appworld"),
-    ("get a fast signal that nothing regressed", "gsm8k — if it fails, stop and fix infrastructure"),
-], col_w=[inch(3.60), inch(2.95)], font=10.5, first_col_bold=False)
+    ("If you want to …", "use", "costs"),
+    ("check a cluster / deploy / auth / telemetry path works", "gsm8k, 1–10 tasks", "< $0.01"),
+    ("exercise concurrency and volume cheaply", "gsm8k, 50 tasks at p=4", "$0.02"),
+    ("compare models meaningfully", "tau2 — it discriminates; gsm8k saturates", "$1.70 / 10"),
+    ("stress long contexts, long tasks, timeouts", "appworld", "$1.90–2.80 / 5"),
+    ("get a fast signal that nothing regressed", "gsm8k — if it fails, fix infrastructure", "< $0.01"),
+], col_w=[inch(3.15), inch(2.30), inch(1.10)], font=10.5, first_col_bold=False)
 
 grid(s, inch(7.30), inch(1.30), inch(5.55), inch(2.55), [
-    ("leg (v1.28)", "tokens OCP", "tokens KinD"),
-    ("#1  gsm8k, 1 task", "470", "790"),
-    ("#2  gsm8k, 10 tasks", "5.1 K", "5.1 K"),
-    ("#3  gsm8k, 50 tasks p=4", "25 K", "24 K"),
-    ("#9  tau2, 10 tasks", "1.01 M", "1.04 M"),
-    ("#10  tau2, 20 tasks p=4", "1.74 M", "1.78 M"),
-    ("#11  appworld, 5 tasks", "1.49 M", "0.93 M"),
-    ("#12  appworld, 20 tasks p=4", "5.71 M", "2.20 M"),
-    ("all 12 legs", "10.0 M", "6.0 M"),
-], col_w=[inch(2.95), inch(1.30), inch(1.30)], font=10.5)
+    ("leg (v1.28)", "tok OCP", "$ OCP", "tok KinD", "$ KinD"),
+    ("#1  gsm8k, 1 task", "470", "$0.0004", "790", "$0.0010"),
+    ("#2  gsm8k, 10 tasks", "5.1 K", "$0.005", "5.1 K", "$0.005"),
+    ("#3  gsm8k, 50 tasks p=4", "25 K", "$0.023", "24 K", "$0.021"),
+    ("#9  tau2, 10 tasks", "1.01 M", "$1.66", "1.04 M", "$1.73"),
+    ("#10  tau2, 20 tasks p=4", "1.74 M", "$2.90", "1.78 M", "$2.94"),
+    ("#11  appworld, 5 tasks", "1.49 M", "$2.79", "0.93 M", "$1.90"),
+    ("#12  appworld, 20 tasks p=4", "5.71 M", "$11.52", "2.20 M", "$4.40"),
+    ("all 12 legs", "10.0 M", "$18.91", "6.0 M", "$11.02"),
+], col_w=[inch(2.15), inch(0.85), inch(0.85), inch(0.85), inch(0.85)], font=10.5)
 
 box(s, inch(0.45), inch(4.05), inch(6.55), inch(1.35),
     "Budget by benchmark, not by task count",
     LTTEAL, WORK, font=14, font_color=WORK,
-    sub="The eight gsm8k legs together are 0.4% of the matrix's token bill (0.8% on KinD). "
-        "appworld's two legs are 72% of it (52% on KinD). A 50-task gsm8k leg is cheaper than a "
-        "SINGLE appworld task — 25 K tokens against 295 K.",
+    sub="The eight gsm8k legs together are 0.2% of the matrix's bill on OpenShift (0.4% on KinD). "
+        "appworld's two legs are 76% of it (57%); tau2's two are 24% (42%). A 50-task gsm8k leg "
+        "costs 2 cents — less than a twenty-fifth of a SINGLE appworld task.",
     sub_color=INK)
 box(s, inch(7.30), inch(4.05), inch(5.55), inch(1.35),
     "Two legs of the same size are not the same bill",
     LTORANGE, KC, font=14, font_color=KC,
     sub="#12 cost 2.6x more on OpenShift than on KinD for the same 20 requested tasks: appworld "
         "turn counts are nondeterministic, and the slower cluster's tasks ran longer before the "
-        "600 s timeout. Size appworld on YOUR cluster.",
+        "600 s timeout. So the two $18.91 / $11.02 totals are NOT a platform comparison — OpenShift "
+        "completed 18 appworld tasks against KinD's 10. Size appworld on YOUR cluster.",
     sub_color=INK)
 
 _ban = box(s, inch(0.45), inch(5.60), inch(12.4), inch(1.30),
@@ -1100,29 +1104,33 @@ _ban = box(s, inch(0.45), inch(5.60), inch(12.4), inch(1.30),
     "but leaves no report row, so appworld's 15 timed-out tasks are missing from the numbers above."
     "  tau2's user simulator runs in the MCP pod, which is not instrumented — its inference is "
     "billed by the gateway and counted nowhere here.  And a leg that replays the gateway's "
-    "completion cache re-reports stored usage for calls that were never made upstream.",
+    "completion cache re-reports stored usage for calls that were never made upstream.  7.6 puts a "
+    "dollar figure on the fourth: the IBAC judge, which the agent's spans never see.",
     LTGRAY, STORE, font=12.5, bold=True, font_color=INK)
 _ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
 
 # ---- 7.5 the cost model: tokens, models, money ----------------------------------------------
-# The break-even ratio is derived, not quoted: legs #4 and #5 ran the IDENTICAL five gsm8k tasks at
-# p=4 differing only in model, so equating (in x P_in + out x P_out) between them solves for the
-# output:input price ratio at which the two cost the same. No price list needed, nothing to go stale.
+# Every dollar figure on 7.5 and 7.6 is computed by reference/gen-cost-analysis.py from the mirrored
+# report.ndjson rows of the v1.28 pair times reference/model_prices.json — the ONE place a price
+# lives. Nothing here is hand-arithmetic; regenerate rather than patch a number.
 s = prs.slides.add_slide(BLANK)
 title_band(s, "7.5  The Cost Model — Tokens, Models, Money",
-           "What a task costs, what a model choice costs, and the one ratio that decides it")
-grid(s, inch(0.45), inch(1.30), inch(6.15), inch(4.05), [
+           "What a task costs in tokens AND in dollars, and why the two rankings disagree")
+grid(s, inch(0.45), inch(1.30), inch(6.15), inch(4.55), [
     ("per task, pooled", "gsm8k", "tau2", "appworld"),
     ("LLM calls", "1.10", "11.38", "29.20"),
     ("input tokens", "341", "90,902", "269,953"),
     ("output tokens", "180", "2,061", "25,140"),
     ("total tokens", "520", "92,963", "295,093"),
-    ("x a gsm8k task", "1x", "179x", "567x"),
+    ("x a gsm8k task, in TOKENS", "1x", "179x", "567x"),
+    ("cost at our gateway's rates", "$0.00055", "$0.154", "$0.589"),
+    ("x a gsm8k task, in DOLLARS", "1x", "279x", "1,069x"),
+    ("cost of 100 tasks", "$0.06", "$15.38", "$58.88"),
     ("input share of tokens", "66%", "98%", "92%"),
+    ("input share of COST", "31%", "90%", "57%"),
     ("median task latency", "4.9 s", "84 s", "264 s"),
     ("… of it inside model calls", "90%", "58%", "96%"),
     ("pass rate", "0.97", "0.83", "0.00"),
-    ("tokens per PASSED task", "537", "112 K", "no finite value"),
 ], col_w=[inch(2.40), inch(1.25), inch(1.25), inch(1.25)], font=10.5)
 
 grid(s, inch(6.90), inch(1.30), inch(5.95), inch(2.60), [
@@ -1130,29 +1138,76 @@ grid(s, inch(6.90), inch(1.30), inch(5.95), inch(2.60), [
     ("pass rate  (OCP / KinD)", "0.80 / 1.00", "1.00 / 1.00"),
     ("LLM calls per task", "2.8 – 3.0", "1.0"),
     ("input tokens per task", "775 – 837", "313"),
-    ("output tokens per task", "57 – 63", "137 – 355"),
-    ("total tokens per task", "832 – 900", "450 – 668"),
-    ("median task latency", "10.4 – 10.8 s", "11.2 – 16.4 s"),
-], col_w=[inch(2.75), inch(1.60), inch(1.60)], font=10.5)
+    ("output tokens per task", "57 – 63", "125 – 368"),
+    ("total tokens per task", "832 – 900", "438 – 681"),
+    ("cost per task", "$0.0020 – 0.0022", "$0.00033 – 0.00081"),
+], col_w=[inch(2.55), inch(1.70), inch(1.70)], font=10.5)
 
-box(s, inch(6.90), inch(4.10), inch(5.95), inch(1.25),
-    "The token ranking and the money ranking disagree",
+box(s, inch(6.90), inch(4.10), inch(5.95), inch(1.75),
+    "Same five tasks: gpt-4.1 costs 4.1x gpt-5-mini",
     LTPURPLE, ROSSO, font=13.5, font_color=ROSSO,
-    sub="The reasoning model answers in ONE call; gpt-4.1 needs ~3 tool round-trips, so it sends "
-        "2.6x the input but emits a quarter of the output. Equating the two bills solves for "
-        "break-even at output:input ≈ 2.7x (the platforms bracket it, 1.8x–5.8x). Priced above "
-        "that ratio gpt-4.1 is cheaper; below it, gpt-5-mini.",
+    sub="Mean of its 2 legs against gpt-5-mini's 7; leg-to-leg the ratio spans 2.5x–6.7x, because "
+        "gpt-5-mini's output length swings with reasoning effort. The reasoning model answers in ONE "
+        "call; gpt-4.1 needs ~3 tool round-trips. On our card the INPUT side decides it alone — 2.6x "
+        "the tokens at 8x the price is a 21x input bill, and the output side cannot offset it "
+        "(gpt-5-mini emits 3.6x more output at a quarter the rate, so the two output bills land "
+        "within 10% of each other).",
     sub_color=INK)
 
-_ban = box(s, inch(0.45), inch(5.55), inch(12.4), inch(1.35),
-    "cost per task  =  (input tokens x P_in  +  output tokens x P_out) / 1 M     — we publish the "
-    "token counts, you supply your own rates; our gateway does not bill us, so no dollar figure "
-    "here would be ours to quote.  Two consequences of the input-share row:  for tau2 and appworld "
-    "the bill IS the input side, so the cost driver is turn count and context compounding, not "
-    "verbosity — and a cheaper-input model beats a terser one.  For gsm8k, output is a third of the "
-    "tokens and reasoning effort moves it 2.6x between clusters.",
+_ban = box(s, inch(0.45), inch(6.00), inch(12.4), inch(0.95),
+    "cost per task  =  (input tokens x P_in  +  output tokens x P_out) / 1 M     — which model is "
+    "cheaper is a property of the PRICE LIST, not of the models: compute it for your own rates.  "
+    "Money AMPLIFIES the difficulty ladder rather than tracking it (tau2 179x a gsm8k task in "
+    "tokens but 279x in dollars; appworld 567x but 1,069x), because the harder benchmarks also run "
+    "the dearer models — a budget scaled off the token ratios is short by 1.6–1.9x.",
     LTGRAY, STORE, font=12, bold=True, font_color=INK)
 _ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
+
+# ---- 7.6 the rate card, and the two ways the dollars are wrong -------------------------------
+# The rate card is the only hand-entered data in the cost story (read off the gateway's admin UI),
+# and it lives in reference/model_prices.json — quoted here, never recomputed. The two boxes are the
+# signed error bars: the judge makes the totals too LOW, an unmodelled cache discount too HIGH.
+s = prs.slides.add_slide(BLANK)
+title_band(s, "7.6  The Rate Card — and Which Way the Dollars Are Wrong",
+           "Read off the gateway's admin UI on 2026-09-17 and kept in reference/model_prices.json — "
+           "posted rates, not an invoice")
+grid(s, inch(0.45), inch(1.30), inch(12.4), inch(1.95), [
+    ("model (as report.ndjson records it)", "provider", "in $/1M", "out $/1M", "out/in", "used by"),
+    ("Azure/gpt-5-mini-2025-08-07", "azure", "0.25", "2.00", "8.0x", "gsm8k default"),
+    ("gemini-2.5-pro", "vertex_ai", "1.25", "10.00", "8.0x", "appworld"),
+    ("aws/claude-sonnet-5", "bedrock", "1.52", "7.60", "5.0x", "tau2"),
+    ("Azure/gpt-4.1", "azure", "2.00", "8.00", "4.0x", "leg #4, AND the IBAC judge"),
+], col_w=[inch(4.30), inch(1.55), inch(1.35), inch(1.35), inch(1.15), inch(2.70)], font=11)
+
+box(s, inch(0.45), inch(3.45), inch(12.4), inch(0.90),
+    "Output is priced 4–8x input at every provider",
+    LTTEAL, WORK, font=14, font_color=WORK,
+    sub="That one fact explains the counter-intuitive results: a reasoning model's verbosity is "
+        "charged at the expensive end, so a model can win on token count and lose on the bill. Read "
+        "the input-share-of-COST row, not the share of tokens, to find the driver.",
+    sub_color=INK)
+
+box(s, inch(0.45), inch(4.55), inch(6.15), inch(2.35),
+    "Too LOW:  the IBAC judge is not in our telemetry",
+    LTORANGE, KC, font=13.5, font_color=KC,
+    sub="The judge makes ~1 completion per authorized tool call, on Azure/gpt-4.1 — the dearest "
+        "model on the card — against a FIXED 1,577-char system prompt that does not shrink with the "
+        "task. That is ≥ $0.00111 per call, which is 2.4x the entire gsm8k task it is authorizing "
+        "($0.00045), and 1.4x–4.4x the agent's whole bill across legs #6–#8. On the plugin legs IBAC "
+        "is not overhead on the bill; it IS the bill.  tau2's user simulator is invisible the same "
+        "way: same model as the agent, but inside the uninstrumented MCP pod.",
+    sub_color=INK)
+
+box(s, inch(6.90), inch(4.55), inch(5.95), inch(2.35),
+    "Too HIGH:  an unmodelled cache discount",
+    LTPURPLE, ROSSO, font=13.5, font_color=ROSSO,
+    sub="The gateway REPORTS cached input (usage.prompt_tokens_details.cached_tokens, verified by "
+        "probe) but publishes no cached-input rate, and report.ndjson stores one undifferentiated "
+        "llm_input_tokens — so no past run can be re-priced. The exposure is capped by input's share "
+        "of the bill: if cached input were FREE, tau2 would floor at $0.0157 a task instead of "
+        "$0.154 and appworld at $0.251 instead of $0.589, while gsm8k barely moves. That ordering is "
+        "structural — caching pays off on a long re-sent prefix, which is what makes input dominate.",
+    sub_color=INK)
 
 
 # ============================ SLIDES 12-15: THE 12-RUN MATRIX AND WHAT IT SHOWED
