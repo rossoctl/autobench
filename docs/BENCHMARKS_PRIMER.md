@@ -28,6 +28,10 @@ latency figures describe the 267 that finished.**
 - [appworld — the hard one](#appworld--the-hard-one)
 - [What each one ships with, and what we supply](#what-each-one-ships-with-and-what-we-supply)
 - [How to read our reports](#how-to-read-our-reports)
+- [What a run costs](#what-a-run-costs)
+  - [What one leg costs](#what-one-leg-costs)
+  - [Model choice, measured on identical tasks](#model-choice-measured-on-identical-tasks)
+  - [Read every figure above as a floor](#read-every-figure-above-as-a-floor)
 - [Picking a benchmark](#picking-a-benchmark)
 
 <!-- /toc -->
@@ -262,6 +266,91 @@ study ([docs/PLUGIN_OVERHEAD.md](PLUGIN_OVERHEAD.md)):
 - **Absolute latencies are not portable across clusters.** The same condition on the same image
   measured 4–93× apart on our two clusters, and the two disagreed about *which* component the cost
   belonged to. Pass rates and token counts do travel; seconds do not. Always name the cluster.
+
+## What a run costs
+
+The [at-a-glance](#at-a-glance) table gives the raw per-task counts. These are the *derived* figures
+you need to budget with — same 267 rows, both platforms pooled:
+
+| per task | gsm8k | tau2 | appworld |
+|---|---:|---:|---:|
+| **total tokens** | **520** | **92,963** | **295,093** |
+| × a gsm8k task | 1× | 179× | 567× |
+| input share of tokens | 66% | 98% | 92% |
+| share of task time inside model calls | 90% | 58% | 96% |
+| tokens per **passed** task | 537 | ~112 K | no finite value |
+
+Two of those rows carry most of the practical advice. **The input share** says where the money goes:
+for tau2 and appworld the bill essentially *is* the input side, so the cost driver is turn count and
+context compounding — not how verbose the model is — and a cheaper-input model beats a terser one.
+**Tokens per passed task** (per-task cost ÷ pass rate) is the honest unit when you are comparing
+options rather than sizing a run: a model that halves your token use and halves your pass rate has
+gained you nothing, and appworld at 0.00 has no finite cost per success at all.
+
+### What one leg costs
+
+Measured totals from the v1.28 legs, so you can size a run before starting it:
+
+| leg | tokens (OpenShift) | tokens (KinD) |
+|---|---:|---:|
+| gsm8k, 1 task | 470 | 790 |
+| gsm8k, 10 tasks | 5.1 K | 5.1 K |
+| gsm8k, 50 tasks at `p=4` | 25 K | 24 K |
+| tau2, 10 tasks | 1.01 M | 1.04 M |
+| tau2, 20 tasks at `p=4` | 1.74 M | 1.78 M |
+| appworld, 5 tasks | 1.49 M | 0.93 M |
+| appworld, 20 tasks at `p=4` | 5.71 M | 2.20 M |
+| **the whole 12-run matrix** | **10.0 M** | **6.0 M** |
+
+**Budget by benchmark, not by task count.** All eight gsm8k legs together are **0.4%** of the
+matrix's token bill (0.8% on KinD); appworld's two legs are **72%** of it (52% on KinD). A 50-task
+gsm8k leg costs less than a single appworld *task*. And the same request body is not the same bill on
+two clusters — the 20-task appworld leg cost 2.6× more on OpenShift, because appworld turn counts are
+nondeterministic and the slower cluster's tasks ran longer before the 600 s timeout hit them.
+
+### Model choice, measured on identical tasks
+
+Two legs of the matrix ran the **same five gsm8k tasks** at `p=4` and differed only in model, which
+makes them a clean comparison:
+
+| same 5 gsm8k tasks | gpt-4.1 | gpt-5-mini |
+|---|---:|---:|
+| pass rate (OpenShift / KinD) | 0.80 / 1.00 | 1.00 / 1.00 |
+| LLM calls per task | 2.8 – 3.0 | 1.0 |
+| input tokens per task | 775 – 837 | 313 |
+| output tokens per task | 57 – 63 | 137 – 355 |
+| total tokens per task | 832 – 900 | 450 – 668 |
+| median task latency | 10.4 – 10.8 s | 11.2 – 16.4 s |
+
+The reasoning model answers in **one** call; gpt-4.1 needs ~3 tool round-trips, so it sends 2.6× the
+input and emits roughly a quarter of the output. Note that it is also the *faster* of the two per
+task despite tripling the calls — reasoning time is not free.
+
+**So the token ranking and the money ranking disagree, and which one wins is a property of your price
+list.** Equating the two bills — `in × P_in + out × P_out` — solves for break-even at
+`P_out / P_in ≈ 2.7`; the two platforms bracket it at 1.8 and 5.8, because gpt-5-mini's output length
+swings with how much it reasons. Priced above that ratio gpt-4.1 is cheaper, below it gpt-5-mini. We
+publish token counts and no prices, deliberately: our gateway does not bill us, so any dollar figure
+here would be someone else's rate card.
+
+```
+cost per task  =  (input_tokens × P_in  +  output_tokens × P_out) / 1e6
+```
+
+### Read every figure above as a floor
+
+- **A killed task still costs.** The 600 s per-task timeout leaves no `report.ndjson` row, so
+  appworld's 15 timed-out tasks contributed tokens that appear in none of these totals.
+- **tau2's user simulator is invisible to us.** It runs inside the **MCP** pod, which is not
+  instrumented, so its inference is billed by the gateway and counted nowhere here. The tell is in
+  the latency split: 27% of a tau2 task's wall time sits *inside tool calls*, against under 1% for
+  gsm8k and appworld, and every `chat` span we record carries the agent's model.
+- **A cache replay can also make a leg read high.** Legs that share a prompt set within the
+  gateway's ~10 min TTL re-report stored `usage` for calls that were never made upstream.
+- **Plugins add billed calls of their own** — one IBAC judge completion per authorized tool call,
+  outside the agent's spans. See [`PLUGIN_OVERHEAD.md`](PLUGIN_OVERHEAD.md).
+
+---
 
 ## Picking a benchmark
 

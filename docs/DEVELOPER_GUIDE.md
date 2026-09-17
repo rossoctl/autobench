@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-17T04:46:04Z
+**Last modified:** 2026-09-17T05:08:48Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -26,6 +26,7 @@ multi-turn) on the `ykt3` and `kind-rossoctl` clusters.
 - [1. Mental model (read this first)](#1-mental-model-read-this-first)
   - [Endpoint map](#endpoint-map)
   - [The run-time data path](#the-run-time-data-path)
+  - [Picking a benchmark, and what a run costs](#picking-a-benchmark-and-what-a-run-costs)
 - [2. Getting a caller token](#2-getting-a-caller-token)
 - [3. Onboarding a benchmark (one-time, per cluster/instance)](#3-onboarding-a-benchmark-one-time-per-clusterinstance)
   - [3.1 Instance config file (`instances/<encoded-iss-host>.json`)](#31-instance-config-file-instancesencoded-iss-hostjson)
@@ -166,6 +167,93 @@ while keeping the named hosts in it, then verify by **counting judge completions
 emits no log line of its own, so sidecar logs cannot tell you. `initialize` and `tools/list` are
 `isAction=false` and legitimately never reach the judge, so a zero count only means something if real
 tool calls occurred. Cost figures for each layer: [`PLUGIN_OVERHEAD.md`](./PLUGIN_OVERHEAD.md).
+
+### Picking a benchmark, and what a run costs
+
+| If you want to… | use |
+|---|---|
+| check a cluster/deploy/auth/telemetry path works | **gsm8k**, 1–10 tasks |
+| exercise concurrency and volume cheaply | **gsm8k**, 50 tasks at `max_parallel_sessions=4` |
+| compare models meaningfully | **tau2** (it discriminates; gsm8k saturates at ~1.0) |
+| stress long contexts, long tasks, timeouts | **appworld** |
+| get a fast signal that nothing regressed | **gsm8k** — if it fails, stop and fix infrastructure |
+
+**What one task costs.** Pooled over the 267 task rows of the published v1.28 pair
+([`docs/results/v1.28-2026-09-15/`](results/v1.28-2026-09-15/)); `latency` is the median, tokens are
+the mean:
+
+| per task | gsm8k | tau2 | appworld |
+|---|---:|---:|---:|
+| LLM calls | 1.10 | 11.38 | 29.20 |
+| input tokens | 341 | 90,902 | 269,953 |
+| output tokens | 180 | 2,061 | 25,140 |
+| **total tokens** | **520** | **92,963** | **295,093** |
+| × a gsm8k task | 1× | 179× | 567× |
+| input share of tokens | 66% | 98% | 92% |
+| median task latency | 4.9 s | 84 s | 264 s |
+| …of it inside model calls | 90% | 58% | 96% |
+| pass rate | 0.97 | 0.83 | 0.00 |
+| tokens per **passed** task | 537 | ~112 K | no finite value |
+
+**What one leg costs.** Measured totals for the canonical legs (§6.4), both platforms:
+
+| leg | tokens (OpenShift) | tokens (KinD) |
+|---|---:|---:|
+| #1 gsm8k, 1 task | 470 | 790 |
+| #2 gsm8k, 10 tasks | 5.1 K | 5.1 K |
+| #3 gsm8k, 50 tasks `p=4` | 25 K | 24 K |
+| #9 tau2, 10 tasks | 1.01 M | 1.04 M |
+| #10 tau2, 20 tasks `p=4` | 1.74 M | 1.78 M |
+| #11 appworld, 5 tasks | 1.49 M | 0.93 M |
+| #12 appworld, 20 tasks `p=4` | 5.71 M | 2.20 M |
+| **all 12 legs** | **10.0 M** | **6.0 M** |
+
+**Budget by benchmark, not by task count.** All eight gsm8k legs together are **0.4%** of the
+matrix's token bill (0.8% on KinD), while appworld's two legs are **72%** of it (52% on KinD) — a
+50-task gsm8k leg is cheaper than one appworld *task*. And the same request body is not the same bill
+on two clusters: #12 cost 2.6× more on OpenShift, because appworld turn counts are nondeterministic
+and the slower cluster's tasks ran longer before the 600 s per-task timeout. Size appworld against
+your own cluster.
+
+**Model choice is a cost decision too.** Legs #4 and #5 ran the **identical five gsm8k tasks** at
+`p=4`, differing only in model:
+
+| same 5 gsm8k tasks | gpt-4.1 | gpt-5-mini |
+|---|---:|---:|
+| pass rate (OpenShift / KinD) | 0.80 / 1.00 | 1.00 / 1.00 |
+| LLM calls per task | 2.8 – 3.0 | 1.0 |
+| input tokens per task | 775 – 837 | 313 |
+| output tokens per task | 57 – 63 | 137 – 355 |
+| total tokens per task | 832 – 900 | 450 – 668 |
+| median task latency | 10.4 – 10.8 s | 11.2 – 16.4 s |
+
+The reasoning model answers in **one** call; gpt-4.1 takes ~3 tool round-trips, so it sends 2.6× the
+input and emits about a quarter of the output. **Which one is cheaper therefore depends on your price
+ratio, not on the token totals**: equating the two bills solves for break-even at
+`P_out / P_in ≈ 2.7` (the two platforms bracket it at 1.8 and 5.8, because gpt-5-mini's output swings
+with reasoning effort). Above that ratio gpt-4.1 is the cheaper choice; below it, gpt-5-mini. In
+money terms:
+
+```
+cost per task  =  (input_tokens × P_in  +  output_tokens × P_out) / 1e6
+```
+
+We publish the token counts and no prices: the gateway does not bill us, so any dollar figure here
+would be someone else's rate card. Note which term dominates — for tau2 and appworld the bill *is*
+the input side, so the cost driver is turn count and context compounding rather than verbosity, and a
+cheaper-input model beats a terser one.
+
+**Every number above is a floor, for four reasons.** A task killed by `task_timeout_seconds` burns
+tokens but leaves no `report.ndjson` row, so appworld's 15 timed-out tasks are missing from these
+totals. tau2's user simulator runs in the **MCP** pod, which is not instrumented — its inference is
+billed by the gateway and counted nowhere here (the tell: 27% of a tau2 task's wall time sits inside
+tool calls, against <1% for the other two, and every `chat` span carries the *agent's* model). A leg
+that replays the gateway's completion cache re-reports stored `usage` for calls that were never made
+upstream, so a cache-contaminated leg can also read *high*. And plugins add judge calls that are
+billed but not in the agent's spans — see [`PLUGIN_OVERHEAD.md`](./PLUGIN_OVERHEAD.md).
+
+Newcomer-facing versions of these tables, with what each benchmark actually is:
+[`BENCHMARKS_PRIMER.md`](./BENCHMARKS_PRIMER.md).
 
 ---
 
@@ -493,7 +581,7 @@ Run fields (`RunRequest`) are all **run-time** knobs:
 
 | Field | Default | Notes |
 |---|---|---|
-| `max_tasks` | `1` | number of benchmark tasks to evaluate; **capped by the task pool, silently** — see below |
+| `max_tasks` | `1` | number of benchmark tasks to evaluate; **capped by the task pool, silently** — see below. What a given count costs in tokens and minutes: §1, [Picking a benchmark](#picking-a-benchmark-and-what-a-run-costs) |
 | `max_parallel_sessions` | `1` | concurrency |
 | `timeout_seconds` | `300` | whole-run wall-clock ceiling; raise for large tau2 runs |
 | `agent` / `namespace` / `experiment` | — | must match a deployed agent |

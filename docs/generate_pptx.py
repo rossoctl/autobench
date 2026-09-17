@@ -239,7 +239,8 @@ items = [
     ("Benchmark catalog & run lifecycle",
      "6.1 the three benchmarks and the REST flow that drives them · 6.2 what each image bakes in"),
     ("The three benchmarks — what they measure",
-     "7.1 the difficulty ladder · 7.2 what each stresses · 7.3 the traps"),
+     "7.1 the ladder · 7.2 what each stresses · 7.3 the traps · 7.4 picking one · "
+     "7.5 what it costs"),
     ("The canonical 12-run matrix",
      "8.1 what the 12 runs parameterize · 8.2 what they measured"),
     ("Cross-platform & plugin overhead",
@@ -951,6 +952,8 @@ cards = [
         "Saturates near 1.0, so it cannot discriminate models. Never read it as one.",
         "Deterministic enough that task 0 costs 320 input tokens on every cluster —"
         " we use that to prove two environments are comparable.",
+        "Cheap enough to run often: a 50-task leg is 25 K tokens — 0.4% of the whole"
+        " 12-run matrix's bill, and less than a SINGLE appworld task (see 7.4).",
     ]),
     ("tau2", "the discriminator", ROSSO, LTPURPLE, [
         "Multi-turn: a server-side USER SIMULATOR LLM plays the customer.",
@@ -961,6 +964,8 @@ cards = [
         "Episodes are nondeterministic: the same 10 tasks scored 0.90 on one cluster"
         " and 1.00 on the other, in the same matrix.",
         "At n=10 one task moves pass_rate by 0.10 — it cannot resolve less than that.",
+        "27% of a task's wall time sits INSIDE tool calls — that is the simulator"
+        " generating, server-side, and its tokens appear in no report of ours.",
     ]),
     ("appworld", "the stress test", KC, LTORANGE, [
         "Realistic chores across simulated apps: discover APIs, chain many calls.",
@@ -971,13 +976,15 @@ cards = [
         "34 of 35 measured tasks call finish: it believes it is done and the"
         " assertions disagree. No verification pass.",
         "Its job here is pipeline stress: long contexts, big traces, real timeouts.",
+        "Two model calls per tool call — tool shortlisting, which only bites with an"
+        " API surface this large. The first carries 68% of the input tokens.",
     ]),
 ]
 x = inch(0.45)
 for name, tag, col, lt, bullets in cards:
     hd = box(s, x, inch(1.30), inch(4.05), inch(0.62), f"{name}  —  {tag}", col, col,
              font=15, font_color=WHITE)
-    body = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, x, inch(2.02), inch(4.05), inch(3.45))
+    body = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, x, inch(2.02), inch(4.05), inch(4.55))
     body.fill.solid(); body.fill.fore_color.rgb = lt
     body.line.color.rgb = col; body.line.width = Pt(1.0); body.shadow.inherit = False
     hd = box(s, x, inch(1.30), inch(3.95), inch(0.62), f"{name} \u2014 {tag}", col, col,
@@ -996,13 +1003,8 @@ for name, tag, col, lt, bullets in cards:
         _set_font(run, 10, False, INK)
     x += inch(4.22)
 
-grid(s, inch(0.45), inch(5.70), inch(12.4), inch(1.45), [
-    ("If you want to \u2026", "use"),
-    ("check a cluster / deploy / auth / telemetry path works", "gsm8k, 1\u201310 tasks"),
-    ("exercise concurrency and volume cheaply", "gsm8k, 50 tasks at max_parallel_sessions=4"),
-    ("compare models meaningfully", "tau2 \u2014 it discriminates; gsm8k saturates at ~1.0"),
-    ("stress long contexts, long tasks, timeouts", "appworld"),
-], col_w=[inch(7.4), inch(5.0)], font=11, first_col_bold=False)
+# The "which one do I pick" strip used to live here, cramped under the cards and a row short. It is
+# slide 7.4 now, with the sizing numbers next to it.
 
 # ---- the traps ----
 s = prs.slides.add_slide(BLANK)
@@ -1047,6 +1049,109 @@ for i, (head, body_text) in enumerate(traps, 1):
     r2 = p2.add_run(); r2.text = body_text
     _set_font(r2, 11, False, RGBColor(0x3A, 0x46, 0x54))
     y += inch(1.16)
+
+
+# ---- 7.4 which one to pick, and what that leg costs ------------------------------------------
+# The right-hand table is the measured token total of each leg, not an estimate: summed over the
+# mirrored report.ndjson rows of the v1.28 pair (docs/results/v1.28-2026-09-15/). It is the answer
+# to "what will this cost me", which the difficulty ladder on 7.1 gives only per task.
+s = prs.slides.add_slide(BLANK)
+title_band(s, "7.4  Picking a Benchmark — and What That Leg Costs",
+           "The actionable summary: what each benchmark is FOR, and the token bill it hands you")
+grid(s, inch(0.45), inch(1.30), inch(6.55), inch(2.55), [
+    ("If you want to …", "use"),
+    ("check a cluster / deploy / auth / telemetry path works", "gsm8k, 1–10 tasks"),
+    ("exercise concurrency and volume cheaply", "gsm8k, 50 tasks at p=4"),
+    ("compare models meaningfully", "tau2 — it discriminates; gsm8k saturates at ~1.0"),
+    ("stress long contexts, long tasks, timeouts", "appworld"),
+    ("get a fast signal that nothing regressed", "gsm8k — if it fails, stop and fix infrastructure"),
+], col_w=[inch(3.60), inch(2.95)], font=10.5, first_col_bold=False)
+
+grid(s, inch(7.30), inch(1.30), inch(5.55), inch(2.55), [
+    ("leg (v1.28)", "tokens OCP", "tokens KinD"),
+    ("#1  gsm8k, 1 task", "470", "790"),
+    ("#2  gsm8k, 10 tasks", "5.1 K", "5.1 K"),
+    ("#3  gsm8k, 50 tasks p=4", "25 K", "24 K"),
+    ("#9  tau2, 10 tasks", "1.01 M", "1.04 M"),
+    ("#10  tau2, 20 tasks p=4", "1.74 M", "1.78 M"),
+    ("#11  appworld, 5 tasks", "1.49 M", "0.93 M"),
+    ("#12  appworld, 20 tasks p=4", "5.71 M", "2.20 M"),
+    ("all 12 legs", "10.0 M", "6.0 M"),
+], col_w=[inch(2.95), inch(1.30), inch(1.30)], font=10.5)
+
+box(s, inch(0.45), inch(4.05), inch(6.55), inch(1.35),
+    "Budget by benchmark, not by task count",
+    LTTEAL, WORK, font=14, font_color=WORK,
+    sub="The eight gsm8k legs together are 0.4% of the matrix's token bill (0.8% on KinD). "
+        "appworld's two legs are 72% of it (52% on KinD). A 50-task gsm8k leg is cheaper than a "
+        "SINGLE appworld task — 25 K tokens against 295 K.",
+    sub_color=INK)
+box(s, inch(7.30), inch(4.05), inch(5.55), inch(1.35),
+    "Two legs of the same size are not the same bill",
+    LTORANGE, KC, font=14, font_color=KC,
+    sub="#12 cost 2.6x more on OpenShift than on KinD for the same 20 requested tasks: appworld "
+        "turn counts are nondeterministic, and the slower cluster's tasks ran longer before the "
+        "600 s timeout. Size appworld on YOUR cluster.",
+    sub_color=INK)
+
+_ban = box(s, inch(0.45), inch(5.60), inch(12.4), inch(1.30),
+    "And the totals UNDERSTATE it three ways:  a task killed by the per-task timeout burns tokens "
+    "but leaves no report row, so appworld's 15 timed-out tasks are missing from the numbers above."
+    "  tau2's user simulator runs in the MCP pod, which is not instrumented — its inference is "
+    "billed by the gateway and counted nowhere here.  And a leg that replays the gateway's "
+    "completion cache re-reports stored usage for calls that were never made upstream.",
+    LTGRAY, STORE, font=12.5, bold=True, font_color=INK)
+_ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
+
+# ---- 7.5 the cost model: tokens, models, money ----------------------------------------------
+# The break-even ratio is derived, not quoted: legs #4 and #5 ran the IDENTICAL five gsm8k tasks at
+# p=4 differing only in model, so equating (in x P_in + out x P_out) between them solves for the
+# output:input price ratio at which the two cost the same. No price list needed, nothing to go stale.
+s = prs.slides.add_slide(BLANK)
+title_band(s, "7.5  The Cost Model — Tokens, Models, Money",
+           "What a task costs, what a model choice costs, and the one ratio that decides it")
+grid(s, inch(0.45), inch(1.30), inch(6.15), inch(4.05), [
+    ("per task, pooled", "gsm8k", "tau2", "appworld"),
+    ("LLM calls", "1.10", "11.38", "29.20"),
+    ("input tokens", "341", "90,902", "269,953"),
+    ("output tokens", "180", "2,061", "25,140"),
+    ("total tokens", "520", "92,963", "295,093"),
+    ("x a gsm8k task", "1x", "179x", "567x"),
+    ("input share of tokens", "66%", "98%", "92%"),
+    ("median task latency", "4.9 s", "84 s", "264 s"),
+    ("… of it inside model calls", "90%", "58%", "96%"),
+    ("pass rate", "0.97", "0.83", "0.00"),
+    ("tokens per PASSED task", "537", "112 K", "no finite value"),
+], col_w=[inch(2.40), inch(1.25), inch(1.25), inch(1.25)], font=10.5)
+
+grid(s, inch(6.90), inch(1.30), inch(5.95), inch(2.60), [
+    ("same 5 gsm8k tasks, p=4", "gpt-4.1", "gpt-5-mini"),
+    ("pass rate  (OCP / KinD)", "0.80 / 1.00", "1.00 / 1.00"),
+    ("LLM calls per task", "2.8 – 3.0", "1.0"),
+    ("input tokens per task", "775 – 837", "313"),
+    ("output tokens per task", "57 – 63", "137 – 355"),
+    ("total tokens per task", "832 – 900", "450 – 668"),
+    ("median task latency", "10.4 – 10.8 s", "11.2 – 16.4 s"),
+], col_w=[inch(2.75), inch(1.60), inch(1.60)], font=10.5)
+
+box(s, inch(6.90), inch(4.10), inch(5.95), inch(1.25),
+    "The token ranking and the money ranking disagree",
+    LTPURPLE, ROSSO, font=13.5, font_color=ROSSO,
+    sub="The reasoning model answers in ONE call; gpt-4.1 needs ~3 tool round-trips, so it sends "
+        "2.6x the input but emits a quarter of the output. Equating the two bills solves for "
+        "break-even at output:input ≈ 2.7x (the platforms bracket it, 1.8x–5.8x). Priced above "
+        "that ratio gpt-4.1 is cheaper; below it, gpt-5-mini.",
+    sub_color=INK)
+
+_ban = box(s, inch(0.45), inch(5.55), inch(12.4), inch(1.35),
+    "cost per task  =  (input tokens x P_in  +  output tokens x P_out) / 1 M     — we publish the "
+    "token counts, you supply your own rates; our gateway does not bill us, so no dollar figure "
+    "here would be ours to quote.  Two consequences of the input-share row:  for tau2 and appworld "
+    "the bill IS the input side, so the cost driver is turn count and context compounding, not "
+    "verbosity — and a cheaper-input model beats a terser one.  For gsm8k, output is a third of the "
+    "tokens and reasoning effort moves it 2.6x between clusters.",
+    LTGRAY, STORE, font=12, bold=True, font_color=INK)
+_ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
 
 
 # ============================ SLIDES 12-15: THE 12-RUN MATRIX AND WHAT IT SHOWED
