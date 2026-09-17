@@ -236,7 +236,8 @@ items = [
     ("Architecture with workload specific components",
      "4.1 inside the workload: sidecar, user simulator, IBAC judge · 4.2 how interception is wired"),
     ("The two-token auth model", "why the caller's token is never forwarded upstream"),
-    ("Benchmark catalog & run lifecycle", "the three benchmarks and the REST flow that drives them"),
+    ("Benchmark catalog & run lifecycle",
+     "6.1 the three benchmarks and the REST flow that drives them · 6.2 what each image bakes in"),
     ("The three benchmarks — what they measure",
      "7.1 the difficulty ladder · 7.2 what each stresses · 7.3 the traps"),
     ("The canonical 12-run matrix",
@@ -818,7 +819,7 @@ box(s, inch(1.6), inch(5.7), inch(10.1), inch(1.1),
 
 # ============================================ SLIDE 7: CATALOG + LIFECYCLE
 s = prs.slides.add_slide(BLANK)
-title_band(s, "6.  Benchmark Catalog & Run Lifecycle")
+title_band(s, "6.1  Benchmark Catalog & Run Lifecycle")
 
 box(s, inch(0.45), inch(1.25), inch(5.75), inch(0.5), "Catalog (static registry)", NAVY, NAVY,
     font=15, font_color=WHITE, shape=MSO_SHAPE.RECTANGLE)
@@ -858,6 +859,55 @@ for i, (ep, desc) in enumerate(steps):
     y += inch(0.75)
 # down arrow spine
 connector(s, inch(6.72), inch(2.1), inch(6.72), inch(6.4), color=ACCENT, width=1.5)
+
+
+# ================================== SLIDE 7b: WHAT EACH MCP IMAGE BAKES IN
+# The division of labour between the image and `tool_env` is the thing people get wrong when they add
+# a benchmark: they look for a config knob for the dataset/world, which is baked in, and they miss the
+# two env vars that are not. Source of truth: benchmarks/registry.py (gsm8k :309, tau2 :349,
+# appworld :413) -- keep this slide in step with it and with DEVELOPER_GUIDE.md 3.4.
+s = prs.slides.add_slide(BLANK)
+title_band(s, "6.2  What Each Benchmark Bakes In — and What It Needs From Us",
+           "The MCP image carries the benchmark itself; only the credentials and quirk overrides "
+           "come from tool_env")
+grid(s, inch(0.45), inch(1.30), inch(12.4), inch(2.30), [
+    ("", "MCP tool image", "what the image bakes in", "what tool_env must add"),
+    ("gsm8k", "exgentic-mcp-gsm8k",
+     "the HuggingFace dataset loader — 8.5K problems, fetched at pod startup",
+     "HF_TOKEN (from hf-secret), plus EXGENTIC_SET_BENCHMARK_RUNNER=direct"),
+    ("tau2", "exgentic-mcp-tau2",
+     "the tau2-bench library + its retail domain (114 tasks), and a user-simulator LLM",
+     "OPENAI_API_KEY (from openai-secret) + EXGENTIC_SET_BENCHMARK_ACTION_TIMEOUT=1000 — the "
+     "simulator makes its own inference calls (flow 4)"),
+    ("appworld", "exgentic-mcp-appworld",
+     "the whole app-suite sandbox (exgentic install --benchmark appworld)",
+     "nothing beyond BENCHMARK_NAME — upstream's .env.appworld is explicitly empty"),
+], col_w=[inch(1.40), inch(2.75), inch(4.10), inch(4.15)], font=11.5)
+
+box(s, inch(0.45), inch(3.90), inch(6.05), inch(1.20),
+    "One agent image serves all three",
+    LTTEAL, WORK, font=14, font_color=WORK,
+    sub="exgentic-a2a-tool_calling:latest is the only key in every agents={...} map; per benchmark "
+        "it only gains a -<benchmark> name suffix. So the benchmark lives in the MCP pod, and the "
+        "subject under test is the same binary every time.",
+    sub_color=INK)
+box(s, inch(6.80), inch(3.90), inch(6.05), inch(1.20),
+    "The LLM base is never baked in",
+    LTBLUE, BLUE, font=14, font_color=BLUE,
+    sub="OPENAI_API_BASE is injected per deploy from the instance's workload_llm.api_base, and "
+        "tau2's simulator model from the run's model — a deploy with no gateway configured is "
+        "rejected with 422 rather than defaulting.",
+    sub_color=INK)
+
+_ban = box(s, inch(0.45), inch(5.35), inch(12.4), inch(1.55),
+    "Two traps in that last column:  appworld REJECTS the same action-timeout override tau2 needs "
+    "and crashes at startup with \"Unknown benchmark override 'action_timeout'\" — the env is "
+    "per-benchmark, not a shared default.  And hf-secret must EXIST for gsm8k even though the "
+    "dataset is public: without it the MCP pod sits in CreateContainerConfigError and the agent "
+    "crash-loops.  Missing secrets surface as a 424 on the run precheck, naming exactly what to "
+    "provision.",
+    LTGRAY, STORE, font=12.5, bold=True, font_color=INK)
+_ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
 
 
 # ================================ SLIDES 8-10: THE THREE BENCHMARKS (from BENCHMARKS_PRIMER.md)

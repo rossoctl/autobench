@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-17T02:39:01Z
+**Last modified:** 2026-09-17T04:46:04Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -31,7 +31,8 @@ multi-turn) on the `ykt3` and `kind-rossoctl` clusters.
   - [3.1 Instance config file (`instances/<encoded-iss-host>.json`)](#31-instance-config-file-instancesencoded-iss-hostjson)
   - [3.2 Infrastructure resources (baked into the benchmark definitions)](#32-infrastructure-resources-baked-into-the-benchmark-definitions)
   - [3.3 Workload secrets (provisioned out-of-band as cluster Secrets)](#33-workload-secrets-provisioned-out-of-band-as-cluster-secrets)
-  - [3.4 MLflow + OTEL collector (optional, for reports)](#34-mlflow--otel-collector-optional-for-reports)
+  - [3.4 What each benchmark bakes in, and what it needs from you](#34-what-each-benchmark-bakes-in-and-what-it-needs-from-you)
+  - [3.5 MLflow + OTEL collector (optional, for reports)](#35-mlflow--otel-collector-optional-for-reports)
 - [4. Instance-specific Service config (`/config`)](#4-instance-specific-service-config-config)
 - [5. Benchmark lifecycle](#5-benchmark-lifecycle)
   - [5.0 Discover what's available](#50-discover-whats-available)
@@ -277,7 +278,7 @@ naming exactly what to provision.
 | Benchmark | Secret (`name` → `key`) | Consumed by | Purpose |
 |---|---|---|---|
 | gsm8k | `hf-secret` → `hf-token` | tool | HuggingFace dataset access |
-| gsm8k / tau2 / appworld | `openai-secret` → `apikey` | agent (+ tau2/appworld tool) | LiteLLM API key |
+| gsm8k / tau2 / appworld | `openai-secret` → `apikey` | agent (+ the tau2 tool, for its user simulator) | LiteLLM API key |
 
 Provision them on the workload cluster before deploying, e.g.:
 
@@ -298,7 +299,36 @@ kubectl -n team1 create secret generic openai-secret --from-literal=apikey="$LIT
 > call fails until the Secret is restored and the workload pods are `rollout restart`ed (pods
 > read `apikey` via `secretKeyRef` only at startup).
 
-### 3.4 MLflow + OTEL collector (optional, for reports)
+### 3.4 What each benchmark bakes in, and what it needs from you
+
+The division of labour is easy to get backwards: **the benchmark itself — dataset, world,
+evaluator — is inside the MCP image**, and `tool_env` (`registry.py`) adds only the credentials and
+the per-benchmark quirk overrides. There is no config knob for the dataset or the domain.
+
+| | what's baked in | `tool_env` it needs |
+|---|---|---|
+| **gsm8k** (`exgentic-mcp-gsm8k`) | the HuggingFace dataset loader — the ~8.5K problems are fetched at pod startup | `HF_TOKEN` (from `hf-secret`), plus `EXGENTIC_SET_BENCHMARK_RUNNER=direct` |
+| **tau2** (`exgentic-mcp-tau2`) | the τ²-bench library + its `retail` domain (114 tasks), and a user-simulator LLM | `OPENAI_API_KEY` (from `openai-secret`) + `EXGENTIC_SET_BENCHMARK_ACTION_TIMEOUT=1000` — it makes its own inference calls (flow 4) |
+| **appworld** (`exgentic-mcp-appworld`) | the whole app-suite sandbox (`exgentic install --benchmark appworld`) | just `BENCHMARK_NAME` — upstream's `.env.appworld` is explicitly empty |
+
+Every benchmark also gets `BENCHMARK_NAME` and an `OPENAI_API_BASE` that the Service **injects per
+deploy** from the instance's `workload_llm.api_base` (§3.1) — never baked into the image; a deploy
+with no gateway configured is rejected with `422` rather than falling back to a default. tau2's
+simulator model is injected the same way, from the run's model.
+
+Two edges worth knowing before you copy env between benchmarks:
+
+- **appworld rejects the action-timeout override tau2 requires** and crashes at startup with
+  `Unknown benchmark override 'action_timeout'`. The env is per-benchmark, not a shared default.
+- **`hf-secret` must exist for gsm8k even though the dataset is public.** Without it the MCP pod
+  sits in `CreateContainerConfigError` and the agent crash-loops; with an empty value it works.
+
+The **agent** side, by contrast, is the same everywhere: one image
+(`exgentic-a2a-tool_calling:latest`) is the only entry in all three `agents={…}` maps, gaining just a
+`-<benchmark>` name suffix. So the benchmark lives in the MCP pod and the subject under test is the
+same binary every time.
+
+### 3.5 MLflow + OTEL collector (optional, for reports)
 
 Reporting is fail-soft: if MLflow client-creds aren't configured, runs still succeed and
 export to S3, but `report.ndjson` is empty and the report endpoints return `409`. To enable,
@@ -549,7 +579,7 @@ EOF
 ### 5.5 Get results (report)
 
 Two report views, both reading structured records from MLflow (return `409` if MLflow isn't
-configured for the instance — see §3.4):
+configured for the instance — see §3.5):
 
 ```bash
 # Per-run report: records filtered to this run's session ids, plus its S3 artifacts.
@@ -1228,7 +1258,7 @@ byte-identical work, which a concurrent gateway load would spoil. Each exits `0`
 | `plugin_config_file` on deploy | `422` | local-path input with no HTTP analog; use `plugin_preset`/`plugins`/`on_error` instead |
 | Run before deploy | `409` | `POST …/deploy` first |
 | Run while not Ready | `424` | provision the named Secret(s), wait for Ready (§5.2) |
-| Report with MLflow unconfigured | `409` | set MLflow read creds via `PUT /config` (§3.4) |
+| Report with MLflow unconfigured | `409` | set MLflow read creds via `PUT /config` (§3.5) |
 | Upstream Rossoctl/MLflow failure | `502` | transient upstream issue; retry |
 
 **AuthBridge plugin presets (runs 4–8 of the ibac comparison):** layer-3 plugin composition

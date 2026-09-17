@@ -26,6 +26,7 @@ latency figures describe the 267 that finished.**
 - [gsm8k — the smoke test](#gsm8k--the-smoke-test)
 - [tau2 — the conversational one](#tau2--the-conversational-one)
 - [appworld — the hard one](#appworld--the-hard-one)
+- [What each one ships with, and what we supply](#what-each-one-ships-with-and-what-we-supply)
 - [How to read our reports](#how-to-read-our-reports)
 - [Picking a benchmark](#picking-a-benchmark)
 
@@ -144,6 +145,33 @@ accomplish the goal — and it is not giving up early either: **34 of the 35 tas
 the `finish` tool**, so the agent believed it was done. appworld's role in our matrix is as a **stress
 test of the pipeline at scale** (long tasks, big contexts, real timeouts) rather than a capability
 score we expect to move.
+
+---
+
+## What each one ships with, and what we supply
+
+A benchmark is not something the Service configures — it is a **container image**. Each benchmark's
+dataset (or world), its task list and its evaluator all live inside one MCP tool image, and the only
+thing we add from outside is a credential or two plus a per-benchmark quirk override:
+
+| | what's baked in | `tool_env` it needs |
+|---|---|---|
+| **gsm8k** | the HuggingFace dataset loader | `HF_TOKEN` (from `hf-secret`), plus `EXGENTIC_SET_BENCHMARK_RUNNER=direct` |
+| **tau2** | the τ²-bench library + `retail` domain, and a user-simulator LLM | `OPENAI_API_KEY` + `EXGENTIC_SET_BENCHMARK_ACTION_TIMEOUT=1000` — it makes its own inference calls |
+| **appworld** | the whole app-suite sandbox (`exgentic install --benchmark appworld`) | just `BENCHMARK_NAME` — upstream's `.env.appworld` is explicitly empty |
+
+Two things follow that are easy to miss:
+
+- **There is no knob for the dataset or the domain.** tau2 runs `retail` because that is the
+  library's default inside the image, not because we selected it; changing it would mean an
+  override we deliberately don't set. Same for gsm8k's problem pool.
+- **The subject under test is the same binary for all three.** One agent image
+  (`exgentic-a2a-tool_calling:latest`) is used for every benchmark, gaining only a `-<benchmark>`
+  name suffix — which is exactly why appworld's 0.0 is an honest result and not a misconfiguration:
+  the agent has nothing appworld-specific in it.
+
+The deployment-side detail (which secret, which env var, what breaks without it) is in
+[`DEVELOPER_GUIDE.md`](DEVELOPER_GUIDE.md) §3.3–§3.4.
 
 ---
 
