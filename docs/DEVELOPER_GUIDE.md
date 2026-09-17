@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-17T05:08:48Z
+**Last modified:** 2026-09-17T16:03:12Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -788,45 +788,97 @@ a Service URL are all you need. For **§6.1** you need the package that provides
 `autobench-cli` entry point, but a manual clone is still optional: the repository is public, so
 install it straight from git.
 
-```bash
-# No clone. Client only: --no-deps, because the CLI is stdlib-only and pulls in nothing else.
-uv venv --python 3.12.12 && source .venv/bin/activate
-uv pip install "rossoctl-autobench @ git+https://github.com/rossoctl/autobench" --no-deps
+**Installing it as a tool is the shortest path**, because you want a *command*, not a library:
 
-# Already have a clone? Point at the repo, NOT at `.` — `-e .` looks for pyproject.toml in the
-# CURRENT directory, so running it from a scratch/testbed folder fails with
-# "does not appear to be a Python project".
-uv pip install -e /path/to/autobench --no-deps        # -e: git pull updates the CLI in place
+```bash
+# No clone, no venv to activate. Puts `autobench-cli` (and `autobench-service`) on your PATH.
+uv tool install "rossoctl-autobench @ git+https://github.com/rossoctl/autobench"
+autobench-cli --help
+
+# Or run it without installing anything at all:
+uvx --from "rossoctl-autobench @ git+https://github.com/rossoctl/autobench" autobench-cli --help
 ```
 
-Drop `--no-deps` only if you also want to run the Service or its test suite from that venv; it adds
-fastapi, boto3, pydantic and the MCP/A2A SDKs, none of which the client needs. Keep the venv outside
-a cloud-synced folder (Box/Dropbox/iCloud) — a venv is thousands of small files, and sync tools are
-slow and occasionally destructive with it.
+`uv tool install` builds an isolated environment under `$(uv tool dir)` and links only the console
+scripts into `~/.local/bin`, so the Service's dependencies never land anywhere you import from.
+Two consequences worth knowing:
+
+- **`~/.local/bin` has to be on your PATH.** `uv tool update-shell` adds it; `uv tool list` shows
+  what is installed and which executables it provides.
+- **There is no `--no-deps` here, and you do not want one.** `uv tool install` rejects the flag
+  outright, and skipping fastapi/boto3/pydantic would only leave the `autobench-service` script
+  broken — the isolated environment is already the thing `--no-deps` was protecting you from.
+
+**uv caches the resolved git revision**, so a second `uv tool install` of the same URL can be a
+no-op even after upstream moves. Force it:
+
+```bash
+uv tool install --force --reinstall --refresh \
+  "rossoctl-autobench @ git+https://github.com/rossoctl/autobench"
+uv tool list                   # the version it resolved to (the CLI has no --version flag)
+```
+
+Pin instead of chasing `main` when you want reproducibility — append `@<tag-or-sha>` to the URL
+(`...autobench@v1.28`).
+
+#### Or into a venv, if you are also developing against it
+
+```bash
+uv venv --python 3.12.12 && source .venv/bin/activate
+
+# Point at the repo, NOT at `.` — `-e .` looks for pyproject.toml in the CURRENT directory, so
+# running it from a scratch/testbed folder fails with "does not appear to be a Python project".
+uv pip install -e /path/to/autobench --no-deps        # -e: git pull updates the CLI in place
+
+# No clone, into the active venv — same as the tool install but scoped to this venv:
+uv pip install "rossoctl-autobench @ git+https://github.com/rossoctl/autobench" --no-deps
+```
+
+Here `--no-deps` *is* worth passing — the CLI is stdlib-only, and the alternative adds fastapi,
+boto3, pydantic and the MCP/A2A SDKs to a venv you may be using for other things. Drop it if you
+also want to run the Service or its test suite from that venv.
+
+Two failure modes this path has actually produced:
+
+- **`uv pip install` installs into an environment, not onto your PATH.** With no venv active it
+  falls back to one it picks itself (`~/.venv` when you run it from `$HOME`), and nothing is
+  linked into `~/.local/bin` — the install "succeeds" and `autobench-cli` is still
+  `command not found`. `uv tool install` is the fix.
+- **`Audited 1 package` means nothing happened.** That is uv reporting the requirement was already
+  satisfied, not a fresh build; it is not confirmation that you picked up a new commit.
+
+Keep any venv outside a cloud-synced folder (Box/Dropbox/iCloud) — a venv is thousands of small
+files, and sync tools are slow and occasionally destructive with it.
 
 #### Where the source ends up
 
-`<venv>/bin/autobench-cli` is **not** the source — it is a generated shim that does
+The `autobench-cli` on your PATH is **not** the source — it is a generated shim that does
 `from autobench.cli import main`. Where the real `cli.py` lives depends on how you
 installed, which also decides whether a `git pull` reaches you:
 
-| Install | `cli.py` lives in | Picks up upstream changes? |
-|---|---|---|
-| `uv pip install "…@ git+https://…"` | `<venv>/lib/python3.X/site-packages/autobench/` (a **copy**, built from one commit) | No — pinned. Re-run with `--reinstall` |
-| `uv pip install -e /path/to/autobench` | `/path/to/autobench/src/autobench/` (the clone; only a finder hook is installed) | Yes, immediately |
-| `uv tool install --from /path/to/autobench autobench-service` | `$(uv tool dir)/rossoctl-autobench/lib/python3.X/site-packages/autobench/` | No — reinstall the tool |
-| no install, `PYTHONPATH=<repo>/src python -m autobench.cli` | the clone itself | Yes, immediately |
+| Install | shim in | `cli.py` lives in | Picks up upstream changes? |
+|---|---|---|---|
+| `uv tool install "…@ git+https://…"` | `~/.local/bin/` | `$(uv tool dir)/rossoctl-autobench/lib/python3.X/site-packages/autobench/` (a **copy**, built from one commit) | No — pinned, and the git revision is cached. `--force --reinstall --refresh` |
+| `uv tool install --editable /path/to/autobench` | `~/.local/bin/` | `/path/to/autobench/src/autobench/` (the clone) | Yes, immediately |
+| `uv pip install "…@ git+https://…"` | `<venv>/bin/` — **on your PATH only while that venv is active** | `<venv>/lib/python3.X/site-packages/autobench/` (a copy) | No — pinned. Re-run with `--reinstall` |
+| `uv pip install -e /path/to/autobench` | `<venv>/bin/`, same caveat | `/path/to/autobench/src/autobench/` (the clone; only a finder hook is installed) | Yes, immediately |
+| no install, `PYTHONPATH=<repo>/src python -m autobench.cli` | — | the clone itself | Yes, immediately |
 
-Never guess the path — ask the interpreter that is actually running it:
+Never guess the path — ask the interpreter that is actually running it. For a venv install, that is
+the venv's own `python`; for a tool install the package is deliberately *not* importable from your
+shell's python, so ask uv instead:
 
 ```bash
-python -c "import autobench.cli as m; print(m.__file__)"
+python -c "import autobench.cli as m; print(m.__file__)"     # venv installs
+uv tool list                                                  # tool installs: version + executables
+head -2 "$(command -v autobench-cli)"                         # the shim names its interpreter
 ```
 
 Note that every option installs the **whole distribution**, server modules included (`app.py`,
-`routes/`, `runner/`, `s3_export.py`), because they ship together. With `--no-deps` the client half
-still works while `import autobench.app` does not — the third-party dependencies were
-skipped, not the files. That the client keeps working is the point, and you can confirm it:
+`routes/`, `runner/`, `s3_export.py`), because they ship together. On the `uv pip install --no-deps`
+path the client half still works while `import autobench.app` does not — the third-party
+dependencies were skipped, not the files. That the client keeps working is the point, and you can
+confirm it:
 
 ```bash
 python -c "
@@ -965,7 +1017,7 @@ export BM_INSECURE=1
 export BM_CARD_TEMPLATE="https://{service}-{namespace}.apps.ykt2.hcp.res.ibm.com/.well-known/agent-card.json"
 
 # See "What you need on the client side" above for install options; the shortest is:
-#   uv pip install "rossoctl-autobench @ git+https://github.com/rossoctl/autobench" --no-deps
+#   uv tool install "rossoctl-autobench @ git+https://github.com/rossoctl/autobench"
 autobench-cli all --benchmark gsm8k --tasks 1 --timeout 120 --mirror /tmp/autobench
 ```
 
