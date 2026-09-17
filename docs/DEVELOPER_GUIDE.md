@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-16T20:42:30Z
+**Last modified:** 2026-09-17T02:39:01Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -95,8 +95,8 @@ Two consequences shape everything below:
 ### The run-time data path
 
 The endpoint map above is the **control** plane — what you call. During a run a different set of
-legs carries the actual work, and none of them are HTTP calls you make. Chart 6 of
-[`AutoBench.pptx`](./AutoBench.pptx) draws this; the same eight legs in text:
+**flows** carries the actual work, and none of them are HTTP calls you make. Chart 6 of
+[`AutoBench.pptx`](./AutoBench.pptx) draws this; the same eight flows in text, numbered identically:
 
 ```
                             ┌──────────────────────────────────┐
@@ -121,7 +121,7 @@ legs carries the actual work, and none of them are HTTP calls you make. Chart 6 
           └──────────────────────── (2) ───────────────────────┘
 ```
 
-| # | leg | is the sidecar on it? |
+| # | flow | is the sidecar on it? |
 |---|---|---|
 | 1 | Service → agent container: `send_prompt`, **once per task** | **yes, inbound** — logged as `a2a-parser`; `isAction=false`, so no judge call |
 | 2 | Service → MCP server: `list_tasks`, `create_session`, `evaluate_session`, `delete_session` | no — a different pod, and the Service does not dial through the proxy |
@@ -132,12 +132,17 @@ legs carries the actual work, and none of them are HTTP calls you make. Chart 6 
 | 7 | sidecar → IBAC judge: one call per `isAction` tool call | — |
 | 8 | judge → LLM gateway: the verdict is itself an LLM call | — |
 
+**"Flow", never "leg", for these eight.** Elsewhere in this repo — §6.5 below, `BM_ORDER`, the
+comparison reports, [`PLUGIN_OVERHEAD.md`](./PLUGIN_OVERHEAD.md) — a **leg** is one of the 12
+parameterized *runs*. Both numberings reach 8, so "leg 6" is ambiguous where it matters: as a run it
+is `ibac-only`, as a flow it is sidecar → MCP server.
+
 Three things about this shape are not guessable from the API surface:
 
 **The agent has its own MCP connection, separate from the Service's.** `MCP_URL` is injected into the
 agent's env at deploy time (always `svc.cluster.local`, since agent→tool is intra-cluster even on a
-cross-cluster run). The Service opens and grades the session (leg 2); the agent's tool calls
-(legs 5–6) mutate that same session's state, correlated by `session_id` — which travels as A2A
+cross-cluster run). The Service opens and grades the session (flow 2); the agent's tool calls
+(flows 5–6) mutate that same session's state, correlated by `session_id` — which travels as A2A
 request metadata, *not* in the prompt text. So grading reads tool-side state, and the runner discards
 whatever the agent replies: an agent that answers in prose without making the submitting tool call
 fails the task.
@@ -145,7 +150,7 @@ fails the task.
 **Interception is a blanket forward proxy plus an allowlist, not a tool-aware hook.** With AuthBridge
 enabled the operator injects `HTTP_PROXY=HTTPS_PROXY=http://127.0.0.1:8081` — the sidecar — into the
 agent pod, which would capture *every* outbound HTTP call it makes, inference included. What keeps
-leg 3 out of it is the instance config's `no_proxy`, which names the LLM gateway host (and the OTEL
+flow 3 out of it is the instance config's `no_proxy`, which names the LLM gateway host (and the OTEL
 collector, and Keycloak). IBAC additionally sets `judge_inference: false`, so even proxied inference
 would not be judged. Both would have to change for the agent's model calls to be authorized.
 
