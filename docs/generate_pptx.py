@@ -1029,9 +1029,10 @@ traps = [
     # gateway's ~10 min completion TTL -- some of those output columns were replayed usage rather
     # than fresh generations, which understates output spread. Do not restore the older figure.
     ("Output varies MORE than input, in most runs",
-     "Measured OUT CV > IN CV in 15 of the 22 legs that ran more than one task. gsm8k's prompt is "
-     "near-constant while answer length swings; only long-horizon appworld inverts it, in all four "
-     "of its legs. Do not infer a direction from the mechanism — read the CV."),
+     "Measured OUT CV > IN CV in 15 of the 22 legs that ran more than one task. On a one-call model "
+     "gsm8k's prompt is near-constant while answer length swings (IN 0.06-0.09 vs OUT 0.52-0.86); "
+     "gpt-4.1 needs tool round-trips and varies on the input side too (IN 0.39-0.44). Only "
+     "long-horizon appworld is input-led, in all four of its legs. Read the CV, not the mechanism."),
     ("Task selection is deterministic",
      "A run takes the first max_tasks tasks, so the same task_id is the same task across runs "
      "and clusters, and a smaller run is a prefix of a larger one. That is what makes cross-platform "

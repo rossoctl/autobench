@@ -152,6 +152,13 @@ def load(path):
             urlroot=next((a["url"][: -len(a["key"])] for a in (man or {}).get("artifacts", [])
                           if a.get("url", "").endswith(a["key"])), ""),
             z=sum(1 for x in rows if lost(x)),
+            # A row with no input tokens at all is a task that died *before* its first model call —
+            # a legitimate zero, not the p>1 attribution bug `lost()` catches. It is a valid member
+            # of the pass-rate denominator but a zero-cost outlier in any token statistic, and it
+            # inflates the leg's IN CV on its own. `models` excludes it: such a row carries no model.
+            zin=sum(1 for x in rows if not (x.get("llm_input_tokens") or 0)),
+            models=sorted({(x.get("model") or "").rsplit("/", 1)[-1] for x in rows
+                           if (x.get("llm_input_tokens") or 0) and x.get("model")}),
             chats=chats, pchats=pchats,
             probe=probe, causes=causes, total=s.get("total"), passed=s.get("evaluated_pass"),
             # Pass rate over the tasks that actually reached the model. `None` when the probe took
@@ -162,6 +169,92 @@ def load(path):
                   and s["total"] - probe > 0 else None))
     return out, d.get("base")
 
+
+
+def cv_direction(sets):
+    """The 'which token direction varies more' paragraph, measured off the matrices in hand.
+
+    This used to be a hardcoded sentence and it went stale in place: the report kept asserting
+    `OUT CV > IN CV in 27 of 33 legs` — a v1.23 + v1.24 figure — long after the v1.28 pair measured
+    15 of 22. Worse, the stale number was the less trustworthy one: in those older matrices the legs
+    that share a prompt set replayed each other's completions inside the gateway's ~10 min TTL, and a
+    replayed `usage` row understates output spread. Anything with a number in it is computed here.
+
+    The unit is a **leg-side** (one leg on one platform), not a leg, because CV is a within-run
+    statistic and the two platforms run the tasks independently. Single-task leg-sides have no CV and
+    are excluded from the denominator.
+
+    Ranges are grouped by **benchmark and model**, not benchmark alone, because within one benchmark
+    the model decides the shape: a one-call reasoning model re-sends a near-constant prompt (IN CV
+    ~0.09) while a model that needs tool round-trips varies on the input side too (~0.4 on the same
+    five gsm8k tasks). Pooling those two into one range produces a spread that describes neither.
+
+    A leg-side carrying a zero-input-token row is kept out of the ranges: that task died before its
+    first model call, and the legitimate zero inflates the leg's IN CV all by itself — 0.51 where its
+    clean siblings on the same model read 0.09, with nothing in the CV column to say why. Note the
+    criterion is the zero row, not the presence of an error: a task that errored *after* running has
+    an ordinary token row and contaminates nothing, and an appworld timeout leaves no row at all.
+    Excluded leg-sides stay in the out-led count, where one outlier cannot flip the direction.
+    """
+    obs = [dict(bench=v["bench"], model=" + ".join(v.get("models") or []) or "unknown",
+                icv=v["icv"], ocv=v["ocv"], zin=v.get("zin") or 0, lab=lab, n=n,
+                imed=v.get("imed") or 0)
+           for lab, m in sets for n, v in sorted(m.items())
+           if v.get("icv") is not None and v.get("ocv") is not None]
+    if not obs:
+        return []
+    led = sum(1 for x in obs if x["ocv"] > x["icv"])
+    # Benchmark ladder order (cheapest first), so the ranges read gsm8k -> tau2 -> appworld.
+    order = sorted({x["bench"] for x in obs},
+                   key=lambda b: max(x["imed"] for x in obs if x["bench"] == b))
+
+    def rng(vals):
+        return "%.2f" % vals[0] if len(set("%.2f" % v for v in vals)) == 1 else \
+               "%.2f–%.2f" % (min(vals), max(vals))
+
+    parts, dropped = [], []
+    for b in order:
+        # Models within a benchmark, cheapest-input first, so the dominant configuration leads.
+        models = sorted({x["model"] for x in obs if x["bench"] == b},
+                        key=lambda mo: max(x["imed"] for x in obs
+                                           if x["bench"] == b and x["model"] == mo))
+        cells = []
+        for mo in models:
+            grp = [x for x in obs if x["bench"] == b and x["model"] == mo]
+            keep = [x for x in grp if not x["zin"]]
+            if keep:                        # only a leg-side we actually dropped is worth naming
+                dropped += [x for x in grp if x["zin"]]
+            else:
+                keep = grp
+            cells.append("IN %s vs OUT %s%s" % (rng([x["icv"] for x in keep]),
+                                                rng([x["ocv"] for x in keep]),
+                                                " on `%s`" % mo if len(models) > 1 else ""))
+        parts.append("**%s** %s" % (b, ", ".join(cells)))
+    inverted = [b for b in order if all(x["icv"] > x["ocv"] for x in obs if x["bench"] == b)]
+
+    L = ["**Which direction varies more is benchmark-dependent, and output usually wins** — measured "
+         f"on *these* matrices at OUT CV > IN CV in **{led} of the {len(obs)} leg-sides** that ran "
+         "more than one task (one leg on one platform; a single-task run has no CV). By benchmark, "
+         "and by model where a benchmark ran more than one: " + "; ".join(parts) + "."]
+    if dropped:
+        L[0] += (" Held out of those ranges: "
+                 + ", ".join("#%d (%s)" % (x["n"], x["lab"]) for x in dropped)
+                 + " — a task there died before its first model call, and the zero-token row it left "
+                   "inflates that leg's IN CV on its own.")
+    if "gsm8k" in order:
+        L[0] += (" The mechanism is visible in the gsm8k rows: a model that answers in one call "
+                 "re-sends a nearly constant prompt, so only its answer length swings, while a model "
+                 "that needs tool round-trips varies on the input side too — same five tasks, "
+                 "different shape.")
+    if inverted:
+        L[0] += (" Only long-horizon " + " and ".join("**%s**" % b for b in inverted)
+                 + " is input-led in every one of its leg-sides: there the tasks differ enormously "
+                   "in turn count and every call re-sends the whole conversation, so compounding "
+                   "context dominates the input side.")
+    else:
+        L[0] += (" No benchmark here is input-led in all of its leg-sides, so do not read a CV "
+                 "direction off the mechanism — read the columns.")
+    return L
 
 
 def dir_prefix(keys):
@@ -360,14 +453,8 @@ L += ["", "## Token distribution per task", "",
       "mean — dimensionless, so spread is comparable across benchmarks whose token counts differ "
       "by orders of magnitude). A mean well above the median means right-skew: a few long tasks "
       "dominate. CV shares its denominator with `mean`, not `median`, and is `—` for single-task "
-      "runs.", "",
-      "**Which direction varies more is benchmark-dependent, and output usually wins** — measured "
-      "at OUT CV > IN CV in 27 of 33 legs across these matrices. On single-turn gsm8k the prompt is "
-      "nearly constant (IN CV ~0.06-0.09) while answer length swings with how much the model "
-      "reasons (OUT CV 0.4-1.0). Only long-horizon **appworld** inverts it (IN CV 0.30-0.93 above "
-      "OUT), because there the tasks differ enormously in turn count and every call re-sends the "
-      "whole conversation, so compounding context dominates. tau2 sits between, marginally "
-      "output-led."]
+      "runs.", ""]
+L += cv_direction([(ALAB, X), (BLAB, Y)])
 # The zero-token row a probe failure leaves behind is inside these statistics, so a leg that lost
 # tasks on one side only is not measuring the same set of tasks on both. Flag it in the table rather
 # than leave the reader to cross-reference the probe section by leg number.

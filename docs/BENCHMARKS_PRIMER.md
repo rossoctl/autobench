@@ -204,9 +204,12 @@ A few things that trip people up:
   call. That is why tau2/appworld input *totals* dwarf output.
 - **But output is usually the more *variable* direction** — OUT CV > IN CV in **15 of the 22 v1.28
   legs that ran more than one task**. This corrects an earlier claim here that input variance is
-  always wider; it is not. On single-turn gsm8k the prompt is near-constant (IN CV 0.06–0.10 on the
+  always wider; it is not. On single-turn gsm8k the prompt is near-constant (IN CV 0.06–0.09 on the
   gpt-5-mini legs that ran clean) while answer length swings with how much the model reasons (OUT CV
-  0.49–0.86), so output varies ~8× more in relative terms. **One errored task is enough to break that
+  0.52–0.86), so output varies ~8× more in relative terms. **Within one benchmark the model decides
+  the shape**: the gpt-4.1 leg needs ~3 tool round-trips per task, so its input varies too (IN CV
+  0.39–0.44 on the same five tasks) — which is why the comparison report ranges CVs per model, not
+  per benchmark. **One errored task is enough to break that
   IN range**: OCP leg #6 (`ibac-only`, 2 of 5 tasks errored) carries a row with `llm_input_tokens = 0`
   from a task that failed before its first model call, which lifts that leg alone to IN CV 0.51. That
   is the legitimate zero — not the telemetry bug two bullets down — so read the error count beside a

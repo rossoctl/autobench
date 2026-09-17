@@ -1,6 +1,6 @@
 # 12-Run Comparison — OpenShift (ykt3 Service, ykt2 workloads) vs KinD (single-node local), both Service v1.28
 
-**Report generated:** 2026-09-15T19:51:08Z
+**Report generated:** 2026-09-17T12:54:26Z
 
 **Platforms compared:** OpenShift (ykt3 Service, ykt2 workloads) vs KinD (single-node local)
 
@@ -89,7 +89,7 @@ killed by a per-task timeout leaves no `report.ndjson` row at all.
 
 For each direction: `median` (robust centre), then `mean`, then `CV` (population sigma / mean — dimensionless, so spread is comparable across benchmarks whose token counts differ by orders of magnitude). A mean well above the median means right-skew: a few long tasks dominate. CV shares its denominator with `mean`, not `median`, and is `—` for single-task runs.
 
-**Which direction varies more is benchmark-dependent, and output usually wins** — measured at OUT CV > IN CV in 27 of 33 legs across these matrices. On single-turn gsm8k the prompt is nearly constant (IN CV ~0.06-0.09) while answer length swings with how much the model reasons (OUT CV 0.4-1.0). Only long-horizon **appworld** inverts it (IN CV 0.30-0.93 above OUT), because there the tasks differ enormously in turn count and every call re-sends the whole conversation, so compounding context dominates. tau2 sits between, marginally output-led.
+**Which direction varies more is benchmark-dependent, and output usually wins** — measured on *these* matrices at OUT CV > IN CV in **15 of the 22 leg-sides** that ran more than one task (one leg on one platform; a single-task run has no CV). By benchmark, and by model where a benchmark ran more than one: **gsm8k** IN 0.06–0.09 vs OUT 0.52–0.86 on `gpt-5-mini-2025-08-07`, IN 0.39–0.44 vs OUT 0.33–0.55 on `gpt-4.1`; **tau2** IN 0.12–0.20 vs OUT 0.10–0.29; **appworld** IN 0.15–0.69 vs OUT 0.13–0.52. Held out of those ranges: #6 (OpenShift (ykt3 Service, ykt2 workloads)) — a task there died before its first model call, and the zero-token row it left inflates that leg's IN CV on its own. The mechanism is visible in the gsm8k rows: a model that answers in one call re-sends a nearly constant prompt, so only its answer length swings, while a model that needs tool round-trips varies on the input side too — same five tasks, different shape. Only long-horizon **appworld** is input-led in every one of its leg-sides: there the tasks differ enormously in turn count and every call re-sends the whole conversation, so compounding context dominates the input side.
 
 ### Input tokens
 
