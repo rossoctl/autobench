@@ -1,0 +1,43 @@
+{
+  "_what": "Rate card for the models the benchmark legs actually use. Read off the LiteLLM admin UI's per-model detail pages on 2026-09-17. Consumed by reference/gen-cost-analysis.py; no generator may hardcode a price.",
+  "_unit": "USD per 1,000,000 tokens",
+  "_rate_card_date": "2026-09-17",
+  "_keys": "Keyed by the EXACT `model` string in report.ndjson, which carries litellm's `openai/` routing prefix. That prefix is not part of the model's name -- the gateway strips it before resolving the alias in `public_name`.",
+  "_caveats": [
+    "Input and output only. The UI's model pages expose no cached-input tier, so a cache-read discount -- if the gateway applies one -- is not modelled and every figure computed from this file is an upper bound on input cost.",
+    "Reasoning tokens are billed as output. gpt-5-mini is a reasoning model, and our llm_output_tokens already includes its exposed reasoning tokens, so no separate term is needed.",
+    "These are the gateway operator's posted rates, not an invoice. They are what a run WOULD cost at list price."
+  ],
+  "models": {
+    "openai/Azure/gpt-5-mini-2025-08-07": {
+      "public_name": "Azure/gpt-5-mini-2025-08-07",
+      "provider": "azure",
+      "litellm_model": "azure/gpt-5-mini-2025-08-07",
+      "input_per_1m": 0.25,
+      "output_per_1m": 2.0
+    },
+    "openai/Azure/gpt-4.1": {
+      "public_name": "Azure/gpt-4.1",
+      "provider": "azure",
+      "litellm_model": "azure/gpt-4.1-2025-04-14",
+      "input_per_1m": 2.0,
+      "output_per_1m": 8.0,
+      "_also": "The IBAC judge model (rossoctl-platform-config ibac.judgeModel). Its calls are NOT in report.ndjson -- see gen-cost-analysis.py's judge section."
+    },
+    "openai/aws/claude-sonnet-5": {
+      "public_name": "aws/claude-sonnet-5",
+      "provider": "bedrock",
+      "litellm_model": "bedrock/us.anthropic.claude-sonnet-5",
+      "input_per_1m": 1.52,
+      "output_per_1m": 7.6
+    },
+    "openai/gemini-2.5-pro": {
+      "public_name": "gemini-2.5-pro",
+      "provider": "vertex_ai",
+      "litellm_model": "vertex_ai/gemini-2.5-pro",
+      "input_per_1m": 1.25,
+      "output_per_1m": 10.0,
+      "_assumed": "Priced from the rate card's `gcp/gemini-2.5-pro` entry (vertex_ai/gemini-2.5-pro, $1.25/$10.00). Our legs send the BARE alias `gemini-2.5-pro`, which is a separate registration on the gateway and the only Gemini 2.5 Pro our key can see; `/model/info` is admin-only (403), so its backend was not read directly. If the bare alias is ever repointed, this row is the one that goes stale."
+    }
+  }
+}
