@@ -19,66 +19,16 @@ whose mirror is missing is reported as missing rather than silently skipped -- `
 pruned, and a silent skip is how a report ends up quoting half a matrix. Run
 `reference/remirror.py <run12-*.json>` first if legs come back missing.
 """
-import json
 import pathlib
 import statistics as st
 import sys
 
-HERE = pathlib.Path(__file__).resolve().parent
-PRICES = json.loads((HERE / "model_prices.json").read_text())["models"]
-
-# The judge's system prompt is a fixed 1,577 chars / 231 words, read off the rendered
-# per-workload ConfigMap (team1/authbridge-config-<workload>, ibac plugin config). The
-# ~4 chars/token rule is a floor: the proposed-action block that follows it is not fixed.
-JUDGE_PROMPT_CHARS = 1577
-JUDGE_MODEL = "openai/Azure/gpt-4.1"
-
-
-def money(x):
-    """Dollars at a precision that does not round a real cost to zero."""
-    if x == 0:
-        return "$0"
-    if x < 0.0001:
-        return f"${x:.6f}"
-    if x < 0.01:
-        return f"${x:.5f}"
-    if x < 1:
-        return f"${x:.4f}"
-    return f"${x:,.2f}"
-
-
-def cost(model, tin, tout):
-    p = PRICES.get(model)
-    if not p:
-        return None
-    return (tin * p["input_per_1m"] + tout * p["output_per_1m"]) / 1e6
-
-
-def load(spec_path, mirror):
-    spec = json.loads(pathlib.Path(spec_path).read_text())
-    legs = []
-    for r in spec["runs"]:
-        rid = r.get("run_id")
-        hits = sorted(mirror.glob(f"**/{rid}/report.ndjson")) if rid else []
-        if not hits:
-            legs.append({"n": r["n"], "bench": r["bench"], "title": r["title"],
-                         "missing": True, "rows": []})
-            continue
-        rows = [json.loads(x) for x in hits[0].read_text().splitlines() if x.strip()]
-        legs.append({"n": r["n"], "bench": r["bench"], "title": r["title"],
-                     "missing": False, "rows": rows,
-                     "req": r.get("run_request") or {}})
-    return {"label": spec["label"], "legs": legs}
-
-
-def priced(rows):
-    """Rows that can be priced: a real model and a real input-token count.
-
-    A row with `llm_input_tokens == 0` is a task that died before its first model call --
-    it carries `model: unknown` and no cost. Counting it would drag every per-task mean
-    toward zero, so it is excluded here and reported separately.
-    """
-    return [x for x in rows if (x.get("llm_input_tokens") or 0) and x.get("model") in PRICES]
+# The rate card, the row filter and the aggregations are shared with gen-cost-charts.py, so
+# the tables and the figures cannot disagree about what a run cost.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import costlib  # noqa: E402
+from costlib import (JUDGE_MODEL, JUDGE_PROMPT_CHARS, PRICES,  # noqa: E402
+                     cost, load, money, priced)
 
 
 def section(title, char="="):
@@ -314,10 +264,10 @@ def main(argv):
     if not specs:
         sys.exit(__doc__)
     platforms = [load(s, mirror) for s in specs]
+    costlib.require_mirror(platforms)
 
     L = [f"AutoBench -- cost at list price",
-         f"rate card {json.loads((HERE / 'model_prices.json').read_text())['_rate_card_date']}, "
-         f"mirror {mirror}",
+         f"rate card {costlib.RATE_CARD_DATE}, mirror {mirror}",
          f"platforms: {', '.join(P['label'] for P in platforms)}"]
     L += rate_card()
     pt, agg, cheap_cost, cheapest = per_task(platforms)

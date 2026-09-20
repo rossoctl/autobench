@@ -34,7 +34,9 @@ looked for if a source needs it.
 from __future__ import annotations
 
 import argparse
+import base64
 import html
+import mimetypes
 import pathlib
 import re
 import shutil
@@ -187,7 +189,12 @@ tr { break-inside: avoid; }
 thead { display: table-header-group; }
 table code { background: none; padding: 0; font-size: .95em; }
 
-img { max-width: 100%; }
+/* Generated figures (docs/img/*.png). A chart and the take-away paragraph under it must not be
+   split across a page break, so the <p> that follows an image is glued to it. */
+img { max-width: 100%; display: block; margin: 6px 0 2px; }
+p:has(> img) { break-inside: avoid; break-after: avoid; margin-bottom: 2px; }
+p:has(> img) + p { break-before: avoid; }
+sub { font-size: 8.5pt; color: #57606a; }
 """
 
 HTML_SHELL = """<!DOCTYPE html>
@@ -347,6 +354,34 @@ def absolutize_repo_links(html_body: str, md: pathlib.Path) -> str:
     return re.sub(r'href="([^"]*)"', fix, html_body)
 
 
+def inline_images(html_body: str, md: pathlib.Path) -> str:
+    """Embed each local `<img src>` as a data URI.
+
+    Same root cause as absolutize_repo_links(), but a worse failure: we render from a throwaway
+    directory in /tmp, so a relative `src` like `img/leg-pareto.png` resolves to a file that is
+    not there and the figure comes out as an empty box -- SILENTLY, because Chrome's
+    --print-to-pdf exits 0 either way. Pointing the src at the source tree instead would make
+    the committed PDF depend on the build machine's paths, and pointing it at GitHub would make
+    it depend on the network at print time. Embedding is the only option that survives both.
+
+    A missing file is fatal rather than skipped: a doc that cites a figure it cannot show is
+    exactly the drift the generated-docs rule exists to prevent.
+    """
+    def fix(m: re.Match) -> str:
+        src = html.unescape(m.group(1))
+        if re.match(r"^(data:|[a-zA-Z][a-zA-Z0-9+.-]*:|//)", src):
+            return m.group(0)
+        path = (md.parent / src.partition("#")[0]).resolve()
+        if not path.is_file():
+            raise SystemExit(f"{md}: image not found: {src}\n"
+                             f"  (generated figures come from reference/gen-cost-charts.py)")
+        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        return f'src="data:{mime};base64,{b64}"'
+
+    return re.sub(r'src="([^"]*)"', fix, html_body)
+
+
 def md_to_html_body(md: pathlib.Path) -> str:
     """GFM -> HTML fragment, highlighted, with per-line spans everywhere."""
     out = subprocess.run(
@@ -404,6 +439,7 @@ def md_to_html_body(md: pathlib.Path) -> str:
 
     out = re.sub(r"<(t[dh])((?:\s[^>]*)?)>(.*?)</\1>", tag_wide_cell, out, flags=re.S)
     out = absolutize_repo_links(out, md)
+    out = inline_images(out, md)
     return out
 
 

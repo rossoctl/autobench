@@ -30,6 +30,7 @@ latency figures describe the 267 that finished.**
 - [What each one ships with, and what we supply](#what-each-one-ships-with-and-what-we-supply)
 - [How to read our reports](#how-to-read-our-reports)
 - [What a run costs](#what-a-run-costs)
+  - [Two figures to read before budgeting](#two-figures-to-read-before-budgeting)
   - [The rate card behind those dollars](#the-rate-card-behind-those-dollars)
   - [What one leg costs](#what-one-leg-costs)
   - [Model choice, measured on identical tasks](#model-choice-measured-on-identical-tasks)
@@ -45,6 +46,8 @@ latency figures describe the 267 that finished.**
 | | **gsm8k** | **tau2** | **appworld** |
 |---|---|---|---|
 | What it tests | multi-step arithmetic reasoning | multi-turn dialogue + tool use | long-horizon app automation |
+| **Model we run it on** | **gpt-5-mini** (or gpt-4.1) | **claude-sonnet-5** | **gemini-2.5-pro** |
+| Its rate, in / out $ per 1M | 0.25 / 2.00 | 1.52 / 7.60 | 1.25 / 10.00 |
 | Task rows measured | 172 of 172 | 60 of 60 | 35 of 50 (15 timed out) |
 | Rows with lost telemetry | 0 | 0 | 0 |
 | **Pass rate** | **0.97** | **0.83** | **0.00** |
@@ -55,12 +58,12 @@ latency figures describe the 267 that finished.**
 | Tool calls / task | 1.1 | 11.4 | 14.6 |
 | Median task latency | **4.9s** | **84s** | **264s** |
 | Slowest task seen | 39s | 136s | 592s |
-| Model we use | gpt-5-mini (or gpt-4.1) | claude-sonnet-5 | gemini-2.5-pro |
 | Task pool | 8.5K problems (HuggingFace) | 114 (`retail` domain) | grouped scenarios |
 | `task_id` format | integer (`0`, `1`, …) | integer (`0`, `1`, …) | `21abae1_1` |
 
-**‡** at our gateway's posted rates, and it does **not** track the token ratios — see
-[What a run costs](#what-a-run-costs) for the rate card and why.
+**‡** at our gateway's posted rates for **that benchmark's own model** — the three rungs do not run
+the same one, so the dollar row is a product of tokens *and* a rate and it does **not** track the
+token ratios. See [What a run costs](#what-a-run-costs) for the rate card and why.
 
 The headline is the **scale gap**: a tau2 task costs ~267× the input tokens of a gsm8k task, and an
 appworld task ~792×. Choose accordingly — a 50-task gsm8k run is about a minute; a 20-task appworld
@@ -283,8 +286,10 @@ you need to budget with — same 267 rows, both platforms pooled:
 
 | per task | gsm8k | tau2 | appworld |
 |---|---:|---:|---:|
+| **model (the benchmark's default)** | **`Azure/gpt-5-mini`** | **`aws/claude-sonnet-5`** | **`gemini-2.5-pro`** |
+| its rate, in / out $ per 1M | 0.25 / 2.00 | 1.52 / 7.60 | 1.25 / 10.00 |
 | **total tokens** | **520** | **92,963** | **295,093** |
-| × a gsm8k task, in **tokens** | 1× | 179× | 567× |
+| × a gsm8k task, in **tokens** | 1× | 178× | 564× |
 | **cost at our gateway's rates** | **$0.00055** | **$0.154** | **$0.589** |
 | × a gsm8k task, in **dollars** | 1× | 279× | 1,069× |
 | cost of 100 tasks | $0.06 | $15.38 | $58.88 |
@@ -293,8 +298,12 @@ you need to budget with — same 267 rows, both platforms pooled:
 | share of task time inside model calls | 90% | 58% | 96% |
 | tokens per **passed** task | 537 | ~112 K | no finite value |
 
-**Money amplifies the difficulty ladder rather than tracking it.** A tau2 task is 179× a gsm8k task in
-tokens but **279×** in dollars, and appworld 567× in tokens but **1,069×** — because climbing a rung
+**Read the model row first.** Every dollar figure in this table is tokens × *that* model's rate, and
+no two rungs share a model — so a figure here transfers to a different model only after you recompute
+it, and the ratio rows below are as much a statement about the price list as about the benchmarks.
+
+**Money amplifies the difficulty ladder rather than tracking it.** A tau2 task is 178× a gsm8k task in
+tokens but **279×** in dollars, and appworld 564× in tokens but **1,069×** — because climbing a rung
 also switches you to a dearer model, so the rungs are spaced *wider* in dollars than in tokens. Any
 budget scaled from the token ratios is short by roughly 1.6–1.9×.
 
@@ -310,7 +319,42 @@ gained you nothing, and appworld at 0.00 has no finite cost per success at all.
 
 The dollar rows cover 266 priced rows rather than 267 — one task on OpenShift leg #6 died before its
 first model call, so it has tokens of zero and no cost, which is also why its 523-token mean rounds a
-hair above the 520 in the token row.
+hair above the 520 in the token row. The two ratio rows divide by that 523, so they read 178× and 564×
+where a division by the rounded 520 would give 179× and 567×.
+
+### Two figures to read before budgeting
+
+Generated from the same artifacts as the table above, by
+`uv run --with matplotlib python reference/gen-cost-charts.py results/v1.28-dev146/run12-{ocp,kind}-dev146.json`
+— along with four more, in
+[DEVELOPER_GUIDE.md § Token- and cost-efficiency in six figures](DEVELOPER_GUIDE.md#token--and-cost-efficiency-in-six-figures):
+cost composition, model choice on identical tasks, where a matrix's bill goes by leg, and what the
+IBAC judge adds.
+
+<!-- Regenerate: uv run --with matplotlib python reference/gen-cost-charts.py results/v1.28-dev146/run12-*.json -->
+<!-- charts -->
+
+#### Figure 1 — Money climbs the ladder faster than tokens
+
+![Money climbs the ladder faster than tokens](img/ladder-amplification.png)
+
+**Money climbs the difficulty ladder faster than tokens do: tau2 is 178× a gsm8k task in tokens but 279× in dollars, appworld is 564× a gsm8k task in tokens but 1,069× in dollars — so a budget scaled off the token ratios is short by 1.6–1.9×.**
+
+Each rung is a different model, which is why the dollar bar outruns the token bar: climbing the ladder also buys a dearer model. Wall-clock climbs SLOWEST of the three (17× tau2, 54× appworld), because the harder benchmarks parallelize their turns while their bills add up.
+
+<sub>gsm8k baseline: 523 tokens, $0.00055, 4.9 s median, over 171 task rows.</sub>
+
+#### Figure 2 — Efficiency only means anything per SUCCESS
+
+![Efficiency only means anything per SUCCESS](img/cost-per-pass.png)
+
+**Dividing by the pass rate is what turns a token count into an efficiency figure: gsm8k $0.00055 per task becomes $0.00056 per PASS; tau2 $0.1538 per task becomes $0.1846 per PASS — and appworld has no finite cost per success at all, because it passed nothing.**
+
+A change that halves your token use and halves your pass rate has gained you nothing, which is why we never quote tokens per task as an efficiency number on its own. The unbounded row is not a rendering artifact: it is the honest way to report a benchmark that runs to completion, records every token, and then fails evaluation.
+
+<sub>Pass rates here are over PRICED rows; the headline rates in the reports use the tasks attempted, which is a lower number for appworld because a timed-out task leaves no row.</sub>
+
+<!-- /charts -->
 
 ### The rate card behind those dollars
 

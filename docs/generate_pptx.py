@@ -29,6 +29,8 @@ prs.slides, so they follow the real order automatically.
 """
 
 import datetime as _dt
+import json as _json
+import pathlib as _pathlib
 
 from pptx import Presentation
 from pptx.dml.color import RGBColor
@@ -179,6 +181,10 @@ def grid(slide, x, y, w, h, rows, col_w, head_fill=NAVY, head_color=WHITE, font=
     for i, cw in enumerate(col_w):
         tbl.columns[i].width = Emu(int(cw))
     for r, row in enumerate(rows):
+        # A hand-broken cell reads as a paragraph, and a centered paragraph whose second line is
+        # shorter renders as a ragged indent -- so a prose ROW goes left, all of it: mixing a
+        # centered one-liner in beside two left-aligned cells looks like a mistake either way.
+        prose = any("\n" in str(v) for v in row)
         for c, val in enumerate(row):
             cell = tbl.cell(r, c)
             cell.margin_left = cell.margin_right = Pt(5)
@@ -188,12 +194,42 @@ def grid(slide, x, y, w, h, rows, col_w, head_fill=NAVY, head_color=WHITE, font=
             cell.fill.fore_color.rgb = head_fill if r == 0 else (
                 WHITE if r % 2 else RGBColor(0xF4, 0xF6, 0xF8))
             para = cell.text_frame.paragraphs[0]
-            para.alignment = PP_ALIGN.LEFT if c == 0 else PP_ALIGN.CENTER
+            para.alignment = PP_ALIGN.LEFT if c == 0 or prose else PP_ALIGN.CENTER
             run = para.add_run()
             run.text = str(val)
             _set_font(run, font, r == 0 or (c == 0 and first_col_bold),
                       head_color if r == 0 else INK)
     return tbl
+
+
+# ---- the generated efficiency figures --------------------------------------
+# reference/gen-cost-charts.py writes docs/img/*.png AND docs/img/takeaways.json, which holds the
+# one-sentence take-away for each figure. We read that file rather than retyping the sentences, so
+# a slide caption cannot contradict the picture above it: both come from the same run of the same
+# generator over the same artifacts. If the file is absent the chart slides are skipped with a
+# warning -- a deck missing two slides is better than a deck asserting stale numbers.
+_TAKEAWAYS_PATH = _pathlib.Path(__file__).resolve().parent / "img" / "takeaways.json"
+try:
+    _FIGS = _json.loads(_TAKEAWAYS_PATH.read_text())["figures"]
+except FileNotFoundError:
+    _FIGS = {}
+    print("WARNING: docs/img/takeaways.json missing -- skipping the chart slides.\n"
+          "         uv run --with matplotlib python reference/gen-cost-charts.py "
+          "results/v1.28-dev146/run12-{ocp,kind}-dev146.json")
+
+
+def figure(slide, key, x, y, w, accent, light, cap_h=inch(1.95)):
+    """One generated PNG with its take-away underneath, in a column `w` wide.
+
+    The picture is sized by WIDTH only -- python-pptx derives the height from the file's own
+    aspect ratio, so a figure whose shape changes when it is regenerated still fits."""
+    f = _FIGS[key]
+    pic = slide.shapes.add_picture(str(_TAKEAWAYS_PATH.parent / f"{key}.png"),
+                                  Emu(int(x)), Emu(int(y)), width=Emu(int(w)))
+    cap_y = int(y) + pic.height + inch(0.10)
+    box(slide, x, cap_y, w, cap_h, f["title"], light, accent, font=13, font_color=accent,
+        sub=f["takeaway"], sub_color=INK)
+    return pic
 
 
 def dot(cx, cy, n):
@@ -240,7 +276,8 @@ items = [
      "6.1 the three benchmarks and the REST flow that drives them · 6.2 what each image bakes in"),
     ("The three benchmarks — what they measure",
      "7.1 the difficulty ladder · 7.2 what each stresses · 7.3 the traps · 7.4 picking one · "
-     "7.5 what it costs · 7.6 the rate card"),
+     "7.5 what it costs · 7.6 the rate card · 7.7–7.8 six efficiency figures · "
+     "7.9–7.10 the benchmarks and the 12 runs compared"),
     ("The canonical 12-run matrix",
      "8.1 what the 12 runs parameterize · 8.2 what they measured"),
     ("Cross-platform & plugin overhead",
@@ -919,25 +956,28 @@ title_band(s, "7.1  The Three Benchmarks — a Difficulty Ladder",
            "Not interchangeable suites: each costs ~an order of magnitude more than the last")
 grid(s, inch(0.45), inch(1.30), inch(12.4), inch(4.35), [
     ("", "gsm8k", "tau2", "appworld"),
+    ("MODEL (the default)", "Azure/gpt-5-mini", "aws/claude-sonnet-5", "gemini-2.5-pro"),
+    ("its rate, in / out $ per 1M", "0.25 / 2.00", "1.52 / 7.60", "1.25 / 10.00"),
     ("What it tests", "multi-step arithmetic", "multi-turn dialogue + tools", "long-horizon app automation"),
     ("Task rows measured", "172 of 172", "60 of 60", "35 of 50 (15 timed out)"),
     ("Rows with lost telemetry", "0", "0", "0"),
     ("Pass rate", "0.97", "0.83", "0.00"),
     ("Input tokens / task", "341", "90,902", "269,953"),
     ("Output tokens / task", "180", "2,061", "25,140"),
-    ("Cost / task, our rates", "$0.00055", "$0.154", "$0.589"),
+    ("Cost / task, at those rates", "$0.00055", "$0.154", "$0.589"),
     ("LLM calls / task", "1.1", "11.4", "29.2"),
     ("Tool calls / task", "1.1", "11.4", "14.6"),
     ("Median task latency", "4.9 s", "84 s", "264 s"),
     ("Slowest task seen", "39 s", "136 s", "592 s"),
-    ("Model we use", "gpt-5-mini", "claude-sonnet-5", "gemini-2.5-pro"),
     ("Task pool", "8.5K (HuggingFace)", "114 (retail domain)", "grouped scenarios"),
 ], col_w=[inch(2.5), inch(3.3), inch(3.3), inch(3.3)], font=11)
 _ban = box(s, inch(0.45), inch(6.05), inch(12.4), inch(0.95),
-    "The scale gap is the headline: a tau2 task costs ~267x the input tokens of a gsm8k task, an "
-    "appworld task ~792x — and in MONEY 279x and 1,069x, because the harder benchmarks also run the "
-    "dearer models (7.6). A 50-task gsm8k run is a minute and 2 cents; a 20-task appworld run is "
-    "30-45 minutes, millions of tokens and dollars. Budget by benchmark, not by task count.",
+    "Read the MODEL row before any dollar figure: the three rungs do not run the same model, and "
+    "each default is dearer than the one below it — so no cost here transfers to another model. The "
+    "scale gap is the headline: a tau2 task costs ~267× the input tokens of a gsm8k task, an "
+    "appworld task ~792× — and in MONEY 279× and 1,069×, because that model change compounds with "
+    "the token growth (7.5, 7.7). A 50-task gsm8k run is a minute and 2 cents; a 20-task appworld "
+    "run is 30-45 minutes, millions of tokens and dollars. Budget by benchmark, not by task count.",
     LTGRAY, STORE, font=12.5, bold=True, font_color=INK)
 _ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
 
@@ -1093,7 +1133,7 @@ box(s, inch(0.45), inch(4.05), inch(6.55), inch(1.35),
 box(s, inch(7.30), inch(4.05), inch(5.55), inch(1.35),
     "Two legs of the same size are not the same bill",
     LTORANGE, KC, font=14, font_color=KC,
-    sub="#12 cost 2.6x more on OpenShift than on KinD for the same 20 requested tasks: appworld "
+    sub="#12 cost 2.6× more on OpenShift than on KinD for the same 20 requested tasks: appworld "
         "turn counts are nondeterministic, and the slower cluster's tasks ran longer before the "
         "600 s timeout. So the two $18.91 / $11.02 totals are NOT a platform comparison — OpenShift "
         "completed 18 appworld tasks against KinD's 10. Size appworld on YOUR cluster.",
@@ -1118,13 +1158,15 @@ title_band(s, "7.5  The Cost Model — Tokens, Models, Money",
            "What a task costs in tokens AND in dollars, and why the two rankings disagree")
 grid(s, inch(0.45), inch(1.30), inch(6.15), inch(4.55), [
     ("per task, pooled", "gsm8k", "tau2", "appworld"),
+    ("MODEL (the default)", "gpt-5-mini", "claude-sonnet-5", "gemini-2.5-pro"),
+    ("its rate, in / out $ per 1M", "0.25 / 2.00", "1.52 / 7.60", "1.25 / 10.00"),
     ("LLM calls", "1.10", "11.38", "29.20"),
     ("input tokens", "341", "90,902", "269,953"),
     ("output tokens", "180", "2,061", "25,140"),
     ("total tokens", "520", "92,963", "295,093"),
-    ("x a gsm8k task, in TOKENS", "1x", "179x", "567x"),
+    ("× a gsm8k task, in TOKENS", "1×", "178×", "564×"),
     ("cost at our gateway's rates", "$0.00055", "$0.154", "$0.589"),
-    ("x a gsm8k task, in DOLLARS", "1x", "279x", "1,069x"),
+    ("× a gsm8k task, in DOLLARS", "1×", "279×", "1,069×"),
     ("cost of 100 tasks", "$0.06", "$15.38", "$58.88"),
     ("input share of tokens", "66%", "98%", "92%"),
     ("input share of COST", "31%", "90%", "57%"),
@@ -1144,22 +1186,22 @@ grid(s, inch(6.90), inch(1.30), inch(5.95), inch(2.60), [
 ], col_w=[inch(2.55), inch(1.70), inch(1.70)], font=10.5)
 
 box(s, inch(6.90), inch(4.10), inch(5.95), inch(1.75),
-    "Same five tasks: gpt-4.1 costs 4.1x gpt-5-mini",
+    "Same five tasks: gpt-4.1 costs 4.1× gpt-5-mini",
     LTPURPLE, ROSSO, font=13.5, font_color=ROSSO,
-    sub="Mean of its 2 legs against gpt-5-mini's 7; leg-to-leg the ratio spans 2.5x–6.7x, because "
+    sub="Mean of its 2 legs against gpt-5-mini's 7; leg-to-leg the ratio spans 2.5×–6.7×, because "
         "gpt-5-mini's output length swings with reasoning effort. The reasoning model answers in ONE "
-        "call; gpt-4.1 needs ~3 tool round-trips. On our card the INPUT side decides it alone — 2.6x "
-        "the tokens at 8x the price is a 21x input bill, and the output side cannot offset it "
-        "(gpt-5-mini emits 3.6x more output at a quarter the rate, so the two output bills land "
+        "call; gpt-4.1 needs ~3 tool round-trips. On our card the INPUT side decides it alone — 2.6× "
+        "the tokens at 8× the price is a 21× input bill, and the output side cannot offset it "
+        "(gpt-5-mini emits 3.6× more output at a quarter the rate, so the two output bills land "
         "within 10% of each other).",
     sub_color=INK)
 
 _ban = box(s, inch(0.45), inch(6.00), inch(12.4), inch(0.95),
-    "cost per task  =  (input tokens x P_in  +  output tokens x P_out) / 1 M     — which model is "
+    "cost per task  =  (input tokens × P_in  +  output tokens × P_out) / 1 M     — which model is "
     "cheaper is a property of the PRICE LIST, not of the models: compute it for your own rates.  "
-    "Money AMPLIFIES the difficulty ladder rather than tracking it (tau2 179x a gsm8k task in "
-    "tokens but 279x in dollars; appworld 567x but 1,069x), because the harder benchmarks also run "
-    "the dearer models — a budget scaled off the token ratios is short by 1.6–1.9x.",
+    "Money AMPLIFIES the difficulty ladder rather than tracking it (tau2 178× a gsm8k task in "
+    "tokens but 279× in dollars; appworld 564× but 1,069×), because the harder benchmarks also run "
+    "the dearer models — a budget scaled off the token ratios is short by 1.6–1.9×.",
     LTGRAY, STORE, font=12, bold=True, font_color=INK)
 _ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
 
@@ -1173,14 +1215,14 @@ title_band(s, "7.6  The Rate Card — and Which Way the Dollars Are Wrong",
            "posted rates, not an invoice")
 grid(s, inch(0.45), inch(1.30), inch(12.4), inch(1.95), [
     ("model (as report.ndjson records it)", "provider", "in $/1M", "out $/1M", "out/in", "used by"),
-    ("Azure/gpt-5-mini-2025-08-07", "azure", "0.25", "2.00", "8.0x", "gsm8k default"),
-    ("gemini-2.5-pro", "vertex_ai", "1.25", "10.00", "8.0x", "appworld"),
-    ("aws/claude-sonnet-5", "bedrock", "1.52", "7.60", "5.0x", "tau2"),
-    ("Azure/gpt-4.1", "azure", "2.00", "8.00", "4.0x", "leg #4, AND the IBAC judge"),
+    ("Azure/gpt-5-mini-2025-08-07", "azure", "0.25", "2.00", "8.0×", "gsm8k default"),
+    ("gemini-2.5-pro", "vertex_ai", "1.25", "10.00", "8.0×", "appworld"),
+    ("aws/claude-sonnet-5", "bedrock", "1.52", "7.60", "5.0×", "tau2"),
+    ("Azure/gpt-4.1", "azure", "2.00", "8.00", "4.0×", "leg #4, AND the IBAC judge"),
 ], col_w=[inch(4.30), inch(1.55), inch(1.35), inch(1.35), inch(1.15), inch(2.70)], font=11)
 
 box(s, inch(0.45), inch(3.45), inch(12.4), inch(0.90),
-    "Output is priced 4–8x input at every provider",
+    "Output is priced 4–8× input at every provider",
     LTTEAL, WORK, font=14, font_color=WORK,
     sub="That one fact explains the counter-intuitive results: a reasoning model's verbosity is "
         "charged at the expensive end, so a model can win on token count and lose on the bill. Read "
@@ -1192,8 +1234,8 @@ box(s, inch(0.45), inch(4.55), inch(6.15), inch(2.35),
     LTORANGE, KC, font=13.5, font_color=KC,
     sub="The judge makes ~1 completion per authorized tool call, on Azure/gpt-4.1 — the dearest "
         "model on the card — against a FIXED 1,577-char system prompt that does not shrink with the "
-        "task. That is ≥ $0.00111 per call, which is 2.4x the entire gsm8k task it is authorizing "
-        "($0.00045), and 1.4x–4.4x the agent's whole bill across legs #6–#8. On the plugin legs IBAC "
+        "task. That is ≥ $0.00111 per call, which is 2.4× the entire gsm8k task it is authorizing "
+        "($0.00045), and 1.4×–4.4× the agent's whole bill across legs #6–#8. On the plugin legs IBAC "
         "is not overhead on the bill; it IS the bill.  tau2's user simulator is invisible the same "
         "way: same model as the agent, but inside the uninstrumented MCP pod.",
     sub_color=INK)
@@ -1207,6 +1249,116 @@ box(s, inch(6.90), inch(4.55), inch(5.95), inch(2.35),
         "of the bill: if cached input were FREE, tau2 would floor at $0.0157 a task instead of "
         "$0.154 and appworld at $0.251 instead of $0.589, while gsm8k barely moves. That ordering is "
         "structural — caching pays off on a long re-sent prefix, which is what makes input dominate.",
+    sub_color=INK)
+
+
+# ---- 7.7 / 7.8 the six efficiency figures ----------------------------------------------------
+# The PNGs and the sentences under them both come from reference/gen-cost-charts.py; neither is
+# retyped here. Three figures per slide, one take-away each.
+if _FIGS:
+    _COL_W = inch(3.95)
+    _COL_X = [inch(0.45), inch(4.70), inch(8.95)]
+    _TINT = [(WORK, LTTEAL), (BLUE, LTBLUE), (ROSSO, LTPURPLE)]
+
+    s = prs.slides.add_slide(BLANK)
+    title_band(s, "7.7  Token- and Cost-Efficiency — Where the Money Actually Goes",
+               "Measured on the v1.28 pair (267 task rows) at the rate card in 7.6 — "
+               "one take-away per figure")
+    for _k, _x, (_a, _l) in zip(["ladder-amplification", "cost-composition", "model-choice"],
+                                _COL_X, _TINT):
+        figure(s, _k, _x, inch(1.35), _COL_W, _a, _l, cap_h=inch(2.35))
+
+    s = prs.slides.add_slide(BLANK)
+    title_band(s, "7.8  Token- and Cost-Efficiency — What To Budget, and What To Divide By",
+               "Same three rules every time: budget by benchmark, divide by successes, "
+               "count what is billed off-telemetry")
+    for _k, _x, (_a, _l) in zip(["leg-pareto", "cost-per-pass", "judge-overhead"],
+                                _COL_X, _TINT):
+        figure(s, _k, _x, inch(1.35), _COL_W, _a, _l, cap_h=inch(2.35))
+
+# ---- 7.9 the three benchmarks, compared ------------------------------------------------------
+# Deliberately not a numbers slide: 7.1 and 7.5 already carry the measurements. This one answers
+# "what IS a task, and what is a result from it worth" -- the question the numbers cannot.
+s = prs.slides.add_slide(BLANK)
+title_band(s, "7.9  The Three Benchmarks Compared — Task, Purpose, Worth",
+           "They differ in the SHAPE of a task, not just its size — which is what makes the ladder "
+           "a ladder")
+grid(s, inch(0.45), inch(1.25), inch(12.4), inch(4.70), [
+    ("", "gsm8k", "tau2", "appworld"),
+    ("A task IS", "one grade-school word problem,\nanswered in text",
+     "one retail customer-service\nconversation vs a simulated user",
+     "one multi-app scenario automated\nthrough an API surface"),
+    ("Turn structure", "1 model call, ~1 tool call",
+     "~11 calls alternating with a\nUSER SIMULATOR in character",
+     "~29 calls, each re-sending the\nwhole conversation"),
+    ("Ends when", "the answer is emitted",
+     "the dialogue resolves, or policy\nis violated",
+     "the goal state is reached — or the\n600 s task timeout kills it"),
+    ("Scored by", "exact numeric match",
+     "task completion + policy\ncompliance (tau2's own scorer)",
+     "appworld's state assertions,\nall-or-nothing"),
+    ("It exists to test", "that the PLUMBING works:\ndeploy, auth, telemetry, S3",
+     "that the agent HOLDS STATE\nacross turns and uses tools\nunder a policy",
+     "that the agent survives LONG\nHORIZONS: context growth,\ntimeouts, partial failure"),
+    ("A result is worth", "a go/no-go on infrastructure.\nIt saturates near 1.0, so it\ncannot rank models",
+     "a genuine model/config\ncomparison — it discriminates,\nand 0.83 leaves headroom both ways",
+     "a stress signal, not a capability\nscore: at 0.00 it tells you what\nBREAKS, not who is better"),
+    ("Watch out for", "1.0 proves nothing about\nthe agent",
+     "its user simulator is billed\nbut NOT in our telemetry",
+     "15 of 50 tasks time out, and a\nkilled task leaves NO report row"),
+], col_w=[inch(2.20), inch(3.35), inch(3.45), inch(3.40)], font=10.5)
+_ban = box(s, inch(0.45), inch(6.15), inch(12.4), inch(0.85),
+    "gsm8k is a SMOKE TEST WITH A SCORE — reading its 0.97 as a model measurement is the most "
+    "common misreading of these numbers.  tau2 is the only rung that discriminates, and it fails "
+    "informatively: a wrong answer, a policy violation and a dropped thread are different "
+    "failures.  appworld earns its place precisely BECAUSE it fails — it is the only leg that has "
+    "ever exposed a timeout, a context limit or a cache effect before a user did.",
+    LTGRAY, STORE, font=12, bold=False, font_color=INK)
+_ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
+
+# ---- 7.10 the 12 runs: what each band established --------------------------------------------
+s = prs.slides.add_slide(BLANK)
+title_band(s, "7.10  The 12 Runs Compared — What Each Band Established",
+           "Each leg changes exactly ONE thing against the leg before it, so a difference has one "
+           "candidate explanation")
+grid(s, inch(0.45), inch(1.25), inch(12.4), inch(3.30), [
+    ("legs", "what they parameterize", "what having run them established"),
+    ("#1–#3", "gsm8k 1 → 10 → 50 tasks, p=1 → 4\n(volume, then concurrency)",
+     "the pipeline is stable and DETERMINISTIC: 6 of 12 legs have byte-identical input-token\n"
+     "totals across two unlike clusters — the strongest like-for-like check available"),
+    ("#4", "gsm8k on Azure/gpt-4.1\n(model swap, identical tasks)",
+     "the only clean model comparison in the matrix: gpt-4.1 costs 4.1× gpt-5-mini for no\n"
+     "pass-rate gain at this difficulty, and the INPUT side decides it alone (7.7)"),
+    ("#5–#8", "AuthBridge auth-only / ibac-only / full /\nfull + per-plugin override, same 5 tasks",
+     "plugin cost is PLATFORM-SPECIFIC: OpenShift pays in the sidecar (+13.68 s/task), KinD in\n"
+     "the judge (+1.54 s) — never quote a per-task overhead without naming the cluster"),
+    ("#9–#10", "tau2 10 → 20 tasks, p=1 → 4\n(multi-turn, then under load)",
+     "multi-turn works end to end, user simulator included — and tau2 is where pass rates\n"
+     "carry information (0.75–1.00 across sides)"),
+    ("#11–#12", "appworld 5 → 20 tasks, p=1 → 4\n(long horizon, then under load)",
+     "the limits are real and they are UPSTREAM: 15 timeouts, a 0.00 pass rate, and 76% of\n"
+     "the whole matrix's bill in two legs"),
+], col_w=[inch(1.05), inch(4.35), inch(7.00)], font=10.5)
+
+box(s, inch(0.45), inch(4.75), inch(6.15), inch(2.25),
+    "What the matrix as a whole is worth",
+    LTTEAL, WORK, font=13.5, font_color=WORK,
+    sub="Not the pass rates — that the SAME 12 request bodies produce comparable measurements on "
+        "two unlike clusters. On the v1.28 pair: token capture complete (0 of 267 rows lost their "
+        "usage span), every task reached the model (0 health-probe losses), 7 of 12 pass rates "
+        "identical. The 5 that differ are mostly arithmetic on small runs — one task moves a "
+        "5-task leg by 0.20.",
+    sub_color=INK)
+
+box(s, inch(6.90), inch(4.75), inch(5.95), inch(2.25),
+    "So read the per-CAUSE table, then the rate",
+    LTORANGE, KC, font=13.5, font_color=KC,
+    sub="A task lost to a socket and a task lost to a wrong answer land in the same denominator "
+        "and only one says anything about the agent — which is why every report buckets them "
+        "(OCP/KinD: transport 1/0, per-task timeout 4/11, upstream agent defect 1/0, wrong answer "
+        "2/1). Two further limits: absolute LATENCY does not travel (4–93× apart between our "
+        "clusters), and the DEPLOY, not the task, is the unit of replication — adding tasks "
+        "tightens the wrong interval.",
     sub_color=INK)
 
 
@@ -1323,7 +1475,7 @@ find = [
      "contradiction: same prompts, different answers. Tokens prove the WORK matched; they say "
      "nothing about whether it was right."),
     ("Wall time: 5,719 s OCP vs 5,975 s KinD", "Within 5% overall, but individual legs differ by up "
-     "to 2.3x in either direction, and appworld — which dominates the total — inverts: #11 is faster "
+     "to 2.3× in either direction, and appworld — which dominates the total — inverts: #11 is faster "
      "on KinD, #12 is slower."),
     ("0 lost-attribution rows and 0 probe failures on both sides",
      "137 OCP rows against 130 KinD. The 7-row gap is appworld tasks that timed out before the "
@@ -1358,7 +1510,7 @@ grid(s, inch(0.45), inch(3.78), inch(6.35), inch(2.55), [
     ("Which layer costs anything", "the sidecar", "the judge", "NO"),
     ("Serial tool calls judged (p=1)", "10 / 10", "10 / 10", "YES"),
     ("Judged / tool-call ratio, n=50", "0.90–0.98", "0.90–0.98", "YES"),
-    ("tau2 measured / projected", "0.31x", "2.49x", "NO"),
+    ("tau2 measured / projected", "0.31×", "2.49×", "NO"),
     ("Between-deploy noise floor", "0.22 s", "0.155 s", "YES"),
     ("Sidecar CPU / memory", "no data", "no data", "—"),
 ], col_w=[inch(2.45), inch(1.40), inch(1.30), inch(1.20)], font=10.5)
@@ -1366,7 +1518,7 @@ pts = [
     ("The two clusters disagree about WHICH layer costs anything",
      "On OpenShift the whole expense is the sidecar's mere presence and the judge is noise; on KinD "
      "the sidecar is nearly free and the judge is all of it. Both are right about their own cluster, "
-     "and the same condition on the same image measures 4\u201393x apart. Never quote an absolute "
+     "and the same condition on the same image measures 4\u201393× apart. Never quote an absolute "
      "per-task plugin figure without naming the cluster."),
     ("Not a timeout \u2014 we checked",
      "A timeout piles values on a round number. OpenShift's auth-only runs 8.05\u201317.93 s, SD 1.92, "
@@ -1377,7 +1529,7 @@ pts = [
      "Every gsm8k leg sends the SAME 50 prompts and the gateway replays completions for ~10 min: "
      "unspaced, later legs measure the cache, in run order \u2014 the shape of a plugin effect. "
      "BM_CACHE_GAP=900 spaces them. The check needs no statistics: the conditions NEST, so no "
-     "sidecar leg can beat a sidecar-free one. Clear by 41.8x (OCP), 1.4x (KinD)."),
+     "sidecar leg can beat a sidecar-free one. Clear by 41.8× (OCP), 1.4× (KinD)."),
     ("The deploy is the unit of replication, not the task",
      "A per-task interval measures variance WITHIN one deploy. The honest floor is between two "
      "deploys of one condition, and it exceeds every step but the dominant layer \u2014 so presets "
