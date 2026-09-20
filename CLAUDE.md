@@ -45,7 +45,7 @@ edit–pytest–commit–rerun loop silently validates the *old* baked-in value,
 the image, not your working tree. On KinD, `kind load docker-image` bypasses the registry, so a
 pushed tag is not necessarily the tag the cluster is running.
 
-Where the validation ladder ends depends on *what* you changed, because `GET /benchmarks` only
+How far a check can take you depends on *what* you changed, because `GET /benchmarks` only
 returns `name`, `mcp_image`, `agents` and `default_model` (see `_summary` in `routes/benchmarks.py`).
 An MCP image or default model shows up there; an **agent `container_image`, `extra_env` entry or
 `model_override` does not** and needs `GET /benchmarks/{name}`, which dumps the whole definition.

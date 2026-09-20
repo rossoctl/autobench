@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-17T21:59:56Z
+**Last modified:** 2026-09-20T18:05:46Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -199,8 +199,10 @@ the mean:
 | pass rate | 0.97 | 0.83 | 0.00 |
 | tokens per **passed** task | 537 | ~112 K | no finite value |
 
-**Money amplifies the ladder rather than tracking it**, because the harder benchmarks also run the
-dearer models: tau2 is 179× a gsm8k task in tokens but **279×** in dollars, appworld 567× but
+The three benchmarks are a deliberate **difficulty ladder** — gsm8k, then tau2, then appworld, each
+rung roughly an order of magnitude more of everything than the one below it. **Money amplifies that
+ladder rather than tracking it**, because climbing a rung also switches you to a dearer model: tau2 is
+179× a gsm8k task in tokens but **279×** in dollars, appworld 567× but
 **1,069×**. Any budget scaled off the token ratios is short by 1.6–1.9×. And **the cost share, not the
 token share, names the cost driver** — output is priced 4–8× input everywhere, so input is 66% of
 gsm8k's tokens but only 31% of its bill. Only tau2 is genuinely input-dominated in money (90%), and it

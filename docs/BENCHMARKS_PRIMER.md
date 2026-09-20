@@ -1,9 +1,10 @@
 # The three benchmarks, for people new to them
 
 We run three benchmarks through the AutoBench Service: **gsm8k**, **tau2**, and **appworld**.
-They are not three interchangeable test suites — they form a deliberate difficulty ladder, and each
-one stresses a different part of the agent stack. This note explains what each is, what a single
-task actually involves, and what they look like in practice.
+They are not three interchangeable test suites — they form a deliberate **difficulty ladder**, in that
+order, each rung costing roughly an order of magnitude more than the one below it in tokens, time and
+money. Each also stresses a different part of the agent stack. This note explains what each is, what a
+single task actually involves, and what they look like in practice.
 
 All the "measured" figures below come from our own **v1.28** runs of 2026-09-15 (282 tasks attempted
 across two clusters: OpenShift `ykt3→ykt2` and single-node KinD), not from the benchmarks' published
@@ -292,9 +293,10 @@ you need to budget with — same 267 rows, both platforms pooled:
 | share of task time inside model calls | 90% | 58% | 96% |
 | tokens per **passed** task | 537 | ~112 K | no finite value |
 
-**Money amplifies the ladder rather than tracking it.** A tau2 task is 179× a gsm8k task in tokens
-but **279×** in dollars, and appworld 567× in tokens but **1,069×** — because the harder benchmarks
-also run the dearer models. Any budget scaled from the token ratios is short by roughly 1.6–1.9×.
+**Money amplifies the difficulty ladder rather than tracking it.** A tau2 task is 179× a gsm8k task in
+tokens but **279×** in dollars, and appworld 567× in tokens but **1,069×** — because climbing a rung
+also switches you to a dearer model, so the rungs are spaced *wider* in dollars than in tokens. Any
+budget scaled from the token ratios is short by roughly 1.6–1.9×.
 
 **Read the cost share, not the token share, to find the cost driver.** They disagree, because output
 is priced 4–8× input everywhere (see the rate card below). Input is 66% of gsm8k's *tokens* but only
@@ -433,4 +435,5 @@ cost per task  =  (input_tokens × P_in  +  output_tokens × P_out) / 1e6
 | get a fast signal that nothing regressed | **gsm8k** — if it fails, stop and fix infrastructure | < $0.01 |
 
 The cost column is measured, not estimated — see [What one leg costs](#what-one-leg-costs). It is also
-the whole argument for the ladder: gsm8k is cheap enough to run on every change, and appworld is not.
+the whole argument for the difficulty ladder: gsm8k is cheap enough to run on every change, and
+appworld is not.

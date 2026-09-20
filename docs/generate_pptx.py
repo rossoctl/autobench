@@ -239,7 +239,7 @@ items = [
     ("Benchmark catalog & run lifecycle",
      "6.1 the three benchmarks and the REST flow that drives them · 6.2 what each image bakes in"),
     ("The three benchmarks — what they measure",
-     "7.1 the ladder · 7.2 what each stresses · 7.3 the traps · 7.4 picking one · "
+     "7.1 the difficulty ladder · 7.2 what each stresses · 7.3 the traps · 7.4 picking one · "
      "7.5 what it costs · 7.6 the rate card"),
     ("The canonical 12-run matrix",
      "8.1 what the 12 runs parameterize · 8.2 what they measured"),
