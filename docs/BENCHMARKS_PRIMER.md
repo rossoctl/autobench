@@ -258,6 +258,14 @@ A few things that trip people up:
   wrong detector** — one measured replay took 3.0 s, the same as a miss. Compare response `id`s. To
   get independent legs, space them: `BM_CACHE_GAP` in `reference/run-12.py` rests each (benchmark,
   model) prompt set for 900 s, which is what the v1.28 matrices were run with.
+- **One collision survives the spacing, on tau2 only.** Spacing works between legs; tau2's *opening*
+  call collides between tasks *inside* a leg, seconds apart, where no gap can reach. It is
+  byte-identical on all 60 v1.28 tau2 tasks across both platforms (5054 input tokens) because the
+  prompt carries no task text — a tau2 scenario lives in the MCP server's user simulator, which only
+  speaks after the agent opens, so the agent's first call cannot tell the tasks apart. One generation
+  serves the leg. It is worth ~5–6% of input, ~2–3% of output and ~2–3% of chat latency on a tau2
+  leg, zero elsewhere, and it lands the same way on both clusters — so cross-platform comparisons
+  hold, but a tau2 first-call latency is not a measurement.
 
 Three more that apply specifically to the **latency** columns, all measured in the plugin-overhead
 study ([docs/PLUGIN_OVERHEAD.md](PLUGIN_OVERHEAD.md)):

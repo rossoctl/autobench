@@ -22,6 +22,15 @@ Target is selected entirely by env so the same script drives kind and the OCP cl
                      is a 50% margin. Only the shortfall is slept, so pair it with a BM_ORDER that
                      interleaves the groups — that turns ~68 min of sleeping into ~42 (see the
                      cache_group docstring).
+                     This spaces LEGS, and one residual is out of its reach: tau2's opening call is
+                     byte-identical for every task (5054 input tokens on all 60 v1.28 tasks, both
+                     platforms) because the prompt text carries no task — the scenario lives in the
+                     MCP user simulator and the task id rides in the session metadata. Consecutive
+                     tasks are seconds apart, so no gap setting helps; one generation serves the leg.
+                     Costs ~5-6% of input / ~2-3% of output / ~2-3% of chat latency on tau2 only, and
+                     hits both platforms alike, so it does not bias the cross-platform comparison.
+                     Nothing collides WITHIN a task: each call re-sends the grown history, and no
+                     task in the matrix repeats even an input-token count among its own calls.
 
 SPEC FILE FORMAT — two accepted shapes, so an experiment can reuse this driver without touching the
 canonical matrix:
@@ -298,6 +307,9 @@ def cache_group(spec) -> str:
 
     Plugins do not enter into it. AuthBridge and ibac change what happens *around* the call, not the
     body sent to the gateway, so #5-#8 collide with #1-#3 exactly as they collide with each other.
+
+    This grouping is leg-level and is not the whole story: tau2's opening call collides across tasks
+    *inside* one leg, which no gap can space out. See BM_CACHE_GAP in the module docstring.
     """
     db = spec.get("deploy_body") or {}
     # The canonical specs carry the override as deploy_body["model"]; accept the other spellings so

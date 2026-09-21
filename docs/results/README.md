@@ -34,7 +34,9 @@ reference point rather than one more matrix:
   measured at ~10 minutes, and `BM_CACHE_GAP=900` rests each (benchmark, model) prompt set beyond it,
   so **per-call latency and output tokens are independent across legs for the first time** — the
   caveat every earlier matrix carried. An interleaved `BM_ORDER` kept the cost at 33 minutes of
-  sleeping per platform instead of 165.
+  sleeping per platform instead of 165. *Across legs* is the exact claim: tau2's opening call is
+  identical for every task and still replays *within* a leg, worth ~2–3% of that benchmark's output
+  tokens and chat latency, symmetric across platforms.
 
 | report | what it establishes |
 |---|---|

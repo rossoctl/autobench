@@ -113,6 +113,16 @@ A full 12-run takes 1–2 hours. Three rules, all learned the hard way:
   pair it with a `BM_ORDER` that interleaves the cache groups — that is the difference between ~120
   and ~42 minutes of sleeping. **The hit detector is the response `id`, never latency**: a replay can
   take as long as a miss.
+- **The gap spaces legs, and one residual is inside a leg: tau2's opening call.** It is
+  byte-identical for every tau2 task (5054 input tokens on all 60 v1.28 tasks, both platforms) —
+  the prompt carries no task text, because the scenario lives in the MCP user simulator and the task
+  id rides in the session metadata. Consecutive tasks are seconds apart, so no `BM_CACHE_GAP` value
+  reaches it: one generation serves the leg. ~5–6% of input, ~2–3% of output, ~2–3% of chat latency,
+  **tau2 only, and symmetric across platforms** — so it does not bias the cross-cluster comparison,
+  but never read a tau2 first-call latency as a measurement. Nothing collides *within* a task: each
+  call re-sends the grown history, and no task in the matrix repeats even an input-token count among
+  its own calls. Side benefit: two slow legs flip their first-call output token count mid-leg at
+  **+641 s and +632 s**, confirming the ~10 min TTL from an independent signal.
 
 If a poller dies, the server-side run keeps going — **adopt it and merge the results** rather than
 re-running the leg.

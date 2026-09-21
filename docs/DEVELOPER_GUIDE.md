@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-21T01:26:38Z
+**Last modified:** 2026-09-21T01:47:04Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -1524,6 +1524,28 @@ margin, only the *shortfall* is slept, and an interleaving `BM_ORDER` is what ke
 the v1.28 matrices slept **33 minutes** per platform on top of ~1h35m of leg time, where the
 spec-file order would have slept about twice that. **Latency is the wrong detector for a replay** —
 one measured replay took 3.0 s, the same as a miss — so compare response `id`s, not durations.
+
+**What the gap does not cover: tau2's opening call, task to task inside one leg.** `BM_CACHE_GAP`
+spaces *legs*; it cannot help where consecutive tasks collide seconds apart. Inside a task nothing
+can collide — every call after the first re-sends the accumulated history, so each body is strictly
+larger than the last, and across all 268 tasks of the v1.28 matrix no task repeats even an
+input-token count among its own calls (unequal counts imply unequal bodies, so that is a proof, not
+just an absence). But **every tau2 task issues a byte-identical *first* request** — 5054 input
+tokens on all 60 tasks, both platforms — because for tau2 the prompt text is the same for every
+task: the scenario lives in the MCP server's user simulator, which only speaks after the agent
+opens, and the task identity travels in the session metadata rather than the prompt (see
+[One task, end to end](#one-task-end-to-end)). So one generation serves the leg and the rest are
+replays, worth **~5–6% of input, ~2–3% of output and ~2–3% of chat latency** on tau2 legs and
+nothing elsewhere. It is not a cross-platform bias — both clusters replay identically — so the
+comparison the matrix exists to make still holds; just do not read a tau2 first-call latency as a
+measurement. Closing it would need a `no-cache` directive on the agent's requests, which AutoBench
+does not control.
+
+That residual is also the cleanest confirmation of the TTL. Two slow serial legs flip their
+first-call output token count mid-leg (46→63 at task 6, 44→64 at task 8) at **+641 s and +632 s** —
+deterministic decoding on an identical body could never do that, and the two fast legs, which got
+through all 20 first calls in under 370 s, never flip. Both numbers land on the ~10 min measured by
+survival curve, from an entirely independent signal.
 
 It ends with a per-leg summary and the state file path:
 
