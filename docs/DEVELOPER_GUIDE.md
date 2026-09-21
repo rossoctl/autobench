@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-21T00:59:15Z
+**Last modified:** 2026-09-21T01:26:38Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -26,6 +26,7 @@ multi-turn) on the `ykt3` and `kind-rossoctl` clusters.
 - [1. Mental model (read this first)](#1-mental-model-read-this-first)
   - [Endpoint map](#endpoint-map)
   - [The run-time data path](#the-run-time-data-path)
+  - [One task, end to end](#one-task-end-to-end)
   - [Who decides what happens inside a task](#who-decides-what-happens-inside-a-task)
   - [Picking a benchmark, and what a run costs](#picking-a-benchmark-and-what-a-run-costs)
   - [Token- and cost-efficiency in six figures](#token--and-cost-efficiency-in-six-figures)
@@ -170,6 +171,43 @@ while keeping the named hosts in it, then verify by **counting judge completions
 emits no log line of its own, so sidecar logs cannot tell you. `initialize` and `tools/list` are
 `isAction=false` and legitimately never reach the judge, so a zero count only means something if real
 tool calls occurred. Cost figures for each layer: [`PLUGIN_OVERHEAD.md`](./PLUGIN_OVERHEAD.md).
+
+### One task, end to end
+
+The flows above are spatial. This is the same system in time — one task, from the Service's first call
+to its last, with the span each step appears as:
+
+```
+Service:  create_session(task_id)                    → MCP pod     [MCP.CreateSession]
+Service:  send_prompt(task text; session_id in A2A   → agent       [Agent.Call]
+          request metadata)                                        ── ONE message, once per task
+  agent:    connect_mcp — tools/list                 → MCP pod     [connect_mcp]     ~27–38 ms
+  agent:    create_agent                                           [create_agent]    6.7 ms warm,
+                                                                    up to 6.5 s on a cold pod
+  agent:    initial_observation — local, no I/O                    [execute_tool initial_observation]
+                                                                    ~50 µs, never counted
+  agent:    LOOP  chat(model) → execute_tool(…)      → MCP pod     [chat <model>]
+                  → observation → chat → …                         [execute_tool <tool>]
+  agent:    returns its final message, when the model asks for no further tool
+Service:  evaluate_session                           → MCP pod     [Evaluator.Evaluate]
+Service:  delete_session                             → MCP pod     (in a `finally`; no span)
+```
+
+Five things that trace makes concrete:
+
+- **One A2A turn per task.** Everything the agent does — every model call, every tool call — happens
+  inside that single streaming request. The agent-side `POST /` span brackets it, so `Agent.Call −
+  POST /` is the Service's own per-task cost: **16.9 ms of a 10.4 s gsm8k task, 13.2 ms of a 70.3 s
+  tau2 one**.
+- **The Service issues no tool call.** Its MCP traffic is `list_tasks`, `create_session`,
+  `evaluate_session`, `delete_session`. `execute_tool` is the agent's outbound call, named by the
+  agent; the Service never learns a tool's name.
+- **The tool list is fetched per task, not per pod.** `connect_mcp`, `create_agent` and `invoke_agent`
+  each appear exactly once per task in every leg.
+- **The session id is the only thing joining the two halves.** It travels in A2A request metadata, never
+  in the prompt text, and it is why the agent's tool calls mutate the session the Service will grade.
+- **The reply text is discarded.** Grading reads the session's final state, so on gsm8k the answer has
+  to arrive through the `submit` tool call; prose alone fails the task.
 
 ### Who decides what happens inside a task
 
@@ -813,7 +851,8 @@ Run fields (`RunRequest`) are all **run-time** knobs:
 > long session, and not N deploys. The runner fetches the task list, slices off the first N, and for
 > each id runs the same three-step sequence — `MCP.CreateSession` → `Agent.Call` (A2A `send_prompt`) →
 > `Evaluator.Evaluate` — inside its own `Agent.Session` OTEL span keyed by that `task_id`
-> (`runner/engine.py`). Nothing carries over between tasks: no shared conversation, no shared MCP
+> (`runner/engine.py`); [One task, end to end](#one-task-end-to-end) traces those three steps together
+> with what the agent does inside the middle one. Nothing carries over between tasks: no shared conversation, no shared MCP
 > session, no ordering dependence. Failures are isolated per task (each `_one` has its own
 > `asyncio.timeout` and the batch is gathered with `return_exceptions=True`), so one wedged task costs
 > you that task, not the run — and the summary is republished after **every** task, so even a run the

@@ -4,7 +4,7 @@ Run with the project env plus python-pptx (no need to add it as a project dep):
 
     uv run --with python-pptx python docs/generate_pptx.py
 
-Produces a 26-slide 16:9 deck: title, agenda, overview + key design decisions, the
+Produces a 27-slide 16:9 deck: title, agenda, overview + key design decisions, the
 design motif, three
 architecture diagrams (the whole system, inside the workload, then how the sidecar is wired into
 the path at all), the two-token auth
@@ -274,7 +274,7 @@ items = [
     ("The two-token auth model", "why the caller's token is never forwarded upstream"),
     ("Benchmark catalog & run lifecycle",
      "6.1 the three benchmarks and the REST flow that drives them · 6.2 what each image bakes in · "
-     "6.3 who decides what happens inside a task"),
+     "6.3 one task end to end · 6.4 who decides what happens inside it"),
     ("The three benchmarks — what they measure",
      "7.1 the difficulty ladder · 7.2 what each stresses · 7.3 the traps · 7.4 picking one · "
      "7.5 what it costs · 7.6 the rate card · 7.7–7.8 six efficiency figures · "
@@ -949,13 +949,56 @@ _ban = box(s, inch(0.45), inch(5.35), inch(12.4), inch(1.55),
 _ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
 
 
-# ============================= SLIDE 7c: WHO DECIDES WHAT HAPPENS INSIDE A TASK
+# ===================================== SLIDE 7c: ONE TASK, END TO END
+# Slides 2-4 draw the system spatially; nothing showed it in TIME, and the agent-side interior
+# (connect_mcp / create_agent / initial_observation / the loop) appeared nowhere. Latencies are
+# measured from the v1.28 mirrors. Mirrors DEVELOPER_GUIDE.md 1 "One task, end to end".
+s = prs.slides.add_slide(BLANK)
+title_band(s, "6.3  One Task, End to End",
+           "The same system in time — and every model call and tool call lives inside ONE A2A turn")
+grid(s, inch(0.45), inch(1.25), inch(12.4), inch(3.95), [
+    ("who", "step", "span it appears as"),
+    ("Service", "create_session(task_id)  →  MCP pod", "MCP.CreateSession"),
+    ("Service", "send_prompt(task text; session_id in A2A request metadata)  →  agent   "
+                "— ONE message, once per task", "Agent.Call"),
+    ("agent", "connect_mcp — tools/list  →  MCP pod   (per task, not per pod; ~27–38 ms)",
+     "connect_mcp"),
+    ("agent", "create_agent   (6.7 ms warm, up to 6.5 s on a cold pod)", "create_agent"),
+    ("agent", "initial_observation — local, no I/O, ~50 µs",
+     "execute_tool initial_observation  (never counted)"),
+    ("agent", "LOOP:  chat(model)  →  execute_tool(…)  →  MCP pod  →  observation  →  chat  →  …",
+     "chat <model>  ·  execute_tool <tool>"),
+    ("agent", "returns its final message, when the model asks for no further tool",
+     "(the runner discards the text)"),
+    ("Service", "evaluate_session  →  MCP pod:  the verdict, read off the session's final state",
+     "Evaluator.Evaluate"),
+    ("Service", "delete_session  →  MCP pod, in a finally", "(no span)"),
+], col_w=[inch(1.15), inch(7.85), inch(3.40)], font=11)
+
+box(s, inch(0.45), inch(5.45), inch(4.00), inch(1.45),
+    "One A2A turn per task", LTBLUE, BLUE, font=13.5, font_color=BLUE,
+    sub="Everything the agent does happens inside that single streaming request. Its POST / span "
+        "brackets it, so Agent.Call − POST / is the Service's own cost: 16.9 ms of a 10.4 s gsm8k "
+        "task, 13.2 ms of a 70.3 s tau2 one.", sub_color=INK)
+box(s, inch(4.65), inch(5.45), inch(4.00), inch(1.45),
+    "The Service issues no tool call", LTTEAL, WORK, font=13.5, font_color=WORK,
+    sub="Its MCP traffic is list_tasks / create_session / evaluate_session / delete_session. "
+        "execute_tool is the AGENT's outbound call, named by the agent — the Service never learns a "
+        "tool's name.", sub_color=INK)
+box(s, inch(8.85), inch(5.45), inch(4.00), inch(1.45),
+    "The session id joins the two halves", LTGRAY, STORE, font=13.5, font_color=INK,
+    sub="It travels in A2A request metadata, never in the prompt text — which is why the agent's "
+        "tool calls mutate the session the Service will grade, and why prose alone fails a gsm8k "
+        "task.", sub_color=INK)
+
+
+# ============================= SLIDE 7d: WHO DECIDES WHAT HAPPENS INSIDE A TASK
 # The deck explains the wiring (slides 2-4) and the catalog (6.x) but never said who DECIDES the
 # sequence of calls -- and the common wrong guess is that the MCP pod, or our prompt, prescribes it.
 # Counts are measured over every mirrored span_report.ndjson of the v1.28 matrix, both platforms.
 # Mirrors DEVELOPER_GUIDE.md 1 "Who decides what happens inside a task" -- keep the two in step.
 s = prs.slides.add_slide(BLANK)
-title_band(s, "6.3  Who Decides What Happens Inside a Task",
+title_band(s, "6.4  Who Decides What Happens Inside a Task",
            "The sequence of model calls and tool calls is defined nowhere — the model produces it, "
            "step by step")
 grid(s, inch(0.45), inch(1.30), inch(12.4), inch(2.75), [
