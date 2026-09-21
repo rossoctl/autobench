@@ -913,14 +913,14 @@ title_band(s, "6.2  What Each Benchmark Bakes In — and What It Needs From Us",
 grid(s, inch(0.45), inch(1.30), inch(12.4), inch(2.30), [
     ("", "MCP tool image", "what the image bakes in", "what tool_env must add"),
     ("gsm8k", "exgentic-mcp-gsm8k",
-     "the HuggingFace dataset loader — 8.5K problems, fetched at pod startup",
+     "the HuggingFace loader, pinned to main/test — those 1,319 rows fetched at pod startup",
      "HF_TOKEN (from hf-secret), plus EXGENTIC_SET_BENCHMARK_RUNNER=direct"),
     ("tau2", "exgentic-mcp-tau2",
-     "the tau2-bench library + its retail domain (114 tasks), and a user-simulator LLM",
+     "tau2-bench at tag v0.1.3 + its retail domain (114 tasks), and a user-simulator LLM",
      "OPENAI_API_KEY (from openai-secret) + EXGENTIC_SET_BENCHMARK_ACTION_TIMEOUT=1000 — the "
      "simulator makes its own inference calls (flow 4)"),
     ("appworld", "exgentic-mcp-appworld",
-     "the whole app-suite sandbox (exgentic install --benchmark appworld)",
+     "the whole app-suite sandbox (exgentic install --benchmark appworld), test_normal split",
      "nothing beyond BENCHMARK_NAME — upstream's .env.appworld is explicitly empty"),
 ], col_w=[inch(1.40), inch(2.75), inch(4.10), inch(4.15)], font=11.5)
 
@@ -1067,7 +1067,7 @@ grid(s, inch(0.45), inch(1.30), inch(12.4), inch(4.35), [
     ("Tool calls / task", "1.1", "11.4", "14.6"),
     ("Median task latency", "4.9 s", "84 s", "264 s"),
     ("Slowest task seen", "39 s", "136 s", "592 s"),
-    ("Task pool", "8.5K (HuggingFace)", "114 (retail domain)", "grouped scenarios"),
+    ("Task pool", "1,319 (main/test split)", "114 (retail domain)", "168 (test_normal split)"),
 ], col_w=[inch(2.5), inch(3.3), inch(3.3), inch(3.3)], font=11)
 _ban = box(s, inch(0.45), inch(6.05), inch(12.4), inch(0.95),
     "Read the MODEL row before any dollar figure: the three rungs do not run the same model, and "

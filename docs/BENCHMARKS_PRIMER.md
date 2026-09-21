@@ -58,7 +58,7 @@ latency figures describe the 267 that finished.**
 | Tool calls / task | 1.1 | 11.4 | 14.6 |
 | Median task latency | **4.9s** | **84s** | **264s** |
 | Slowest task seen | 39s | 136s | 592s |
-| Task pool | 8.5K problems (HuggingFace) | 114 (`retail` domain) | grouped scenarios |
+| Task pool | 1,319 (`main`/`test` split) | 114 (`retail` domain) | 168 (`test_normal` split) |
 | `task_id` format | integer (`0`, `1`, …) | integer (`0`, `1`, …) | `21abae1_1` |
 
 **‡** at our gateway's posted rates for **that benchmark's own model** — the three rungs do not run
@@ -79,10 +79,19 @@ elementary steps** (+ − × ÷); no algebra or geometry. Each has one correct n
 **exact match**. The difficulty is not the arithmetic but carrying a multi-step chain without
 slipping — which is why it became a standard reasoning probe.
 
-**Where the data comes from.** The MCP (`ghcr.io/exgentic/exgentic-mcp-gsm8k`) loads the dataset from
-**HuggingFace** at startup. That is why an `hf-secret` must *exist* in the namespace even with an
-empty value (the dataset is public) — without it the MCP pod sits in `CreateContainerConfigError` and
-the agent crash-loops.
+**Where the data comes from, and which rows.** The MCP (`ghcr.io/exgentic/exgentic-mcp-gsm8k`) loads
+the dataset from **HuggingFace** at startup. That is why an `hf-secret` must *exist* in the namespace
+even with an empty value (the dataset is public) — without it the MCP pod sits in
+`CreateContainerConfigError` and the agent crash-loops.
+
+**The task pool is the 1,319-row test split, not all 8.5K.** The image fetches exactly
+`openai/gsm8k` → `main/test-00000-of-00001.parquet` and declares `GSM8K_TOTAL_TASKS = 1319`, so
+`list_tasks` returns `"0"`–`"1318"` in dataset order and `task_id` *is* the row index into that
+parquet. Worth stating because the 8.5K figure names the *dataset* (7,473 train + 1,319 test) and an
+earlier version of this table wrongly gave it as the pool: the training rows are never reachable, so
+a `max_tasks` prefix cannot silently score train problems. The `subset` is type-pinned to `"main"` in
+the image, so the `socratic` config is unreachable too, and grading extracts the gold answer with the
+canonical `answer.split("####")[-1]` — the same rule public GSM8K numbers use.
 
 **What one task looks like.** The agent receives a word problem, thinks, then calls a tool to submit
 its answer. As we run it, a typical task is **one real LLM call and one tool call** — it is close to
@@ -110,6 +119,26 @@ own ids, so `task_id` 0–19 are the first 20 *retail* tasks. Worth stating expl
 quote a tau2 number, because **the domain is not recorded in the artifacts** — it is only inferable
 from the absence of an override. Switching domains would change the numbers, and `airline` has only
 50 tasks, so `max_tasks` above that would silently cap.
+
+**Which version — and why our tau2 numbers do not belong beside a published one.** The MCP image
+installs τ²-bench from git at tag **`v0.1.3`** (commit `5ba9e3e5`, read from the wheel's
+`direct_url.json`), and that tag is the whole task set: `retail` 114, `airline` 50, `telecom` 114,
+`mock` 9, with no `banking_knowledge` domain at all. Upstream states that **results from before
+v1.0.1 are not comparable with v1.0.1 or later**, and the 75+ task corrections in that line include
+`retail` — the domain we run. So a tau2 pass rate from this repo is a measurement on a pinned,
+since-revised task set: fine as a baseline against our own earlier runs, not placeable next to a
+current tau2-bench figure or leaderboard entry. Like the domain, **the version is recorded in no
+artifact**; it is only readable out of the image. The one thing the pin buys is reproducibility — a
+tag does not drift when `:latest` is re-pulled.
+
+> **The user simulator's own model calls are cached inside the MCP pod.** `tau2_shim.py` re-enables
+> the Exgentic LiteLLM disk cache at import — explicitly undoing τ²-bench's own decision to disable
+> it — and nothing in the `exgentic mcp` path turns it back off, because the `EXGENTIC_LITELLM_CACHING`
+> flip lives in the *agent* classes and our tau2 `tool_env` does not set it. This cannot touch any
+> published token or latency figure, because simulator calls were never in our telemetry to begin
+> with. What it plausibly does is make the simulator's unmeasured cost partly un-*incurred*, and
+> reduce turn-by-turn diversity across the tasks of one leg, since the pod outlives the task. Effect
+> on pass rate is unsigned and **unmeasured** — this is read off the code path, not out of a run.
 
 **The key architectural difference.** tau2 introduces a **second LLM — a user simulator** that plays
 the customer. So each task involves two models talking to each other, plus tool calls. That single
@@ -146,6 +175,21 @@ APIs, chaining many calls, and handling intermediate state.
 so ids look like `21abae1_1`, `21abae1_2`, `21abae1_3` — a scenario hash plus a sub-task number. Each
 still runs as an independent session.
 
+**Which split.** The image ships all four of AppWorld's dataset files — `train` 90, `dev` 57,
+**`test_normal` 168**, `test_challenge` 417 — and `list_tasks` returns 168, so we run **`test_normal`**,
+the easier of the two test splits. Confirmed from both directions: the count matches, and our
+`21abae1_*` ids appear in `test_normal` and in none of the other three. We set no `subset` override —
+the MCP accepts one, along with `max_interactions`, `seed` and `use_cache`, and we leave every one of
+them at the image's default.
+
+**We can report AppWorld's TGC but never its SGC.** Upstream scores two ways: per-task goal
+completion, and *scenario* goal completion defined over a whole group of related tasks. Two things
+put SGC out of reach. Upstream itself returns TGC only when tasks are evaluated singly, which is how
+the Service drives them — and our task selection is a prefix, `task_ids[:max_tasks]`, over a split
+that begins `3d9a636_1, 3d9a636_2, 3d9a636_3`. A 5-task leg therefore takes three tasks of one
+scenario and two of the next, cutting a scenario group in half. So SGC is not merely absent from our
+reports; it is **unrecoverable from the artifacts**, and a `pass_rate` here is a TGC-shaped number.
+
 **What it stresses.** Long-horizon planning and composition. ~29 LLM calls and ~15 tool calls per
 task, ~270k input tokens, and a median of **4.4 minutes per task** — with a real tail: the slowest
 task that finished took 592s, and **15 of the 50 attempted tasks hit the 600 s per-task timeout** and
@@ -169,9 +213,9 @@ thing we add from outside is a credential or two plus a per-benchmark quirk over
 
 | | what's baked in | `tool_env` it needs |
 |---|---|---|
-| **gsm8k** | the HuggingFace dataset loader | `HF_TOKEN` (from `hf-secret`), plus `EXGENTIC_SET_BENCHMARK_RUNNER=direct` |
-| **tau2** | the τ²-bench library + `retail` domain, and a user-simulator LLM | `OPENAI_API_KEY` + `EXGENTIC_SET_BENCHMARK_ACTION_TIMEOUT=1000` — it makes its own inference calls |
-| **appworld** | the whole app-suite sandbox (`exgentic install --benchmark appworld`) | just `BENCHMARK_NAME` — upstream's `.env.appworld` is explicitly empty |
+| **gsm8k** | the HuggingFace loader, pinned to `main`/`test` (1,319 rows) | `HF_TOKEN` (from `hf-secret`), plus `EXGENTIC_SET_BENCHMARK_RUNNER=direct` |
+| **tau2** | τ²-bench at tag `v0.1.3` + `retail` domain, and a user-simulator LLM | `OPENAI_API_KEY` + `EXGENTIC_SET_BENCHMARK_ACTION_TIMEOUT=1000` — it makes its own inference calls |
+| **appworld** | the whole app-suite sandbox (`exgentic install --benchmark appworld`), `test_normal` split | just `BENCHMARK_NAME` — upstream's `.env.appworld` is explicitly empty |
 
 Two things follow that are easy to miss:
 

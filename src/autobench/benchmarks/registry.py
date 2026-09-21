@@ -352,6 +352,17 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
             _secret_env("OPENAI_API_KEY", "openai-secret", "apikey"),
             # deploy-benchmark.sh appends this for tau* benchmarks.
             EnvVar(name="EXGENTIC_SET_BENCHMARK_ACTION_TIMEOUT", value="1000"),
+            # NOT set here, deliberately noted: EXGENTIC_LITELLM_CACHING=false. The agent specs
+            # below pin it, but this pod runs `exgentic mcp`, and `tau2_shim.py` calls
+            # configure_litellm(..., cache_only=True) at import -- re-enabling the LiteLLM cache
+            # that tau2's own llm_utils disables ("re-enable Exgentic cache here"). Since
+            # settings.litellm_caching defaults to True and only the `a2a` command flips it off,
+            # the *user simulator's* completions are cached in-pod, and tau2_eval.py passes
+            # {"caching": settings.litellm_caching} straight through. Read off the code path, not
+            # measured -- no cache hit has been observed in a run, and it is not obviously wrong
+            # (a replayed simulator turn is a cheaper, more deterministic user). Pin it to "false"
+            # only alongside a run that measures the difference, and remember a registry.py change
+            # needs a Service image rebuild before an e2e run means anything.
         ],
         # Multi-turn: the MCP pod runs a user-simulator LLM (model injected by build_tool_request).
         user_simulator=True,

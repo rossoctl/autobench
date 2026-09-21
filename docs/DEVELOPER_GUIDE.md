@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-21T02:16:08Z
+**Last modified:** 2026-09-21T17:24:30Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -664,9 +664,9 @@ the per-benchmark quirk overrides. There is no config knob for the dataset or th
 
 | | what's baked in | `tool_env` it needs |
 |---|---|---|
-| **gsm8k** (`exgentic-mcp-gsm8k`) | the HuggingFace dataset loader — the ~8.5K problems are fetched at pod startup | `HF_TOKEN` (from `hf-secret`), plus `EXGENTIC_SET_BENCHMARK_RUNNER=direct` |
+| **gsm8k** (`exgentic-mcp-gsm8k`) | the HuggingFace dataset loader, pinned to the `main`/`test` split — those 1,319 rows are fetched at pod startup | `HF_TOKEN` (from `hf-secret`), plus `EXGENTIC_SET_BENCHMARK_RUNNER=direct` |
 | **tau2** (`exgentic-mcp-tau2`) | the τ²-bench library + its `retail` domain (114 tasks), and a user-simulator LLM | `OPENAI_API_KEY` (from `openai-secret`) + `EXGENTIC_SET_BENCHMARK_ACTION_TIMEOUT=1000` — it makes its own inference calls (flow 4) |
-| **appworld** (`exgentic-mcp-appworld`) | the whole app-suite sandbox (`exgentic install --benchmark appworld`) | just `BENCHMARK_NAME` — upstream's `.env.appworld` is explicitly empty |
+| **appworld** (`exgentic-mcp-appworld`) | the whole app-suite sandbox (`exgentic install --benchmark appworld`), served from the `test_normal` split (168 tasks) | just `BENCHMARK_NAME` — upstream's `.env.appworld` is explicitly empty |
 
 Every benchmark also gets `BENCHMARK_NAME` and an `OPENAI_API_BASE` that the Service **injects per
 deploy** from the instance's `workload_llm.api_base` (§4.1) — never baked into the image; a deploy
@@ -891,8 +891,9 @@ Run fields (`RunRequest`) are all **run-time** knobs:
 > task list and slices it — `task_ids[:max_tasks]` — so a request for more tasks than exist yields
 > the whole pool with no warning, and `summary.total` then reports the pool size rather than what you
 > asked for. There is no upper bound on the field to catch it. The pools differ by an order of
-> magnitude (gsm8k ~8.5K from HuggingFace, tau2 **114** in the default `retail` domain, appworld
-> grouped scenarios), so check the size before requesting a large run:
+> magnitude (gsm8k **1,319** — the HuggingFace `test` split, not the 8.5K dataset — tau2 **114** in
+> the default `retail` domain, appworld **168** in the `test_normal` split), so check the size before
+> requesting a large run:
 > [`BENCHMARKS_PRIMER.md`](./BENCHMARKS_PRIMER.md) has them in one table. Selection is
 > **deterministic** — the first `max_tasks` of the pool — which is what makes a smaller run's tasks a
 > prefix of a larger one's.
