@@ -25,9 +25,15 @@ Each entry is a `BenchmarkDefinition`:
 | `mcp_port` / `mcp_path` / `mcp_service_suffix` | how the Service dials the tool (`-mcp` Service suffix in-cluster) |
 | `tool_env` | env baked into the MCP tool: `BENCHMARK_NAME`, LiteLLM base URL, secret refs, per-benchmark quirks |
 | `tool_resources` / agent `resources` | CPU/mem requests+limits sent in the create body (no post-create patch) |
-| `default_model` | model used when a deploy/run omits `model` |
+| `default_model` | model used when a deploy/run omits `model` **and** the instance sets no default — the bottom of the chain |
+| `model_override` | benchmark-scoped model pin that **beats the instance default** but yields to an explicit run/deploy `model`. `None` = inherit. This is why tau2 runs `openai/aws/claude-sonnet-5` while everything else takes the instance default; precedence lives in `_resolve_model` |
 | `user_simulator` | **multi-turn flag** — `True` injects `EXGENTIC_SET_BENCHMARK_USER_SIMULATOR_MODEL` into the MCP pod |
-| `agents` | map of `BenchmarkAgentSpec` (per-agent `container_image`, `extra_env`, `resources`) |
+| `agents` | map of `BenchmarkAgentSpec` (per-agent `container_image`, `image_tag`, `extra_env`, `resources`) |
+
+> **Neither `model_override` nor an agent's `container_image` / `image_tag` / `extra_env` appears in
+> `GET /benchmarks`** — that response is a summary (`name`, `mcp_image`, `agents`, `default_model`).
+> Read one back with `GET /benchmarks/{name}`, which dumps the whole definition, or a check against
+> the list endpoint will pass while the field you edited is still the old baked-in value.
 
 Declare secret-backed env with the `_secret_env(env_name, secret_name, key)` helper.
 `required_secrets()` derives the actionable **`424`** precheck message ("this benchmark requires
