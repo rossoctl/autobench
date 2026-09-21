@@ -180,7 +180,34 @@ still runs as an independent session.
 the easier of the two test splits. Confirmed from both directions: the count matches, and our
 `21abae1_*` ids appear in `test_normal` and in none of the other three. We set no `subset` override —
 the MCP accepts one, along with `max_interactions`, `seed` and `use_cache`, and we leave every one of
-them at the image's default.
+them at the image's default. Note that `test_challenge` is not merely unselected but **not
+selectable**: the adapter declares `available_subsets = ["train", "dev", "test_normal"]`, so those 417
+task files ship in the image and cannot be reached through it.
+
+**The MCP image is a deliberately custom harness — do not read it as "AppWorld, as published".**
+The *library* is genuinely upstream's: `setup.sh` clones `github.com/StonyBrookNLP/appworld`, checks
+out commit `edc96012`, and installs it with no patch applied — that commit's version string is
+`0.2.0.dev0`, an unreleased development state rather than a PyPI release. Scoring is upstream's own
+`appworld.evaluator.evaluate_task`, and the tool schemas are generated from upstream's
+`task.api_docs.function_calling()`. What is custom is everything *around* that, and it changes what
+the agent is being asked to do:
+
+| | AppWorld as published | what the MCP image presents |
+|---|---|---|
+| Interaction modality | a stateful **IPython REPL** — the agent writes Python (`apis.amazon.search(...)`) and composes calls in code | **one MCP tool per API**, named `app__api`, one call per turn |
+| Terminal action | the `supervisor.complete_task` API | rewritten into a synthetic `finish` action |
+| API discovery | `api_docs` APIs are callable, so an agent can page the docs at runtime | `api_docs.*` and `supervisor.show_active_task` are **dropped from the surface** |
+| Task scaffolding | supervisor details plus `allowed_apps` and `app_descriptions` | supervisor and datetime only — the other two are commented out of the context dict |
+| Step budget | per-experiment config | `max_interactions = 200` |
+
+None of that is a defect; it is the point of the image — our subject is an A2A/MCP tool-calling agent,
+not a code-writing REPL agent, so the benchmark is exposed in the modality we actually deploy. But it
+means an appworld number from this repo **is not comparable with a published AppWorld figure**, for a
+reason quite separate from the SGC point below: a tool-per-API agent with no runtime API docs and no
+app list is solving a harder, differently-shaped problem than the REPL agents the leaderboard ranks.
+The one modification to the library itself is behaviourally narrow — the adapter patches appworld's
+`get_direct_sqlite3_connection` to `check_same_thread=False` so the threaded runner can reuse
+connections — and it does not touch scoring.
 
 **We can report AppWorld's TGC but never its SGC.** Upstream scores two ways: per-task goal
 completion, and *scenario* goal completion defined over a whole group of related tasks. Two things
@@ -215,7 +242,7 @@ thing we add from outside is a credential or two plus a per-benchmark quirk over
 |---|---|---|
 | **gsm8k** | the HuggingFace loader, pinned to `main`/`test` (1,319 rows) | `HF_TOKEN` (from `hf-secret`), plus `EXGENTIC_SET_BENCHMARK_RUNNER=direct` |
 | **tau2** | τ²-bench at tag `v0.1.3` + `retail` domain, and a user-simulator LLM | `OPENAI_API_KEY` + `EXGENTIC_SET_BENCHMARK_ACTION_TIMEOUT=1000` — it makes its own inference calls |
-| **appworld** | the whole app-suite sandbox (`exgentic install --benchmark appworld`), `test_normal` split | just `BENCHMARK_NAME` — upstream's `.env.appworld` is explicitly empty |
+| **appworld** | the whole app-suite sandbox (`exgentic install --benchmark appworld`) — upstream's library at commit `edc96012` under a custom tool-per-API adapter, `test_normal` split | just `BENCHMARK_NAME` — upstream's `.env.appworld` is explicitly empty |
 
 Two things follow that are easy to miss:
 

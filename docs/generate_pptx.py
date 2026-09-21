@@ -920,7 +920,7 @@ grid(s, inch(0.45), inch(1.30), inch(12.4), inch(2.30), [
      "OPENAI_API_KEY (from openai-secret) + EXGENTIC_SET_BENCHMARK_ACTION_TIMEOUT=1000 — the "
      "simulator makes its own inference calls (flow 4)"),
     ("appworld", "exgentic-mcp-appworld",
-     "the whole app-suite sandbox (exgentic install --benchmark appworld), test_normal split",
+     "the whole app-suite sandbox at upstream commit edc96012, under a CUSTOM tool-per-API adapter; test_normal split",
      "nothing beyond BENCHMARK_NAME — upstream's .env.appworld is explicitly empty"),
 ], col_w=[inch(1.40), inch(2.75), inch(4.10), inch(4.15)], font=11.5)
 

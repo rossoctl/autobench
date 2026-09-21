@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-21T17:24:30Z
+**Last modified:** 2026-09-21T17:38:30Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -666,7 +666,7 @@ the per-benchmark quirk overrides. There is no config knob for the dataset or th
 |---|---|---|
 | **gsm8k** (`exgentic-mcp-gsm8k`) | the HuggingFace dataset loader, pinned to the `main`/`test` split — those 1,319 rows are fetched at pod startup | `HF_TOKEN` (from `hf-secret`), plus `EXGENTIC_SET_BENCHMARK_RUNNER=direct` |
 | **tau2** (`exgentic-mcp-tau2`) | the τ²-bench library + its `retail` domain (114 tasks), and a user-simulator LLM | `OPENAI_API_KEY` (from `openai-secret`) + `EXGENTIC_SET_BENCHMARK_ACTION_TIMEOUT=1000` — it makes its own inference calls (flow 4) |
-| **appworld** (`exgentic-mcp-appworld`) | the whole app-suite sandbox (`exgentic install --benchmark appworld`), served from the `test_normal` split (168 tasks) | just `BENCHMARK_NAME` — upstream's `.env.appworld` is explicitly empty |
+| **appworld** (`exgentic-mcp-appworld`) | the whole app-suite sandbox (`exgentic install --benchmark appworld`) — upstream appworld at commit `edc96012` wrapped in a *custom* tool-per-API adapter, served from the `test_normal` split (168 tasks) | just `BENCHMARK_NAME` — upstream's `.env.appworld` is explicitly empty |
 
 Every benchmark also gets `BENCHMARK_NAME` and an `OPENAI_API_BASE` that the Service **injects per
 deploy** from the instance's `workload_llm.api_base` (§4.1) — never baked into the image; a deploy
