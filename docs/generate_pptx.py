@@ -4,7 +4,7 @@ Run with the project env plus python-pptx (no need to add it as a project dep):
 
     uv run --with python-pptx python docs/generate_pptx.py
 
-Produces a 17-slide 16:9 deck: title, agenda, overview + key design decisions, the
+Produces a 26-slide 16:9 deck: title, agenda, overview + key design decisions, the
 design motif, three
 architecture diagrams (the whole system, inside the workload, then how the sidecar is wired into
 the path at all), the two-token auth
@@ -273,7 +273,8 @@ items = [
      "4.1 inside the workload: sidecar, user simulator, IBAC judge · 4.2 how interception is wired"),
     ("The two-token auth model", "why the caller's token is never forwarded upstream"),
     ("Benchmark catalog & run lifecycle",
-     "6.1 the three benchmarks and the REST flow that drives them · 6.2 what each image bakes in"),
+     "6.1 the three benchmarks and the REST flow that drives them · 6.2 what each image bakes in · "
+     "6.3 who decides what happens inside a task"),
     ("The three benchmarks — what they measure",
      "7.1 the difficulty ladder · 7.2 what each stresses · 7.3 the traps · 7.4 picking one · "
      "7.5 what it costs · 7.6 the rate card · 7.7–7.8 six efficiency figures · "
@@ -944,6 +945,59 @@ _ban = box(s, inch(0.45), inch(5.35), inch(12.4), inch(1.55),
     "dataset is public: without it the MCP pod sits in CreateContainerConfigError and the agent "
     "crash-loops.  Missing secrets surface as a 424 on the run precheck, naming exactly what to "
     "provision.",
+    LTGRAY, STORE, font=12.5, bold=True, font_color=INK)
+_ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
+
+
+# ============================= SLIDE 7c: WHO DECIDES WHAT HAPPENS INSIDE A TASK
+# The deck explains the wiring (slides 2-4) and the catalog (6.x) but never said who DECIDES the
+# sequence of calls -- and the common wrong guess is that the MCP pod, or our prompt, prescribes it.
+# Counts are measured over every mirrored span_report.ndjson of the v1.28 matrix, both platforms.
+# Mirrors DEVELOPER_GUIDE.md 1 "Who decides what happens inside a task" -- keep the two in step.
+s = prs.slides.add_slide(BLANK)
+title_band(s, "6.3  Who Decides What Happens Inside a Task",
+           "The sequence of model calls and tool calls is defined nowhere — the model produces it, "
+           "step by step")
+grid(s, inch(0.45), inch(1.30), inch(12.4), inch(2.75), [
+    ("component", "defines", "does NOT define"),
+    ("MCP pod",
+     "the task list; each task's initial state and instruction; the TOOL SURFACE — names, schemas, "
+     "semantics, the observations tools return; the EVALUATOR (evaluate_session → verdict)",
+     "any ordering.  It answers calls; it never asks for one"),
+    # No hand-broken label here: a "\n" in any cell left-aligns the whole ROW (see grid()), which
+    # beside three centered prose rows reads as a mistake. Let the 2.30" column wrap it.
+    ("agent runtime (in the agent image)",
+     "the LOOP — model → tool → observation → model — and when to stop",
+     "which tool, with which arguments"),
+    ("the Service",
+     "one prompt per task (runner/prompt.py: the task text plus optional context, no tool "
+     "instructions), the session lifecycle, the per-task timeout, the telemetry",
+     "anything about the trajectory"),
+    ("the model", "EVERY step", "—"),
+], col_w=[inch(2.30), inch(6.30), inch(3.80)], font=11.5)
+
+box(s, inch(0.45), inch(4.35), inch(6.05), inch(1.55),
+    "Selection is deterministic.  Execution is not.",
+    LTBLUE, BLUE, font=14, font_color=BLUE,
+    sub="Same task id, same model, same platform, two different legs: tau2 task 2 took 13 chat / 13 "
+        "tool in one and 9 / 9 in the other; appworld 3d9a636_3 took 20 / 10 and 26 / 13. Of tasks "
+        "appearing in more than one leg, 8 of 10 tau2 and 3 of 3 appworld differ — the 10 that agree "
+        "are all gsm8k, where 1 chat / 1 tool leaves nothing to vary.",
+    sub_color=INK)
+box(s, inch(6.80), inch(4.35), inch(6.05), inch(1.55),
+    "The stop signal comes from the MCP pod, not from us",
+    LTTEAL, WORK, font=14, font_color=WORK,
+    sub="No terminal tool name exists anywhere in the Service. The agent reads the tool "
+        "declarations at connect_mcp, and gsm8k's whole first model call is 320 input tokens — "
+        "system prompt, task text and every schema. It lands: submit 173/173 on gsm8k, finish 34/35 "
+        "on appworld (the miss timed out), while tau2 has NO terminal tool — 60/60 end on message.",
+    sub_color=INK)
+
+_ban = box(s, inch(0.45), inch(6.15), inch(12.4), inch(0.85),
+    "Why it matters downstream:  grading reads the session's FINAL STATE, never a reference "
+    "trajectory — so a task can pass by two routes at different token cost.  Per-task cost and "
+    "latency are distributions, which is why the reports carry CV columns; and an appworld gap "
+    "between platforms is not automatically a platform difference.",
     LTGRAY, STORE, font=12.5, bold=True, font_color=INK)
 _ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
 

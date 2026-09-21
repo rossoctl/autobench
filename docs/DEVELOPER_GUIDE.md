@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-21T00:15:57Z
+**Last modified:** 2026-09-21T00:59:15Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -26,6 +26,7 @@ multi-turn) on the `ykt3` and `kind-rossoctl` clusters.
 - [1. Mental model (read this first)](#1-mental-model-read-this-first)
   - [Endpoint map](#endpoint-map)
   - [The run-time data path](#the-run-time-data-path)
+  - [Who decides what happens inside a task](#who-decides-what-happens-inside-a-task)
   - [Picking a benchmark, and what a run costs](#picking-a-benchmark-and-what-a-run-costs)
   - [Token- and cost-efficiency in six figures](#token--and-cost-efficiency-in-six-figures)
   - [The three benchmarks and the 12 runs, compared](#the-three-benchmarks-and-the-12-runs-compared)
@@ -169,6 +170,45 @@ while keeping the named hosts in it, then verify by **counting judge completions
 emits no log line of its own, so sidecar logs cannot tell you. `initialize` and `tools/list` are
 `isAction=false` and legitimately never reach the judge, so a zero count only means something if real
 tool calls occurred. Cost figures for each layer: [`PLUGIN_OVERHEAD.md`](./PLUGIN_OVERHEAD.md).
+
+### Who decides what happens inside a task
+
+The eight flows say who *talks to* whom. They do not say who **decides** — and the answer surprises
+people: the sequence of model calls and tool calls inside a task is **defined nowhere**. It is
+produced, one step at a time, by the model.
+
+| component | defines | does **not** define |
+|---|---|---|
+| **MCP pod** | the task list; each task's initial state and instruction; the **tool surface** — names, schemas, semantics, and the observations tools return; the **evaluator** (`evaluate_session` → verdict) | any ordering. It answers calls; it never asks for one |
+| **agent runtime** (inside the agent image) | the **loop** — model → tool → observation → model — and when to stop | which tool, with which arguments |
+| **the Service** | one prompt per task (`runner/prompt.py`: the task text plus optional context, and no tool instructions), the session lifecycle, the per-task timeout, the telemetry | anything about the trajectory |
+| **the model** | **every step** | — |
+
+**Deterministic task *selection*, nondeterministic task *execution*.** The runner always slices the
+first `max_tasks` ids off a fixed list, which is what makes legs comparable. Within a task nothing is
+fixed: the same task id, same model, same platform, run in two different legs, takes a different
+number of steps — tau2 task `2` went 13 chat / 13 tool in one leg and 9 / 9 in another; appworld
+`3d9a636_3` went 20 / 10 and 26 / 13. Of the tasks that appear in more than one leg, **8 of 10 tau2
+tasks and 3 of 3 appworld tasks differ**; the 10 that agree are all gsm8k, where the shape is
+1 chat / 1 tool and there is nothing to vary.
+
+**How the model knows when to stop.** Not from our prompt — the terminal tool's name appears nowhere
+in the Service. The agent fetches the tool declarations from the MCP pod at `connect_mcp`, and the
+benchmark's own schema descriptions are what mark one tool as the answer/finish channel. On gsm8k the
+entire first model call is **320 input tokens** — the runtime's system prompt, our task text and
+every tool schema combined — so that instruction is a terse tool description, not a protocol. In
+practice it lands: gsm8k ends on `submit` in **173 of 173** tasks and appworld on `finish` in **34 of
+35** (the exception timed out mid-task). tau2 has **no** terminal tool at all — all **60 of 60** tasks
+end on `message`, a reply to the simulated customer, the loop exiting simply because the model asked
+for no further tool.
+
+Two consequences worth carrying into every number downstream. Grading reads the session's **final
+state**, never a reference trajectory, so a task can pass by two routes at different token cost — per-task
+cost and latency are distributions, which is why the reports carry CV columns rather than
+point figures. And an appworld gap between platforms is not automatically a platform difference: the
+turn counts differ run to run on their own.
+
+<sub>Counts computed over every mirrored `span_report.ndjson` from the v1.28 matrix, both platforms: per task, `counted` chat and tool spans, grouped by (benchmark, task id, model).</sub>
 
 ### Picking a benchmark, and what a run costs
 
