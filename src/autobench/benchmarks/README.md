@@ -77,5 +77,5 @@ These are load-bearing and easy to break — they're commented inline in `regist
 - `build_tool_request` / `build_agent_request` here turn a definition into the rossoctl create
   bodies (MCP_URL / model / OTEL / AuthBridge env injection).
 
-See also `docs/DEVELOPER_GUIDE.md` §8 (task-oriented walkthrough) and
+See also `docs/DEVELOPER_GUIDE.md` §9 (task-oriented walkthrough) and
 `docs/SERVICE_DESIGN_DECISIONS.md` (why the catalog is static).

@@ -243,7 +243,7 @@ larger value for tau2 runs.
 > **Adding or changing a benchmark** is a source change to `BENCHMARKS` + tests + image rebuild +
 > redeploy (the catalog is static code, read-only over HTTP — never runtime-mutable). For the
 > field-by-field reference and the add/change recipe, see the co-located contributor note
-> `src/autobench/benchmarks/README.md` and `docs/DEVELOPER_GUIDE.md` §8.
+> `src/autobench/benchmarks/README.md` and `docs/DEVELOPER_GUIDE.md` §9.
 
 #### Comparing runs across clusters (e.g. kind vs a remote workload cluster)
 

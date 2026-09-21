@@ -184,7 +184,7 @@ Two things follow that are easy to miss:
   the agent has nothing appworld-specific in it.
 
 The deployment-side detail (which secret, which env var, what breaks without it) is in
-[`DEVELOPER_GUIDE.md`](DEVELOPER_GUIDE.md) §3.3–§3.4.
+[`DEVELOPER_GUIDE.md`](DEVELOPER_GUIDE.md) §4.3–§4.4.
 
 ---
 

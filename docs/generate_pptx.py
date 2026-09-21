@@ -276,11 +276,12 @@ items = [
      "6.1 the three benchmarks and the REST flow that drives them · 6.2 what each image bakes in · "
      "6.3 one task end to end · 6.4 who decides what happens inside it"),
     ("The three benchmarks — what they measure",
-     "7.1 the difficulty ladder · 7.2 what each stresses · 7.3 the traps · 7.4 picking one · "
-     "7.5 what it costs · 7.6 the rate card · 7.7–7.8 six efficiency figures · "
-     "7.9–7.10 the benchmarks and the 12 runs compared"),
+     "7.1 the difficulty ladder · 7.2 what each stresses · 7.3 the three compared · "
+     "7.4 the traps · 7.5 picking one · 7.6 what it costs · 7.7 the rate card · "
+     "7.8–7.9 six efficiency figures"),
     ("The canonical 12-run matrix",
-     "8.1 what the 12 runs parameterize · 8.2 what they measured"),
+     "8.1 what the 12 runs parameterize · 8.2 what each band established · "
+     "8.3 what they measured"),
     ("Cross-platform & plugin overhead",
      "9.1 OpenShift vs KinD, like-for-like · 9.2 what AuthBridge costs"),
     ("What the Service can & cannot enact", "the HTTP-only boundary, made explicit"),
@@ -1045,7 +1046,7 @@ _ban = box(s, inch(0.45), inch(6.15), inch(12.4), inch(0.85),
 _ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
 
 
-# ================================ SLIDES 8-10: THE THREE BENCHMARKS (from BENCHMARKS_PRIMER.md)
+# ================================ SECTION 7: THE THREE BENCHMARKS (from BENCHMARKS_PRIMER.md)
 # Every figure is measured from our own v1.28 runs (both platforms pooled, 267 task rows, none with
 # lost telemetry) -- not quoted from the benchmarks' published papers.
 s = prs.slides.add_slide(BLANK)
@@ -1073,7 +1074,7 @@ _ban = box(s, inch(0.45), inch(6.05), inch(12.4), inch(0.95),
     "each default is dearer than the one below it — so no cost here transfers to another model. The "
     "scale gap is the headline: a tau2 task costs ~267× the input tokens of a gsm8k task, an "
     "appworld task ~792× — and in MONEY 279× and 1,069×, because that model change compounds with "
-    "the token growth (7.5, 7.7). A 50-task gsm8k run is a minute and 2 cents; a 20-task appworld "
+    "the token growth (7.6, 7.8). A 50-task gsm8k run is a minute and 2 cents; a 20-task appworld "
     "run is 30-45 minutes, millions of tokens and dollars. Budget by benchmark, not by task count.",
     LTGRAY, STORE, font=12.5, bold=True, font_color=INK)
 _ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
@@ -1092,7 +1093,7 @@ cards = [
         "Deterministic enough that task 0 costs 320 input tokens on every cluster —"
         " we use that to prove two environments are comparable.",
         "Cheap enough to run often: a 50-task leg is 25 K tokens — 0.4% of the whole"
-        " 12-run matrix's bill, and less than a SINGLE appworld task (see 7.4).",
+        " 12-run matrix's bill, and less than a SINGLE appworld task (see 7.5).",
     ]),
     ("tau2", "the discriminator", ROSSO, LTPURPLE, [
         "Multi-turn: a server-side USER SIMULATOR LLM plays the customer.",
@@ -1143,11 +1144,51 @@ for name, tag, col, lt, bullets in cards:
     x += inch(4.22)
 
 # The "which one do I pick" strip used to live here, cramped under the cards and a row short. It is
-# slide 7.4 now, with the sizing numbers next to it.
+# slide 7.5 now, with the sizing numbers next to it.
+
+# ---- 7.3 the three benchmarks, compared ------------------------------------------------------
+# Deliberately not a numbers slide: 7.1 carries the per-task figures and 7.6-7.9 the money. This one answers
+# "what IS a task, and what is a result from it worth" -- the question the numbers cannot.
+s = prs.slides.add_slide(BLANK)
+title_band(s, "7.3  The Three Benchmarks Compared — Task, Purpose, Worth",
+           "They differ in the SHAPE of a task, not just its size — which is what makes the ladder "
+           "a ladder")
+grid(s, inch(0.45), inch(1.25), inch(12.4), inch(4.70), [
+    ("", "gsm8k", "tau2", "appworld"),
+    ("A task IS", "one grade-school word problem,\nanswered in text",
+     "one retail customer-service\nconversation vs a simulated user",
+     "one multi-app scenario automated\nthrough an API surface"),
+    ("Turn structure", "1 model call, ~1 tool call",
+     "~11 calls alternating with a\nUSER SIMULATOR in character",
+     "~29 calls, each re-sending the\nwhole conversation"),
+    ("Ends when", "the answer is emitted",
+     "the dialogue resolves, or policy\nis violated",
+     "the goal state is reached — or the\n600 s task timeout kills it"),
+    ("Scored by", "exact numeric match",
+     "task completion + policy\ncompliance (tau2's own scorer)",
+     "appworld's state assertions,\nall-or-nothing"),
+    ("It exists to test", "that the PLUMBING works:\ndeploy, auth, telemetry, S3",
+     "that the agent HOLDS STATE\nacross turns and uses tools\nunder a policy",
+     "that the agent survives LONG\nHORIZONS: context growth,\ntimeouts, partial failure"),
+    ("A result is worth", "a go/no-go on infrastructure.\nIt saturates near 1.0, so it\ncannot rank models",
+     "a genuine model/config\ncomparison — it discriminates,\nand 0.83 leaves headroom both ways",
+     "a stress signal, not a capability\nscore: at 0.00 it tells you what\nBREAKS, not who is better"),
+    ("Watch out for", "1.0 proves nothing about\nthe agent",
+     "its user simulator is billed\nbut NOT in our telemetry",
+     "15 of 50 tasks time out, and a\nkilled task leaves NO report row"),
+], col_w=[inch(2.20), inch(3.35), inch(3.45), inch(3.40)], font=10.5)
+_ban = box(s, inch(0.45), inch(6.15), inch(12.4), inch(0.85),
+    "gsm8k is a SMOKE TEST WITH A SCORE — reading its 0.97 as a model measurement is the most "
+    "common misreading of these numbers.  tau2 is the only rung that discriminates, and it fails "
+    "informatively: a wrong answer, a policy violation and a dropped thread are different "
+    "failures.  appworld earns its place precisely BECAUSE it fails — it is the only leg that has "
+    "ever exposed a timeout, a context limit or a cache effect before a user did.",
+    LTGRAY, STORE, font=12, bold=False, font_color=INK)
+_ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
 
 # ---- the traps ----
 s = prs.slides.add_slide(BLANK)
-title_band(s, "7.3  Reading the Numbers — Five Things That Mislead",
+title_band(s, "7.4  Reading the Numbers — Five Things That Mislead",
            "Every one of these cost us a wrong conclusion first")
 traps = [
     ("pass_rate = evaluated_pass / total",
@@ -1191,12 +1232,12 @@ for i, (head, body_text) in enumerate(traps, 1):
     y += inch(1.16)
 
 
-# ---- 7.4 which one to pick, and what that leg costs ------------------------------------------
+# ---- 7.5 which one to pick, and what that leg costs ------------------------------------------
 # The right-hand table is the measured token total of each leg, not an estimate: summed over the
 # mirrored report.ndjson rows of the v1.28 pair (docs/results/v1.28-2026-09-15/). It is the answer
 # to "what will this cost me", which the difficulty ladder on 7.1 gives only per task.
 s = prs.slides.add_slide(BLANK)
-title_band(s, "7.4  Picking a Benchmark — and What That Leg Costs",
+title_band(s, "7.5  Picking a Benchmark — and What That Leg Costs",
            "The actionable summary: what each benchmark is FOR, and the bill it hands you — "
            "in tokens and in dollars")
 grid(s, inch(0.45), inch(1.30), inch(6.55), inch(2.55), [
@@ -1241,17 +1282,17 @@ _ban = box(s, inch(0.45), inch(5.60), inch(12.4), inch(1.30),
     "but leaves no report row, so appworld's 15 timed-out tasks are missing from the numbers above."
     "  tau2's user simulator runs in the MCP pod, which is not instrumented — its inference is "
     "billed by the gateway and counted nowhere here.  And a leg that replays the gateway's "
-    "completion cache re-reports stored usage for calls that were never made upstream.  7.6 puts a "
+    "completion cache re-reports stored usage for calls that were never made upstream.  7.7 puts a "
     "dollar figure on the fourth: the IBAC judge, which the agent's spans never see.",
     LTGRAY, STORE, font=12.5, bold=True, font_color=INK)
 _ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
 
-# ---- 7.5 the cost model: tokens, models, money ----------------------------------------------
-# Every dollar figure on 7.5 and 7.6 is computed by reference/gen-cost-analysis.py from the mirrored
+# ---- 7.6 the cost model: tokens, models, money ----------------------------------------------
+# Every dollar figure on 7.6 and 7.7 is computed by reference/gen-cost-analysis.py from the mirrored
 # report.ndjson rows of the v1.28 pair times reference/model_prices.json — the ONE place a price
 # lives. Nothing here is hand-arithmetic; regenerate rather than patch a number.
 s = prs.slides.add_slide(BLANK)
-title_band(s, "7.5  The Cost Model — Tokens, Models, Money",
+title_band(s, "7.6  The Cost Model — Tokens, Models, Money",
            "What a task costs in tokens AND in dollars, and why the two rankings disagree")
 grid(s, inch(0.45), inch(1.30), inch(6.15), inch(4.55), [
     ("per task, pooled", "gsm8k", "tau2", "appworld"),
@@ -1302,12 +1343,12 @@ _ban = box(s, inch(0.45), inch(6.00), inch(12.4), inch(0.95),
     LTGRAY, STORE, font=12, bold=True, font_color=INK)
 _ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
 
-# ---- 7.6 the rate card, and the two ways the dollars are wrong -------------------------------
+# ---- 7.7 the rate card, and the two ways the dollars are wrong -------------------------------
 # The rate card is the only hand-entered data in the cost story (read off the gateway's admin UI),
 # and it lives in reference/model_prices.json — quoted here, never recomputed. The two boxes are the
 # signed error bars: the judge makes the totals too LOW, an unmodelled cache discount too HIGH.
 s = prs.slides.add_slide(BLANK)
-title_band(s, "7.6  The Rate Card — and Which Way the Dollars Are Wrong",
+title_band(s, "7.7  The Rate Card — and Which Way the Dollars Are Wrong",
            "Read off the gateway's admin UI on 2026-09-17 and kept in reference/model_prices.json — "
            "posted rates, not an invoice")
 grid(s, inch(0.45), inch(1.30), inch(12.4), inch(1.95), [
@@ -1349,7 +1390,7 @@ box(s, inch(6.90), inch(4.55), inch(5.95), inch(2.35),
     sub_color=INK)
 
 
-# ---- 7.7 / 7.8 the six efficiency figures ----------------------------------------------------
+# ---- 7.8 / 7.9 the six efficiency figures ----------------------------------------------------
 # The PNGs and the sentences under them both come from reference/gen-cost-charts.py; neither is
 # retyped here. Three figures per slide, one take-away each.
 if _FIGS:
@@ -1358,64 +1399,57 @@ if _FIGS:
     _TINT = [(WORK, LTTEAL), (BLUE, LTBLUE), (ROSSO, LTPURPLE)]
 
     s = prs.slides.add_slide(BLANK)
-    title_band(s, "7.7  Token- and Cost-Efficiency — Where the Money Actually Goes",
-               "Measured on the v1.28 pair (267 task rows) at the rate card in 7.6 — "
+    title_band(s, "7.8  Token- and Cost-Efficiency — Where the Money Actually Goes",
+               "Measured on the v1.28 pair (267 task rows) at the rate card in 7.7 — "
                "one take-away per figure")
     for _k, _x, (_a, _l) in zip(["ladder-amplification", "cost-composition", "model-choice"],
                                 _COL_X, _TINT):
         figure(s, _k, _x, inch(1.35), _COL_W, _a, _l, cap_h=inch(2.35))
 
     s = prs.slides.add_slide(BLANK)
-    title_band(s, "7.8  Token- and Cost-Efficiency — What To Budget, and What To Divide By",
+    title_band(s, "7.9  Token- and Cost-Efficiency — What To Budget, and What To Divide By",
                "Same three rules every time: budget by benchmark, divide by successes, "
                "count what is billed off-telemetry")
     for _k, _x, (_a, _l) in zip(["leg-pareto", "cost-per-pass", "judge-overhead"],
                                 _COL_X, _TINT):
         figure(s, _k, _x, inch(1.35), _COL_W, _a, _l, cap_h=inch(2.35))
 
-# ---- 7.9 the three benchmarks, compared ------------------------------------------------------
-# Deliberately not a numbers slide: 7.1 and 7.5 already carry the measurements. This one answers
-# "what IS a task, and what is a result from it worth" -- the question the numbers cannot.
+# ============================ SECTION 8: THE 12-RUN MATRIX AND WHAT IT SHOWED
+# Every figure is read from the v1.28 matrices' own mirrored artifacts
+# (docs/results/v1.28-2026-09-15/12run-*.md).
 s = prs.slides.add_slide(BLANK)
-title_band(s, "7.9  The Three Benchmarks Compared — Task, Purpose, Worth",
-           "They differ in the SHAPE of a task, not just its size — which is what makes the ladder "
-           "a ladder")
-grid(s, inch(0.45), inch(1.25), inch(12.4), inch(4.70), [
-    ("", "gsm8k", "tau2", "appworld"),
-    ("A task IS", "one grade-school word problem,\nanswered in text",
-     "one retail customer-service\nconversation vs a simulated user",
-     "one multi-app scenario automated\nthrough an API surface"),
-    ("Turn structure", "1 model call, ~1 tool call",
-     "~11 calls alternating with a\nUSER SIMULATOR in character",
-     "~29 calls, each re-sending the\nwhole conversation"),
-    ("Ends when", "the answer is emitted",
-     "the dialogue resolves, or policy\nis violated",
-     "the goal state is reached — or the\n600 s task timeout kills it"),
-    ("Scored by", "exact numeric match",
-     "task completion + policy\ncompliance (tau2's own scorer)",
-     "appworld's state assertions,\nall-or-nothing"),
-    ("It exists to test", "that the PLUMBING works:\ndeploy, auth, telemetry, S3",
-     "that the agent HOLDS STATE\nacross turns and uses tools\nunder a policy",
-     "that the agent survives LONG\nHORIZONS: context growth,\ntimeouts, partial failure"),
-    ("A result is worth", "a go/no-go on infrastructure.\nIt saturates near 1.0, so it\ncannot rank models",
-     "a genuine model/config\ncomparison — it discriminates,\nand 0.83 leaves headroom both ways",
-     "a stress signal, not a capability\nscore: at 0.00 it tells you what\nBREAKS, not who is better"),
-    ("Watch out for", "1.0 proves nothing about\nthe agent",
-     "its user simulator is billed\nbut NOT in our telemetry",
-     "15 of 50 tasks time out, and a\nkilled task leaves NO report row"),
-], col_w=[inch(2.20), inch(3.35), inch(3.45), inch(3.40)], font=10.5)
-_ban = box(s, inch(0.45), inch(6.15), inch(12.4), inch(0.85),
-    "gsm8k is a SMOKE TEST WITH A SCORE — reading its 0.97 as a model measurement is the most "
-    "common misreading of these numbers.  tau2 is the only rung that discriminates, and it fails "
-    "informatively: a wrong answer, a policy violation and a dropped thread are different "
-    "failures.  appworld earns its place precisely BECAUSE it fails — it is the only leg that has "
-    "ever exposed a timeout, a context limit or a cache effect before a user did.",
+title_band(s, "8.1  The Canonical 12-Run Matrix",
+           "One fixed set of 12 request bodies — the same on every platform, every version")
+grid(s, inch(0.45), inch(1.30), inch(12.4), inch(3.95), [
+    ("#", "benchmark", "tasks", "parallel", "what it varies"),
+    ("1", "gsm8k", "1", "1", "baseline — the smoke test"),
+    ("2", "gsm8k", "10", "1", "volume, still serial"),
+    ("3", "gsm8k", "50", "4", "volume + concurrency"),
+    ("4", "gsm8k", "5", "4", "model swap → Azure/gpt-4.1"),
+    ("5", "gsm8k", "5", "4", "AuthBridge preset: auth-only"),
+    ("6", "gsm8k", "5", "4", "AuthBridge preset: ibac-only"),
+    ("7", "gsm8k", "5", "4", "AuthBridge preset: full (enforce)"),
+    ("8", "gsm8k", "5", "4", "full + per-plugin override ibac:observe"),
+    ("9", "tau2", "10", "1", "multi-turn + user simulator"),
+    ("10", "tau2", "20", "4", "multi-turn under concurrency"),
+    ("11", "appworld", "5", "1", "long-horizon, gemini-2.5-pro"),
+    ("12", "appworld", "20", "4", "long-horizon under concurrency"),
+], col_w=[inch(0.7), inch(1.7), inch(1.0), inch(1.2), inch(7.8)], font=10.5,
+   first_col_bold=False)
+_m = box(s, inch(0.45), inch(5.45), inch(12.4), inch(1.55),
+    "Why a FIXED matrix: task selection is deterministic, so the same leg run anywhere executes the "
+    "same tasks in the same order. That is what makes a difference attributable to the platform "
+    "rather than to the workload. Every leg deploys fresh — originally because a warm agent lost "
+    "telemetry (fixed in agent dev145), now because only a NEWLY CREATED pod re-pulls :latest. "
+    "Driven by one command (reference/run-12.py): ~1h35m of leg wall time per platform, plus the "
+    "deploys and ~33 min of gateway-cache gaps. The generated documents in docs/results/ derive "
+    "every number from the mirrored artifacts.",
     LTGRAY, STORE, font=12, bold=False, font_color=INK)
-_ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
+_m.text_frame.margin_left = _m.text_frame.margin_right = Pt(18)
 
-# ---- 7.10 the 12 runs: what each band established --------------------------------------------
+# ---- 8.2 the 12 runs: what each band established --------------------------------------------
 s = prs.slides.add_slide(BLANK)
-title_band(s, "7.10  The 12 Runs Compared — What Each Band Established",
+title_band(s, "8.2  The 12 Runs Compared — What Each Band Established",
            "Each leg changes exactly ONE thing against the leg before it, so a difference has one "
            "candidate explanation")
 grid(s, inch(0.45), inch(1.25), inch(12.4), inch(3.30), [
@@ -1459,42 +1493,9 @@ box(s, inch(6.90), inch(4.75), inch(5.95), inch(2.25),
     sub_color=INK)
 
 
-# ============================ SLIDES 12-15: THE 12-RUN MATRIX AND WHAT IT SHOWED
-# Every figure is read from the v1.28 matrices' own mirrored artifacts
-# (docs/results/v1.28-2026-09-15/12run-*.md).
+# ---- 8.3 what it measured ----
 s = prs.slides.add_slide(BLANK)
-title_band(s, "8.1  The Canonical 12-Run Matrix",
-           "One fixed set of 12 request bodies — the same on every platform, every version")
-grid(s, inch(0.45), inch(1.30), inch(12.4), inch(3.95), [
-    ("#", "benchmark", "tasks", "parallel", "what it varies"),
-    ("1", "gsm8k", "1", "1", "baseline — the smoke test"),
-    ("2", "gsm8k", "10", "1", "volume, still serial"),
-    ("3", "gsm8k", "50", "4", "volume + concurrency"),
-    ("4", "gsm8k", "5", "4", "model swap → Azure/gpt-4.1"),
-    ("5", "gsm8k", "5", "4", "AuthBridge preset: auth-only"),
-    ("6", "gsm8k", "5", "4", "AuthBridge preset: ibac-only"),
-    ("7", "gsm8k", "5", "4", "AuthBridge preset: full (enforce)"),
-    ("8", "gsm8k", "5", "4", "full + per-plugin override ibac:observe"),
-    ("9", "tau2", "10", "1", "multi-turn + user simulator"),
-    ("10", "tau2", "20", "4", "multi-turn under concurrency"),
-    ("11", "appworld", "5", "1", "long-horizon, gemini-2.5-pro"),
-    ("12", "appworld", "20", "4", "long-horizon under concurrency"),
-], col_w=[inch(0.7), inch(1.7), inch(1.0), inch(1.2), inch(7.8)], font=10.5,
-   first_col_bold=False)
-_m = box(s, inch(0.45), inch(5.45), inch(12.4), inch(1.55),
-    "Why a FIXED matrix: task selection is deterministic, so the same leg run anywhere executes the "
-    "same tasks in the same order. That is what makes a difference attributable to the platform "
-    "rather than to the workload. Every leg deploys fresh — originally because a warm agent lost "
-    "telemetry (fixed in agent dev145), now because only a NEWLY CREATED pod re-pulls :latest. "
-    "Driven by one command (reference/run-12.py): ~1h35m of leg wall time per platform, plus the "
-    "deploys and ~33 min of gateway-cache gaps. The generated documents in docs/results/ derive "
-    "every number from the mirrored artifacts.",
-    LTGRAY, STORE, font=12, bold=False, font_color=INK)
-_m.text_frame.margin_left = _m.text_frame.margin_right = Pt(18)
-
-# ---- 7.2 what it measured ----
-s = prs.slides.add_slide(BLANK)
-title_band(s, "8.2  What the 12 Runs Measured",
+title_band(s, "8.3  What the 12 Runs Measured",
            "v1.28 on OpenShift (Service on ykt3, workloads on ykt2) — 141 tasks, all 12 legs succeeded")
 grid(s, inch(0.45), inch(1.30), inch(6.05), inch(4.15), [
     ("#", "bench", "pass", "err", "wall", "input tokens"),

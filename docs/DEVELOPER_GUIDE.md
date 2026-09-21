@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-21T01:47:04Z
+**Last modified:** 2026-09-21T02:16:08Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -15,8 +15,8 @@ multi-turn) on the `ykt3` and `kind-rossoctl` clusters.
   [`SERVICE_DESIGN_DECISIONS.md`](./SERVICE_DESIGN_DECISIONS.md) and
   [`KUBECTL_DEPENDENCY_INVENTORY.md`](./KUBECTL_DEPENDENCY_INVENTORY.md).
 
-**In a hurry?** §2 gets you a token, §6.0 is one benchmark run start to finish as copy-pasteable
-`curl`, and §6.1 is the same thing as a single command.
+**In a hurry?** §3 gets you a token, §7.0 is one benchmark run start to finish as copy-pasteable
+`curl`, and §7.1 is the same thing as a single command.
 
 <!-- Regenerate this list: python3 reference/gen_toc.py docs/DEVELOPER_GUIDE.md -->
 <!-- toc -->
@@ -28,41 +28,42 @@ multi-turn) on the `ykt3` and `kind-rossoctl` clusters.
   - [The run-time data path](#the-run-time-data-path)
   - [One task, end to end](#one-task-end-to-end)
   - [Who decides what happens inside a task](#who-decides-what-happens-inside-a-task)
+- [2. Cost and performance (which benchmark, and what a run costs)](#2-cost-and-performance-which-benchmark-and-what-a-run-costs)
   - [Picking a benchmark, and what a run costs](#picking-a-benchmark-and-what-a-run-costs)
   - [Token- and cost-efficiency in six figures](#token--and-cost-efficiency-in-six-figures)
   - [The three benchmarks and the 12 runs, compared](#the-three-benchmarks-and-the-12-runs-compared)
-- [2. Getting a caller token](#2-getting-a-caller-token)
-- [3. Onboarding a benchmark (one-time, per cluster/instance)](#3-onboarding-a-benchmark-one-time-per-clusterinstance)
-  - [3.1 Instance config file (`instances/<encoded-iss-host>.json`)](#31-instance-config-file-instancesencoded-iss-hostjson)
-  - [3.2 Infrastructure resources (baked into the benchmark definitions)](#32-infrastructure-resources-baked-into-the-benchmark-definitions)
-  - [3.3 Workload secrets (provisioned out-of-band as cluster Secrets)](#33-workload-secrets-provisioned-out-of-band-as-cluster-secrets)
-  - [3.4 What each benchmark bakes in, and what it needs from you](#34-what-each-benchmark-bakes-in-and-what-it-needs-from-you)
-  - [3.5 MLflow + OTEL collector (optional, for reports)](#35-mlflow--otel-collector-optional-for-reports)
-- [4. Instance-specific Service config (`/config`)](#4-instance-specific-service-config-config)
-- [5. Benchmark lifecycle](#5-benchmark-lifecycle)
-  - [5.0 Discover what's available](#50-discover-whats-available)
-  - [5.1 Deploy (create the MCP tool + A2A agent)](#51-deploy-create-the-mcp-tool--a2a-agent)
-  - [5.2 Wait until Ready](#52-wait-until-ready)
-  - [5.3 Submit a run](#53-submit-a-run)
-  - [5.4 Poll run status / list runs](#54-poll-run-status--list-runs)
-  - [5.5 Get results (report)](#55-get-results-report)
-  - [5.6 Download output files from S3](#56-download-output-files-from-s3)
-  - [5.7 Tear down](#57-tear-down)
-- [6. End-to-end examples (validated flows)](#6-end-to-end-examples-validated-flows)
+- [3. Getting a caller token](#3-getting-a-caller-token)
+- [4. Onboarding a benchmark (one-time, per cluster/instance)](#4-onboarding-a-benchmark-one-time-per-clusterinstance)
+  - [4.1 Instance config file (`instances/<encoded-iss-host>.json`)](#41-instance-config-file-instancesencoded-iss-hostjson)
+  - [4.2 Infrastructure resources (baked into the benchmark definitions)](#42-infrastructure-resources-baked-into-the-benchmark-definitions)
+  - [4.3 Workload secrets (provisioned out-of-band as cluster Secrets)](#43-workload-secrets-provisioned-out-of-band-as-cluster-secrets)
+  - [4.4 What each benchmark bakes in, and what it needs from you](#44-what-each-benchmark-bakes-in-and-what-it-needs-from-you)
+  - [4.5 MLflow + OTEL collector (optional, for reports)](#45-mlflow--otel-collector-optional-for-reports)
+- [5. Instance-specific Service config (`/config`)](#5-instance-specific-service-config-config)
+- [6. Benchmark lifecycle](#6-benchmark-lifecycle)
+  - [6.0 Discover what's available](#60-discover-whats-available)
+  - [6.1 Deploy (create the MCP tool + A2A agent)](#61-deploy-create-the-mcp-tool--a2a-agent)
+  - [6.2 Wait until Ready](#62-wait-until-ready)
+  - [6.3 Submit a run](#63-submit-a-run)
+  - [6.4 Poll run status / list runs](#64-poll-run-status--list-runs)
+  - [6.5 Get results (report)](#65-get-results-report)
+  - [6.6 Download output files from S3](#66-download-output-files-from-s3)
+  - [6.7 Tear down](#67-tear-down)
+- [7. End-to-end examples (validated flows)](#7-end-to-end-examples-validated-flows)
   - [What you need on the client side](#what-you-need-on-the-client-side)
-  - [6.0 Run #1 start to finish, on the ykt3 Service driving ykt2 workloads](#60-run-1-start-to-finish-on-the-ykt3-service-driving-ykt2-workloads)
-  - [6.1 The same thing in one command (`autobench-cli`)](#61-the-same-thing-in-one-command-autobench-cli)
-  - [6.2 `autobench-cli` options](#62-autobench-cli-options)
-  - [6.3 Other validated flows](#63-other-validated-flows)
-  - [6.4 The whole 12-run matrix in one command (`reference/run-12.py`)](#64-the-whole-12-run-matrix-in-one-command-referencerun-12py)
-  - [6.5 The 12 legs as individual `autobench-cli` commands](#65-the-12-legs-as-individual-autobench-cli-commands)
-- [7. Known limits & error codes](#7-known-limits--error-codes)
-- [8. Extending the catalog (adding or changing a benchmark)](#8-extending-the-catalog-adding-or-changing-a-benchmark)
-  - [8.1 What a definition holds](#81-what-a-definition-holds)
-  - [8.2 Add a new benchmark](#82-add-a-new-benchmark)
-  - [8.3 Change an existing benchmark](#83-change-an-existing-benchmark)
-  - [8.4 What stays runtime-mutable (for contrast)](#84-what-stays-runtime-mutable-for-contrast)
-- [9. Regenerating the documents](#9-regenerating-the-documents)
+  - [7.0 Run #1 start to finish, on the ykt3 Service driving ykt2 workloads](#70-run-1-start-to-finish-on-the-ykt3-service-driving-ykt2-workloads)
+  - [7.1 The same thing in one command (`autobench-cli`)](#71-the-same-thing-in-one-command-autobench-cli)
+  - [7.2 `autobench-cli` options](#72-autobench-cli-options)
+  - [7.3 Other validated flows](#73-other-validated-flows)
+  - [7.4 The whole 12-run matrix in one command (`reference/run-12.py`)](#74-the-whole-12-run-matrix-in-one-command-referencerun-12py)
+  - [7.5 The 12 legs as individual `autobench-cli` commands](#75-the-12-legs-as-individual-autobench-cli-commands)
+- [8. Known limits & error codes](#8-known-limits--error-codes)
+- [9. Extending the catalog (adding or changing a benchmark)](#9-extending-the-catalog-adding-or-changing-a-benchmark)
+  - [9.1 What a definition holds](#91-what-a-definition-holds)
+  - [9.2 Add a new benchmark](#92-add-a-new-benchmark)
+  - [9.3 Change an existing benchmark](#93-change-an-existing-benchmark)
+  - [9.4 What stays runtime-mutable (for contrast)](#94-what-stays-runtime-mutable-for-contrast)
+- [10. Regenerating the documents](#10-regenerating-the-documents)
 
 <!-- /toc -->
 
@@ -84,7 +85,7 @@ Two consequences shape everything below:
 2. **The Service enacts only what HTTP allows.** It deploys workloads (agents/tools),
    runs benchmarks, reads reports, and exports to S3. It **cannot** create cluster Secrets
    or overlay per-agent ConfigMaps — those are provisioned out-of-band, and the Service
-   reports on them (see §3 onboarding and the `424` / `422` responses).
+   reports on them (see §4 onboarding and the `424` / `422` responses).
 
 ### Endpoint map
 
@@ -138,7 +139,7 @@ The endpoint map above is the **control** plane — what you call. During a run 
 | 7 | sidecar → IBAC judge: one call per `isAction` tool call | — |
 | 8 | judge → LLM gateway: the verdict is itself an LLM call | — |
 
-**"Flow", never "leg", for these eight.** Elsewhere in this repo — §6.5 below, `BM_ORDER`, the
+**"Flow", never "leg", for these eight.** Elsewhere in this repo — §7.5 below, `BM_ORDER`, the
 comparison reports, [`PLUGIN_OVERHEAD.md`](./PLUGIN_OVERHEAD.md) — a **leg** is one of the 12
 parameterized *runs*. Both numberings reach 8, so "leg 6" is ambiguous where it matters: as a run it
 is `ibac-only`, as a flow it is sidecar → MCP server.
@@ -248,6 +249,14 @@ turn counts differ run to run on their own.
 
 <sub>Counts computed over every mirrored `span_report.ndjson` from the v1.28 matrix, both platforms: per task, `counted` chat and tool spans, grouped by (benchmark, task id, model).</sub>
 
+## 2. Cost and performance (which benchmark, and what a run costs)
+
+Everything above is mechanism: what the pieces are and who decides what. This section is the
+money and the minutes — which benchmark answers your question, what a leg of it costs in tokens
+and dollars, and which of those numbers are safe to divide. Every figure here is measured from
+the v1.28 matrices, not estimated; the generators that compute them are in
+[10. Regenerating the documents](#10-regenerating-the-documents).
+
 ### Picking a benchmark, and what a run costs
 
 | If you want to… | use | on model | costs about |
@@ -315,7 +324,7 @@ not an invoice and not a vendor's list price.**
 python3 reference/gen-cost-analysis.py /tmp/autobench/run12-{ocp,kind}-dev146.json
 ```
 
-**What one leg costs.** Measured totals for the canonical legs (§6.4), both platforms:
+**What one leg costs.** Measured totals for the canonical legs (§7.4), both platforms:
 
 | leg | tokens (OpenShift) | $ (OpenShift) | tokens (KinD) | $ (KinD) |
 |---|---:|---:|---:|---:|
@@ -517,7 +526,7 @@ Newcomer-facing versions of these tables, with what each benchmark actually is:
 
 ---
 
-## 2. Getting a caller token
+## 3. Getting a caller token
 
 The caller JWT is a normal Keycloak token from the instance's realm. Obtain it via the
 password grant (the same Direct-Access-Grants flow the dev/test users use). The realm and
@@ -562,7 +571,7 @@ curl -s "$SVC/hello" -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 
 `GET /hello` returns `{iss, preferred_username, rossoctl_base_url, claims}`. If you get
 `401`, the token is missing/invalid; `403 issuer not in scope` means no instance file
-matches the token's `iss` (see §3.1).
+matches the token's `iss` (see §4.1).
 
 > **Why the kind block differs:** in-cluster the public `iss` host is unreachable, so the
 > instance file sets `keycloak_backchannel_url` and the Service dials *that* for JWKS/ROPC.
@@ -571,11 +580,11 @@ matches the token's `iss` (see §3.1).
 
 ---
 
-## 3. Onboarding a benchmark (one-time, per cluster/instance)
+## 4. Onboarding a benchmark (one-time, per cluster/instance)
 
 These steps are **out-of-band** — the Service verifies them but cannot perform them.
 
-### 3.1 Instance config file (`instances/<encoded-iss-host>.json`)
+### 4.1 Instance config file (`instances/<encoded-iss-host>.json`)
 
 One file per instance keys the whole thing to the `iss`. Loaded at startup from
 `settings.instances_dir`. Shape:
@@ -605,9 +614,9 @@ One file per instance keys the whole thing to the `iss`. Loaded at startup from
 - `mcp_endpoint_template` / `agent_endpoint_template` are only needed when the workloads live
   on a **different** cluster reachable via external routes (use `{service}`/`{namespace}`
   placeholders). Leave `null` for co-located in-cluster workloads.
-- `mlflow` / `s3` can be seeded here or set later via `PUT /config` (§4).
+- `mlflow` / `s3` can be seeded here or set later via `PUT /config` (§5).
 
-### 3.2 Infrastructure resources (baked into the benchmark definitions)
+### 4.2 Infrastructure resources (baked into the benchmark definitions)
 
 The Service sends CPU/memory requests+limits in the create body, so no post-create patch is
 needed. Current values (from `benchmarks/registry.py`):
@@ -617,7 +626,7 @@ needed. Current values (from `benchmarks/registry.py`):
 | MCP tool | `500m` CPU / `512Mi` | `4` CPU / `4Gi` |
 | A2A agent | `500m` CPU / `512Mi` | `4` CPU / `2Gi` |
 
-### 3.3 Workload secrets (provisioned out-of-band as cluster Secrets)
+### 4.3 Workload secrets (provisioned out-of-band as cluster Secrets)
 
 The Service has **no Secrets API**. It references these by name in the deploy body; if a
 Secret is missing the workload never becomes Ready, and the run precheck returns **`424`**
@@ -647,7 +656,7 @@ kubectl -n team1 create secret generic openai-secret --from-literal=apikey="$LIT
 > call fails until the Secret is restored and the workload pods are `rollout restart`ed (pods
 > read `apikey` via `secretKeyRef` only at startup).
 
-### 3.4 What each benchmark bakes in, and what it needs from you
+### 4.4 What each benchmark bakes in, and what it needs from you
 
 The division of labour is easy to get backwards: **the benchmark itself — dataset, world,
 evaluator — is inside the MCP image**, and `tool_env` (`registry.py`) adds only the credentials and
@@ -660,7 +669,7 @@ the per-benchmark quirk overrides. There is no config knob for the dataset or th
 | **appworld** (`exgentic-mcp-appworld`) | the whole app-suite sandbox (`exgentic install --benchmark appworld`) | just `BENCHMARK_NAME` — upstream's `.env.appworld` is explicitly empty |
 
 Every benchmark also gets `BENCHMARK_NAME` and an `OPENAI_API_BASE` that the Service **injects per
-deploy** from the instance's `workload_llm.api_base` (§3.1) — never baked into the image; a deploy
+deploy** from the instance's `workload_llm.api_base` (§4.1) — never baked into the image; a deploy
 with no gateway configured is rejected with `422` rather than falling back to a default. tau2's
 simulator model is injected the same way, from the run's model.
 
@@ -676,7 +685,7 @@ The **agent** side, by contrast, is the same everywhere: one image
 `-<benchmark>` name suffix. So the benchmark lives in the MCP pod and the subject under test is the
 same binary every time.
 
-### 3.5 MLflow + OTEL collector (optional, for reports)
+### 4.5 MLflow + OTEL collector (optional, for reports)
 
 Reporting is fail-soft: if MLflow client-creds aren't configured, runs still succeed and
 export to S3, but `report.ndjson` is empty and the report endpoints return `409`. To enable,
@@ -685,7 +694,7 @@ read creds via `PUT /config`.
 
 ---
 
-## 4. Instance-specific Service config (`/config`)
+## 5. Instance-specific Service config (`/config`)
 
 `GET`/`PUT /config` are **benchmarker-only** (`preferred_username == "benchmarker"`; else
 `403`). They set only what the Service itself enacts — MLflow (read side) and S3. Attempting
@@ -727,22 +736,22 @@ curl -s -o /dev/null -w '%{http_code}\n' -X PUT "$SVC/config" \
 
 ---
 
-## 5. Benchmark lifecycle
+## 6. Benchmark lifecycle
 
 The happy path is: **deploy → wait for Ready → run → poll → report → download from S3**.
 
-Every block below is copy-pasteable once these four variables are exported (see §2 for how to get
-the token; §6.1 wraps this whole section in a single command if you would rather not paste):
+Every block below is copy-pasteable once these four variables are exported (see §3 for how to get
+the token; §7.1 wraps this whole section in a single command if you would rather not paste):
 
 ```bash
 export SVC="https://autobench-rossoctl-system.apps.ykt3.hcp.res.ibm.com"   # Service base URL
 export BENCH=gsm8k          # gsm8k | tau2 | appworld
 export SCOPE="namespace=team1&agent=tool_calling&experiment=default"
-export TOKEN="…"            # from §2; never echo this
+export TOKEN="…"            # from §3; never echo this
 # Self-signed OpenShift route? add -k to every curl, or: export CURL_OPTS=-k
 ```
 
-### 5.0 Discover what's available
+### 6.0 Discover what's available
 
 ```bash
 curl -s "$SVC/benchmarks" -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
@@ -751,9 +760,9 @@ curl -s "$SVC/namespaces" -H "Authorization: Bearer $TOKEN" | python3 -m json.to
 ```
 
 Three benchmarks are registered: `gsm8k` (single-turn), `tau2` (multi-turn, runs a
-server-side user-simulator LLM), `appworld` (registered; see §7).
+server-side user-simulator LLM), `appworld` (registered; see §8).
 
-### 5.1 Deploy (create the MCP tool + A2A agent)
+### 6.1 Deploy (create the MCP tool + A2A agent)
 
 `POST /benchmarks/{name}/deploy` creates both the shared MCP tool (`exgentic-mcp-<name>`) and
 the agent (`exgentic-a2a-<agent>-<name>[-<experiment>]`). Returns `201`.
@@ -805,7 +814,7 @@ curl -s -X POST "$SVC/agents" \
       }' | python3 -m json.tool
 ```
 
-### 5.2 Wait until Ready
+### 6.2 Wait until Ready
 
 ```bash
 curl -s "$SVC/benchmarks/gsm8k/status?namespace=team1&agent=tool_calling&experiment=default" \
@@ -813,9 +822,9 @@ curl -s "$SVC/benchmarks/gsm8k/status?namespace=team1&agent=tool_calling&experim
 ```
 
 Returns `tool_ready` / `agent_ready` booleans plus raw `readyStatus`. Poll until both are
-`true`. If a workload stays not-Ready, the run precheck (§5.3) will name the missing Secret.
+`true`. If a workload stays not-Ready, the run precheck (§6.3) will name the missing Secret.
 
-### 5.3 Submit a run
+### 6.3 Submit a run
 
 `POST /benchmarks/{name}/runs` runs a **cluster-API-free precheck** (tool+agent deployed and
 Ready) then returns **`202`** with a `run_id`. Prechecks:
@@ -841,7 +850,7 @@ Run fields (`RunRequest`) are all **run-time** knobs:
 
 | Field | Default | Notes |
 |---|---|---|
-| `max_tasks` | `1` | number of benchmark tasks to evaluate; **capped by the task pool, silently** — see below. What a given count costs in tokens and minutes: §1, [Picking a benchmark](#picking-a-benchmark-and-what-a-run-costs) |
+| `max_tasks` | `1` | number of benchmark tasks to evaluate; **capped by the task pool, silently** — see below. What a given count costs in tokens and minutes: §2, [Picking a benchmark](#picking-a-benchmark-and-what-a-run-costs) |
 | `max_parallel_sessions` | `1` | concurrency |
 | `timeout_seconds` | `300` | whole-run wall-clock ceiling; raise for large tau2 runs |
 | `agent` / `namespace` / `experiment` | — | must match a deployed agent |
@@ -876,7 +885,7 @@ Run fields (`RunRequest`) are all **run-time** knobs:
 > benchmark re-runs that first task: legs #1 ⊂ #2 ⊂ #3, and #5–#8 are all the same first five. That
 > is deliberate — it is what makes legs comparable across configurations and clusters — but it has a
 > sharp edge: legs sharing prompts also share the LLM gateway's completion cache, so they must be
-> spaced ([§6.4](#64-the-whole-12-run-matrix-in-one-command-referencerun-12py)).
+> spaced ([§7.4](#74-the-whole-12-run-matrix-in-one-command-referencerun-12py)).
 
 > **`max_tasks` above the benchmark's task pool is not an error.** The runner asks the MCP for the
 > task list and slices it — `task_ids[:max_tasks]` — so a request for more tasks than exist yields
@@ -891,7 +900,7 @@ Run fields (`RunRequest`) are all **run-time** knobs:
 > **Timeout tuning (learned e2e):** tau2 with `max_tasks=20 max_parallel_sessions=4` exceeded
 > the 900s default and failed; re-running with `timeout_seconds=1800` succeeded (~915s).
 
-### 5.4 Poll run status / list runs
+### 6.4 Poll run status / list runs
 
 ```bash
 # One run's full state (status, summary, per-task results, artifacts once exported).
@@ -925,10 +934,10 @@ print("%s  pass_rate=%s  %s/%s  wall=%.0fs" % (
 EOF
 ```
 
-### 5.5 Get results (report)
+### 6.5 Get results (report)
 
 Two report views, both reading structured records from MLflow (return `409` if MLflow isn't
-configured for the instance — see §3.5):
+configured for the instance — see §4.5):
 
 ```bash
 # Per-run report: records filtered to this run's session ids, plus its S3 artifacts.
@@ -943,7 +952,7 @@ Per-run report is `{run_id, benchmark, experiment, trace_count, records[], artif
 each record (`MLflowTraceRecord`) has per-session timing breakdown, LLM/tool latencies + token
 counts, infra CPU/mem, and the evaluation outcome.
 
-### 5.6 Download output files from S3
+### 6.6 Download output files from S3
 
 When the instance has an S3 `bucket` set, each completed run is exported (fail-soft) and its
 objects appear in the run state under `artifacts[]` (and in the per-run report). Layout:
@@ -1024,7 +1033,7 @@ curl -s "https://rossoctl-benchmarking.s3.us-east-1.amazonaws.com/$PREFIX/manife
 aws s3 cp "s3://rossoctl-benchmarking/$PREFIX/" ./ --recursive
 ```
 
-### 5.7 Tear down
+### 6.7 Tear down
 
 ```bash
 curl -s -X DELETE "$SVC/benchmarks/gsm8k/deploy?namespace=team1&agent=tool_calling&experiment=default" \
@@ -1037,12 +1046,12 @@ experiments).
 
 ---
 
-## 6. End-to-end examples (validated flows)
+## 7. End-to-end examples (validated flows)
 
 ### What you need on the client side
 
-**Python version.** The client side is deliberately undemanding: §6.0 needs only `curl` plus any
-`python3` for JSON formatting, and `autobench-cli` (§6.1) imports nothing beyond the standard
+**Python version.** The client side is deliberately undemanding: §7.0 needs only `curl` plus any
+`python3` for JSON formatting, and `autobench-cli` (§7.1) imports nothing beyond the standard
 library. Versions we have actually run:
 
 | Python | Where it was used | Result |
@@ -1054,10 +1063,10 @@ library. Versions we have actually run:
 
 Anything **≥ 3.11** is fine. 3.12.12 is the tidiest choice because it is exactly what the exgentic
 agent and MCP images run, so your driver matches the workload interpreter — but nothing in the client
-depends on it, and the `curl` path in §6.0 is version-insensitive.
+depends on it, and the `curl` path in §7.0 is version-insensitive.
 
-**Do you have to clone the repo?** For **§6.0, no** — it is `curl` and `python3` only, so a token and
-a Service URL are all you need. For **§6.1** you need the package that provides the
+**Do you have to clone the repo?** For **§7.0, no** — it is `curl` and `python3` only, so a token and
+a Service URL are all you need. For **§7.1** you need the package that provides the
 `autobench-cli` entry point, but a manual clone is still optional: the repository is public, so
 install it straight from git.
 
@@ -1159,7 +1168,7 @@ import autobench.cli, sys
 print([m for m in ('fastapi','httpx','boto3','pydantic') if m in sys.modules] or 'no server deps loaded')"
 ```
 
-### 6.0 Run #1 start to finish, on the ykt3 Service driving ykt2 workloads
+### 7.0 Run #1 start to finish, on the ykt3 Service driving ykt2 workloads
 
 Run #1 of the canonical matrix: gsm8k, 1 task, no gateway, no plugins. Every command below was
 executed exactly as written; the `run_id` and numbers are from that run. Paste the block, then the
@@ -1276,9 +1285,9 @@ curl -s $CURL_OPTS -X DELETE "$SVC/benchmarks/$BENCH/deploy?$SCOPE" \
   -H "Authorization: Bearer $TOKEN" -o /dev/null -w 'teardown -> %{http_code}\n'   # 204
 ```
 
-### 6.1 The same thing in one command (`autobench-cli`)
+### 7.1 The same thing in one command (`autobench-cli`)
 
-`autobench-cli` is a stdlib-only client that performs §6.0 end to end — token, pre-clean,
+`autobench-cli` is a stdlib-only client that performs §7.0 end to end — token, pre-clean,
 deploy, the readiness-stability and agent-card gates, run, 424 retry, poll, artifact listing and
 local mirror — and exits non-zero if the run did not succeed.
 
@@ -1323,7 +1332,7 @@ Which prints, for the run above:
 
 The trailing `cd` is there because the mirror path is absolute and deeply nested — retyping it
 relative to your current directory is the easy mistake. The sizes are also the quickest check that
-nothing arrived truncated. Feed that directory straight into §6.0 step 7 to analyse the run.
+nothing arrived truncated. Feed that directory straight into §7.0 step 7 to analyse the run.
 
 Each step is also a subcommand, so the CLI doubles as a way to see one HTTP call at a time:
 
@@ -1343,7 +1352,7 @@ No install? It runs straight from a checkout too — `python -m autobench.cli al
 (the module imports nothing beyond the standard library, so the server's dependencies are not
 needed to drive the API).
 
-Every option is catalogued in §6.2. Switching to KinD needs only three lines:
+Every option is catalogued in §7.2. Switching to KinD needs only three lines:
 
 ```bash
 export BM_BASE="http://autobench.localtest.me:8080"
@@ -1351,11 +1360,11 @@ export BM_ISS="http://keycloak.localtest.me:8080/realms/rossoctl"
 export BM_PASSWORD_FILE="$HOME/.rossoctl-kind/benchmarker.pass"; unset BM_INSECURE BM_CARD_TEMPLATE
 ```
 
-> For the full 12-run matrix use `reference/run-12.py` instead — see §6.4. It implements the same
+> For the full 12-run matrix use `reference/run-12.py` instead — see §7.4. It implements the same
 > gates independently; consolidating both behind `autobench.cli` is a known follow-up. If you want
-> the 12 legs as 12 individual commands in the shape of the line above, they are tabulated in §6.5.
+> the 12 legs as 12 individual commands in the shape of the line above, they are tabulated in §7.5.
 
-### 6.2 `autobench-cli` options
+### 7.2 `autobench-cli` options
 
 `autobench-cli <command> [options]`. The **command is positional** and required; everything else
 is a flag. Defaults below are the real argparse defaults, so a bare
@@ -1381,7 +1390,7 @@ tool serves "just run it" and "show me one HTTP call".
 | Option | Default | Meaning |
 |---|---|---|
 | `--benchmark` | `gsm8k` | `gsm8k` \| `tau2` \| `appworld` |
-| `--tasks N` | `1` | `max_tasks` — **how many** benchmark problems to attempt (capped by the pool, §5.3) |
+| `--tasks N` | `1` | `max_tasks` — **how many** benchmark problems to attempt (capped by the pool, §6.3) |
 | `--parallel N` | `1` | `max_parallel_sessions` — **how many at once** |
 | `--timeout S` | `300` | `timeout_seconds` — wall budget for the **whole run** |
 | `--task-timeout S` | *unset* | `task_timeout_seconds` — ceiling for **one** task, clamped to `--timeout` |
@@ -1391,7 +1400,7 @@ concurrently. Task selection is **deterministic**, so `--tasks 1` runs the *same
 time — which is why it is the standard smoke test (a 1-task gsm8k run reproduces 320 input / 87
 output tokens). Set `--task-timeout` on multi-turn work: without it one wedged task can consume the
 entire `--timeout`, which is why the canonical matrix gives tau2 600s per task under a 2100s wall.
-§5.3 has the semantics in full — what a multi-task run is, and why both over- and under-asking on
+§6.3 has the semantics in full — what a multi-task run is, and why both over- and under-asking on
 `--tasks` are silent.
 
 **Where it goes.** `--namespace` (`team1`), `--agent` (`tool_calling`), `--experiment` (`default`)
@@ -1455,7 +1464,7 @@ Two settings are **environment-only**, with no flag:
 legitimately scores `pass_rate 0.0` still exits `0` if its status is `succeeded` — appworld does
 this by design, so do not treat exit 0 as "the agent solved it".
 
-### 6.3 Other validated flows
+### 7.3 Other validated flows
 
 These map to the canonical parameterized runs and were validated on `ykt3` with S3 export.
 
@@ -1483,21 +1492,21 @@ curl -s -X POST "$SVC/benchmarks/tau2/runs" -H "Authorization: Bearer $TOKEN" \
   -d '{"max_tasks": 20, "max_parallel_sessions": 4, "timeout_seconds": 1800}'
 ```
 
-### 6.4 The whole 12-run matrix in one command (`reference/run-12.py`)
+### 7.4 The whole 12-run matrix in one command (`reference/run-12.py`)
 
-Same idea as §6.1, one level up: instead of a single benchmark run, this drives all **12 canonical
+Same idea as §7.1, one level up: instead of a single benchmark run, this drives all **12 canonical
 parameterized runs** — gsm8k at three sizes, a model swap, the four AuthBridge presets, tau2 at two
 sizes, appworld at two — deploying each leg fresh, mirroring every artifact, and writing one state
 file the report generators read.
 
 Unlike `autobench-cli`, this one **is** repo-only: it is a matrix driver tied to
 `run12_specs.json`, not something you install. Clone first. (For the same 12 legs written out as 12
-separate one-line commands, see §6.5.)
+separate one-line commands, see §7.5.)
 
 ```bash
 git clone https://github.com/rossoctl/autobench && cd autobench
 
-# Same five variables as §6.1 — plus a label, which names the state file and the reports.
+# Same five variables as §7.1 — plus a label, which names the state file and the reports.
 export BM_BASE=https://autobench-rossoctl-system.apps.ykt3.hcp.res.ibm.com
 export BM_ISS=https://keycloak-keycloak.apps.ykt2.hcp.res.ibm.com/realms/rossoctl
 export BM_PASSWORD_FILE="$HOME/.rossoctl-ykt3/benchmarker.pass"
@@ -1598,7 +1607,7 @@ python3 reference/gen-plugin-study.py /tmp/autobench/run12-pstudy-ocp-v128.json 
   results/12run-plugin-study-v1.28-20260915-ocp.md /tmp/judge-ocp.ts
 ```
 
-Switching to KinD is the same three-line change as §6.1 plus a new label:
+Switching to KinD is the same three-line change as §7.1 plus a new label:
 
 ```bash
 export BM_BASE=http://autobench.localtest.me:8080
@@ -1631,11 +1640,11 @@ Other knobs, all optional:
 on its own and merged into the state file, which is exactly what happened to leg #7 of the v1.24
 OCP matrix (a transient `DELETE -> 500` left a stale tool behind and the deploy hit `409`).
 
-### 6.5 The 12 legs as individual `autobench-cli` commands
+### 7.5 The 12 legs as individual `autobench-cli` commands
 
-Each leg of §6.4's matrix is also one `autobench-cli all` line, in the shape of the §6.1 example.
+Each leg of §7.4's matrix is also one `autobench-cli all` line, in the shape of the §7.1 example.
 Use these to re-run a single leg, to bisect a failure, or to read the matrix as parameters rather
-than as JSON. Export the same five variables as §6.1 first; every line then needs nothing else.
+than as JSON. Export the same five variables as §7.1 first; every line then needs nothing else.
 
 | # | One-line command | What it varies |
 |---|---|---|
@@ -1655,7 +1664,7 @@ than as JSON. Export the same five variables as §6.1 first; every line then nee
 These are generated from `reference/run12_specs.json`, not transcribed: each line's run body
 round-trips to the spec's `run` object field for field, and `--model` / `--preset` / `--plugin`
 reproduce the spec's deploy body as well (`--preset` implies `authbridge_enabled: true`; the CLI
-also sends `experiment: "default"`, which is the server's default anyway). Leg #1 is the §6.1
+also sends `experiment: "default"`, which is the server's default anyway). Leg #1 is the §7.1
 example unchanged. Two details the table encodes silently:
 
 - **Every line is a fresh deploy.** `all` pre-cleans with `DELETE …/deploy` before deploying, which
@@ -1667,33 +1676,33 @@ example unchanged. Two details the table encodes silently:
   indefinitely. It does *not* protect you from the LLM gateway's own response cache, which is outside
   the agent and unavoidable from here. See `docs/exgentic-agent-bug-report-20260901.md`.
 - **`--settle` needs no value.** It defaults to 45 s when `--preset` or `--plugin` is present and
-  15 s otherwise, matching `BM_SETTLE_SIDECAR` / `BM_SETTLE_PLAIN` in §6.4.
+  15 s otherwise, matching `BM_SETTLE_SIDECAR` / `BM_SETTLE_PLAIN` in §7.4.
 
 **Run them one at a time, in order.** Legs sharing a benchmark share one deployment slot, so two of
 these in parallel will fight over it; and legs #3 and #5–#8 are only comparable because they execute
 byte-identical work, which a concurrent gateway load would spoil. Each exits `0` on `succeeded` and
-`7` otherwise (§6.2), so `&&` chaining stops at the first bad leg.
+`7` otherwise (§7.2), so `&&` chaining stops at the first bad leg.
 
 > These do **not** replace `reference/run-12.py`. The driver writes
 > `/tmp/autobench/run12-<BM_LABEL>.json`, and that state file is the only input the three report
 > generators accept — run the legs by hand and you get the artifacts but none of the documents. Use
-> §6.4 for a real matrix; use this table to re-run or inspect one leg of it.
+> §7.4 for a real matrix; use this table to re-run or inspect one leg of it.
 
 ---
 
-## 7. Known limits & error codes
+## 8. Known limits & error codes
 
 | Situation | Code | What to do |
 |---|---|---|
-| Missing/invalid bearer | `401` | fetch a fresh token (§2) |
-| `iss` not in any instance file | `403` | add/repair the instance config (§3.1) |
+| Missing/invalid bearer | `401` | fetch a fresh token (§3) |
+| `iss` not in any instance file | `403` | add/repair the instance config (§4.1) |
 | `/config` as non-benchmarker | `403` | authenticate as the `benchmarker` user |
-| Setting a workload cred via `/config` | `422` | provision it as a cluster Secret instead (§3.3) |
+| Setting a workload cred via `/config` | `422` | provision it as a cluster Secret instead (§4.3) |
 | `plugin_preset`/`plugins`/`on_error` without `authbridge_enabled=true` | `422` | set `authbridge_enabled=true` so the sidecar is injected for the pipeline to take effect |
 | `plugin_config_file` on deploy | `422` | local-path input with no HTTP analog; use `plugin_preset`/`plugins`/`on_error` instead |
 | Run before deploy | `409` | `POST …/deploy` first |
-| Run while not Ready | `424` | provision the named Secret(s), wait for Ready (§5.2) |
-| Report with MLflow unconfigured | `409` | set MLflow read creds via `PUT /config` (§3.5) |
+| Run while not Ready | `424` | provision the named Secret(s), wait for Ready (§6.2) |
+| Report with MLflow unconfigured | `409` | set MLflow read creds via `PUT /config` (§4.5) |
 | Upstream Rossoctl/MLflow failure | `502` | transient upstream issue; retry |
 
 **AuthBridge plugin presets (runs 4–8 of the ibac comparison):** layer-3 plugin composition
@@ -1708,7 +1717,7 @@ externally blocked until that image is fixed.
 
 ---
 
-## 8. Extending the catalog (adding or changing a benchmark)
+## 9. Extending the catalog (adding or changing a benchmark)
 
 The benchmark catalog is **code, not runtime data** — a static `BENCHMARKS` dict in
 [`src/autobench/benchmarks/registry.py`](../src/autobench/benchmarks/registry.py).
@@ -1723,7 +1732,7 @@ rather than mutable state that could drift per instance.
 > [`src/autobench/benchmarks/README.md`](../src/autobench/benchmarks/README.md)
 > for the field-by-field reference and the per-benchmark env gotchas.
 
-### 8.1 What a definition holds
+### 9.1 What a definition holds
 
 Each entry is a `BenchmarkDefinition`: `name`, `mcp_image` (+ `mcp_image_tag`/`mcp_port`/
 `mcp_path`), `tool_env`, `tool_resources`, `default_model`, `user_simulator` (multi-turn flag),
@@ -1731,7 +1740,7 @@ and an `agents` map of `BenchmarkAgentSpec` (per-agent `container_image` + `extr
 `resources`). Secret references are declared with the `_secret_env(env, secret, key)` helper;
 `required_secrets()` derives the actionable `424` precheck message from them automatically.
 
-### 8.2 Add a new benchmark
+### 9.2 Add a new benchmark
 
 1. **Add a `BenchmarkDefinition` entry** to `BENCHMARKS` in `registry.py`:
    - `mcp_image` (+ tag/port/path) — the MCP tool image.
@@ -1753,9 +1762,9 @@ and an `agents` map of `BenchmarkAgentSpec` (per-agent `container_image` + `extr
    existing patterns.
 3. **Rebuild + bump the image tag**, redeploy the Service. The new benchmark then appears in
    `GET /benchmarks` and is deployable/runnable at `/benchmarks/<newname>/…` with **no client
-   change** — the request bodies are benchmark-agnostic (see §5).
+   change** — the request bodies are benchmark-agnostic (see §6).
 
-### 8.3 Change an existing benchmark
+### 9.3 Change an existing benchmark
 
 Same mechanism — edit the entry (bump `mcp_image_tag`, change `default_model`, add an env var,
 adjust `tool_resources`), update tests, rebuild, redeploy. Because `required_secrets()` is
@@ -1763,14 +1772,14 @@ derived from `tool_env` + the chosen agent's `extra_env`, changing a secret refe
 automatically updates the `424` "this benchmark requires secret(s): …" precheck message — no
 separate wiring.
 
-### 8.4 What stays runtime-mutable (for contrast)
+### 9.4 What stays runtime-mutable (for contrast)
 
 Per-instance state is *not* in the catalog and does not require a rebuild: instance config
 (files under `settings.instances_dir`, keyed by `iss`) and the benchmarker-only `PUT /config`
 overrides (MLflow read creds + S3). The benchmark catalog is intentionally the immutable,
 version-pinned part.
 
-## 9. Regenerating the documents
+## 10. Regenerating the documents
 
 Everything under `docs/` that is not hand-written has a generator, so no step in producing the
 published artifacts is a manual browser print or a hand-edited table.
@@ -1779,7 +1788,7 @@ published artifacts is a manual browser print or a hand-edited table.
 |---|---|---|
 | `docs/DEVELOPER_GUIDE.pdf`, `docs/12_RUNS_CROSS_CLUSTER.pdf` | `python3 reference/gen_pdf.py` | the `.md` beside it |
 | the table of contents in this file | `python3 reference/gen_toc.py docs/DEVELOPER_GUIDE.md` | this file's own headings |
-| §6.5's 12 one-line commands | `reference/run12_specs.json` | the same specs `reference/run-12.py` executes |
+| §7.5's 12 one-line commands | `reference/run12_specs.json` | the same specs `reference/run-12.py` executes |
 | `docs/AutoBench.pptx` | `uv run --with python-pptx python docs/generate_pptx.py` | `results/12run-*.md` + this guide |
 | `docs/AutoBench.pdf` | `python3 reference/gen_pdf.py` (LibreOffice) | `docs/AutoBench.pptx` |
 
