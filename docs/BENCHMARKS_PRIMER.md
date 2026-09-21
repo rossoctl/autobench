@@ -85,7 +85,7 @@ empty value (the dataset is public) — without it the MCP pod sits in `CreateCo
 the agent crash-loops.
 
 **What one task looks like.** The agent receives a word problem, thinks, then calls a tool to submit
-its answer. In our harness a typical task is **one real LLM call and one tool call** — it is close to
+its answer. As we run it, a typical task is **one real LLM call and one tool call** — it is close to
 the simplest possible agentic loop.
 
 **What it stresses.** Almost nothing about the *platform* — which is exactly why it is useful. If

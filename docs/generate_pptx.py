@@ -392,7 +392,7 @@ textbox(s, inch(4.25), inch(1.30), inch(8.4), inch(0.4),
         [("Workload Deployment Instances", 13, True, NAVY)])
 
 box(s, inch(4.35), inch(2.60), inch(2.55), inch(1.35),
-    "Deployment helper for harnessed benchmark workload", ROSSO, ROSSO, font=12,
+    "Deployment helper for the benchmark workload", ROSSO, ROSSO, font=12,
     font_color=WHITE)
 
 _wg = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, inch(9.15), inch(2.30), inch(3.45), inch(1.60))
@@ -400,7 +400,7 @@ _wg.fill.solid(); _wg.fill.fore_color.rgb = LTTEAL
 _wg.line.color.rgb = WORK; _wg.line.width = Pt(1.25); _wg.shadow.inherit = False
 _wtf = _wg.text_frame; _wtf.vertical_anchor = MSO_ANCHOR.MIDDLE
 _wp = _wtf.paragraphs[0]; _wp.alignment = PP_ALIGN.CENTER
-_wr = _wp.add_run(); _wr.text = "Harnessed benchmark workload"; _set_font(_wr, 14, True, WORK)
+_wr = _wp.add_run(); _wr.text = "Benchmark workload (agent + MCP)"; _set_font(_wr, 14, True, WORK)
 
 box(s, inch(6.15), inch(4.72), inch(2.7), inch(0.70), "Telemetry Collector", WORK, WORK,
     font=12.5, font_color=WHITE)
@@ -418,9 +418,9 @@ connector(s, inch(3.05), inch(4.75), inch(3.05), inch(4.30), color=STORE); dot(i
 connector(s, inch(1.05), inch(4.30), inch(1.05), inch(4.75), color=ACCENT); dot(inch(0.83), inch(4.52), 8)
 
 _lgl = ["1  Client → Service",
-        "2  Service → deployment helper:  create the harnessed workload",
-        "3  helper → harnessed workload",
-        "4  Service → harnessed workload:  run and monitor benchmark execution"]
+        "2  Service → deployment helper:  create the benchmark workload",
+        "3  helper → benchmark workload",
+        "4  Service → benchmark workload:  run and monitor execution"]
 _lgr = ["5  Service → Experiment Tracker:  emit the trace",
         "6a workload → Telemetry Collector  ·  6b collector → Tracker",
         "7  Experiment Tracker → Service:  read the records back",
@@ -1479,7 +1479,7 @@ find = [
      "on KinD, #12 is slower."),
     ("0 lost-attribution rows and 0 probe failures on both sides",
      "137 OCP rows against 130 KinD. The 7-row gap is appworld tasks that timed out before the "
-     "harness wrote a row (4 OCP, 11 KinD) — not lost telemetry."),
+     "Service wrote a row (4 OCP, 11 KinD) — not lost telemetry."),
 ]
 y = inch(1.30)
 for head, body_text in find:

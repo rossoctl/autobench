@@ -6,8 +6,8 @@
 **Auth:** `benchmarker` ROPC token (realm `rossoctl`), same user configured on both ykt2 and ykt3 Keycloaks.
 **Date:** 2026-08-10/11. All runs invoked through the Service HTTP API (deploy → run → report → S3 export).
 
-The canonical 12 runs are the upstream harness's `deploy-and-evaluate` comparison
-(`./deploy-and-evaluate.sh --agent tool_calling`).
+The canonical 12 runs are AutoBench's `deploy-and-evaluate` comparison matrix: each leg deploys a
+benchmark, runs it with the tool-calling agent, and reports.
 
 > **Update (2026-08-28): the layer-3 `422`s below are superseded.** Runs #5/#6/#8 were rejected
 > with a `422` because, at the time, plugin-preset composition wasn't enactable over HTTP. That is

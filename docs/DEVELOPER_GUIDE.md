@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-20T19:30:27Z
+**Last modified:** 2026-09-21T00:15:57Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -886,6 +886,18 @@ objects appear in the run state under `artifacts[]` (and in the per-run report).
 make one model call, or did we lose a span?" is answerable from the artifacts alone. Its columns are
 a fixed whitelist (`mlflow_report.SPAN_ROW_KEYS`) — span attributes can carry prompts, and these
 objects are public-read, so nothing outside that list is published.
+
+**Which process named a span.** The tree is stitched from two processes by W3C trace propagation
+(`runner/a2a_agent.py` injects the context into the A2A request headers), so `depth` is depth in the
+*merged* trace, not a process boundary. The split is clean anyway: the **Service** names exactly four
+spans — `Agent.Session` (`kind=root`) and `MCP.CreateSession` / `Agent.Call` / `Evaluator.Evaluate`
+(`kind=phase`) — and emits nothing else, because it carries no OTEL auto-instrumentation. Everything
+at **depth ≥ 2 comes from inside the agent pod**: the spans its runtime names (`invoke_agent`,
+`chat <model>`, `execute_tool <tool>`) plus the A2A/ASGI internals that dominate the count. On one
+gsm8k task, 4 of 109 spans were the Service's and 106 sat under `Agent.Call`. That gives a free
+measurement worth knowing: the agent-side `POST /` span brackets the whole agent-side task, so
+`Agent.Call − POST /` is the Service's own per-task cost — **16.9 ms of a 10.4 s gsm8k task, 13.2 ms
+of a 70.3 s tau2 task**.
 
 #### The S3 URL is fully determined — you can construct it
 

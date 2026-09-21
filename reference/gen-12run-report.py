@@ -256,7 +256,7 @@ S1 = """## 1. Terms
 | **Benchmark** | A named evaluation suite (`gsm8k`, `tau2`, `appworld`), each backed by an agent + an MCP tool service. |
 | **Run** | One invocation of `run_benchmark` against a deployed benchmark (`POST /benchmarks/<b>/runs`). Identified by a `run_id`. A run selects the first `max_tasks` tasks and executes them, up to `max_parallel_sessions` at a time. |
 | **Task** | One self-contained benchmark item. Each task runs in **complete isolation**: its own MCP session (`create_session`), its own prompt, one agent call, its own evaluation (`evaluate_session`), and its session is deleted afterward. |
-| **Span** | The unit of OTEL instrumentation: one timed operation with a `name`, a parent, a status and attributes. A task's spans form a **tree** rooted at its `Agent.Session` span, and every number in §6/§7 is computed from them — `llm_count` counts `chat` spans, `tool_count` counts `execute_tool` spans, token totals come from `gen_ai.usage.*` on the `chat` spans. Only a handful are named by the harness (`Agent.Session`, `MCP.CreateSession`, `Agent.Call`, `invoke_agent…`, `chat <model>`, `execute_tool <tool>`, `Evaluator.Evaluate`); the rest are A2A/HTTP framework internals and dominate the raw count — a single gsm8k task emits ~100 spans, a tau2 task ~400, an appworld task ~800. **Every span is now published per task in `span_report.ndjson`** and summarised in §8, so the aggregate counters can be audited rather than trusted. |
+| **Span** | The unit of OTEL instrumentation: one timed operation with a `name`, a parent, a status and attributes. A task's spans form a **tree** rooted at its `Agent.Session` span, and every number in §6/§7 is computed from them — `llm_count` counts `chat` spans, `tool_count` counts `execute_tool` spans, token totals come from `gen_ai.usage.*` on the `chat` spans. Exactly **four are named by the Service** (`Agent.Session`, `MCP.CreateSession`, `Agent.Call`, `Evaluator.Evaluate`) and sit at the top two levels of the tree; **everything below `Agent.Call` is emitted inside the agent pod** — a few spans it names itself (`invoke_agent…`, `chat <model>`, `execute_tool <tool>`) and, dominating the raw count, its A2A/HTTP framework internals: a single gsm8k task emits ~100 spans, of which the Service names 4, a tau2 task ~400, an appworld task ~800. **Every span is now published per task in `span_report.ndjson`** and summarised in §8, so the aggregate counters can be audited rather than trusted. |
 | **Independence** | Tasks within a run are **independent, not a pipeline** — no state flows between them. A task erroring or timing out fails only itself; the batch continues. |
 | **Trace / Agent.Session** | Exactly one `Agent.Session` root span per task, keyed by `task_id`. Token usage is parsed from the `chat` (LLM) spans under that root — hence one `token_report` row per task. |
 | **Session (`session_id`)** | The per-task MCP session handle from `create_session`. Distinct from `run_id` and `task_id`. |
@@ -328,7 +328,7 @@ One row per OTEL span per task — the evidence the counters above are derived f
 | Column | Meaning |
 |---|---|
 | `name` | The span title, e.g. `Agent.Session`, `chat gpt-5-mini`, `execute_tool submit`. |
-| `kind` | `root` / `phase` / `agent` / `chat` / `tool` / `other` (`other` = nested HTTP/framework children the harness does not name). |
+| `kind` | `root` / `phase` / `agent` / `chat` / `tool` / `other` (`other` = A2A/HTTP framework internals inside the agent pod, named by neither the Service nor the agent). |
 | `counted` | Whether this span fed `llm_count`/`tool_count`. `false` marks real work the aggregate cannot see, because only spans parented by `invoke_agent` are counted (and `execute_tool initial_observation` never is). `null` for non-chat/tool spans. |
 | `request_max_tokens` | The `max_tokens` the agent asked for, `null` when it asked for none (the normal case). A value of `1` marks a capability probe rather than real work: agents up to `exgentic 0.3.5.dev131` issued one per task and it was counted as an LLM call, while `dev145` replaced it with an unbilled `GET /v1/models` check that emits no span. **PROBE_ERA_NOTE** The column is the unambiguous way to tell a probe from a real call, and the probe's code path still exists upstream (`strict=True` in the agent's `health.py`), so it stays. |
 
@@ -463,7 +463,7 @@ def sec4():
     if gone:
         o.append(f"**Tasks with no `report.ndjson` row: "
                  + ", ".join(f"#{n} ({c} of {t})" for n, c, t in gone)
-                 + ".** These ended before the harness wrote a per-task row — on appworld, the "
+                 + ".** These ended before the Service wrote a per-task row — on appworld, the "
                    "per-task timeout. `Err/Total` counts them (it reads `run.json`, which has one "
                    "result per task unconditionally), but **§6-§7 cannot**: a missing row contributes "
                    "to no median, mean or CV, so those per-task statistics describe the tasks that "
@@ -681,9 +681,10 @@ def sec8():
          "`llm_count`/`tool_count` when its parent is the `invoke_agent` span, so anything nested "
          "deeper is real work missing from the totals. A non-zero figure there is not a bug by "
          "itself — it is the known blind spot, now measurable.", "",
-         "The **names** column lists only harness-named spans (`root`/`phase`/`agent`/`chat`/`tool`). "
-         "The `other` column counts the rest — A2A/HTTP framework internals such as "
-         "`EventQueue.dequeue_event`, which dominate the raw count (a single gsm8k task emits ~98 "
+         "The **names** column lists only the spans the Service names (`root`/`phase`) and those the "
+         "agent names (`agent`/`chat`/`tool`). The `other` column counts the rest — A2A/HTTP "
+         "framework internals inside the agent pod, such as `EventQueue.dequeue_event` or the ASGI "
+         "`POST / http send`, which dominate the raw count (a single gsm8k task emits ~98 "
          "spans, ~90 of them framework noise) and would swamp this table. They are all present in "
          "`span_report.ndjson`; this section is the readable summary, not the full tree.", ""]
     any_spans = False

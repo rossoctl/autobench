@@ -3,8 +3,7 @@
 The Service never *writes* to MLflow — the workload pods (agent + MCP) export OTEL
 spans to the collector -> MLflow OTLP backend during a run. This module reads those
 traces back out over MLflow's REST API and aggregates each `Agent.Session` trace into
-a structured `MLflowTraceRecord`. Ported from the upstream workload-harness scripts
-`download_mlflow_traces.py` (list/get/transform) and `analyze_traces.py::parse_traces`.
+a structured `MLflowTraceRecord`: list/get/transform, then `parse_traces`.
 """
 
 from __future__ import annotations
@@ -196,15 +195,17 @@ def _is_chat(name: str) -> bool:
 
 
 def _is_tool(name: str) -> bool:
-    """A tool *call* span. `initial_observation` is the harness priming the session, not a tool the
-    agent chose, so `parse_traces` excludes it from `tool_count` — mirror that here."""
+    """A tool *call* span. `initial_observation` is the agent runtime priming its own session, not a
+    tool the agent chose, so `parse_traces` excludes it from `tool_count` — mirror that here."""
     return name.startswith(_TOOL_PREFIX) and name != INITIAL_OBS_SPAN
 
 
 def _span_kind(name: str) -> str:
     """Coarse classification for the span inventory, so consumers can filter without string-matching.
 
-    `other` covers everything the harness does not name itself — nested HTTP/db/framework children.
+    `other` covers everything neither the Service nor the agent names: the agent pod's nested
+    HTTP/db/framework children. The Service names only `root` and the three `phase` spans, so every
+    `other` span comes from inside the agent pod.
     """
     if name == ROOT_SPAN:
         return "root"

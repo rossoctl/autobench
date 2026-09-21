@@ -373,7 +373,7 @@ class DeployBenchmarkRequest(BaseModel):
     # Layer-2 AuthBridge knob the Service CAN enact over HTTP: injects the sidecar with the
     # cluster-default pipeline (emitted as `authBridgeEnabled` in the agents POST).
     authbridge_enabled: bool = False
-    # Layer-3 plugin-pipeline composition (harness `--plugin-preset`/`--plugin NAME:POLICY`).
+    # Layer-3 plugin-pipeline composition (the `--plugin-preset`/`--plugin NAME:POLICY` CLI flags).
     # Now enactable over HTTP (Option B): forwarded to the backend as pluginPreset/plugins/onError,
     # threaded onto AgentRuntime.spec, and rendered by the operator webhook into the per-agent
     # `authbridge-config-<agent>` ConfigMap. Requires authbridge_enabled=true to have any effect.
@@ -383,7 +383,7 @@ class DeployBenchmarkRequest(BaseModel):
     plugin_preset: str | None = None
     plugins: list[str] | None = None
     on_error: str | None = None
-    # The harness `--plugin-config-file` is a local filesystem path with no clean HTTP analog, so
+    # The `--plugin-config-file` flag takes a local filesystem path with no clean HTTP analog, so
     # it stays rejected with a focused 422 (see the deploy route).
     plugin_config_file: str | None = None
 
@@ -481,9 +481,9 @@ class RunState(BaseModel):
 class MLflowTraceRecord(BaseModel):
     """One `Agent.Session` trace aggregated into a structured record.
 
-    Mirrors the upstream harness `TraceRecord`: per-session timing breakdown,
-    LLM/tool latencies + token counts, infra CPU/mem, and evaluation outcome —
-    parsed out of the OTEL spans the workload pods export to MLflow.
+    Per-session timing breakdown, LLM/tool latencies + token counts, infra CPU/mem,
+    and evaluation outcome — parsed out of the OTEL spans the workload pods export
+    to MLflow.
     """
 
     session_id: str

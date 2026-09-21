@@ -1,9 +1,9 @@
 """Static, in-service catalog of runnable benchmarks.
 
-Each definition captures the deployment facts the workload-harness scripts fetch at runtime
-(container images, env vars, resource limits, naming conventions) so the Service can stand up a
-benchmark's MCP tool + agent without any external fetch. Values were captured once from the
-upstream `.env.gsm8k` / `.env.example` and `deploy-*.sh`.
+Each definition captures the deployment facts a benchmark needs at runtime (container images, env
+vars, resource limits, naming conventions) so the Service can stand up a benchmark's MCP tool +
+agent without any external fetch. Values were captured once from each benchmark's own `.env` file
+and deploy script.
 """
 
 from pydantic import BaseModel, Field
