@@ -217,6 +217,31 @@ that begins `3d9a636_1, 3d9a636_2, 3d9a636_3`. A 5-task leg therefore takes thre
 scenario and two of the next, cutting a scenario group in half. So SGC is not merely absent from our
 reports; it is **unrecoverable from the artifacts**, and a `pass_rate` here is a TGC-shaped number.
 
+**Roughly half of those LLM calls never touch the task — they pick tools.** The agent image
+defaults to `enable_tool_shortlisting = True, max_selected_tools = 30`: when a benchmark exposes more
+than 30 tools, every turn begins with an *extra* LLM call that asks the model to rank the tool names,
+and only the winners' schemas go into the real call. appworld is the only benchmark in our matrix
+above that threshold, and the spans show the consequence — the ~29 LLM calls per task are ~15
+assistant turns each preceded by a selection call, and the selection calls are the *dearer* half,
+because they carry every tool name and description while the assistant call carries only 30 schemas:
+
+<!-- Regenerate this table: python3 reference/gen-shortlist-audit.py <ocp.json> <label> <kind.json> <label> -->
+<!-- shortlist -->
+| benchmark | LLM calls / task | of which are tool-selection calls | input tokens spent selecting | output tokens spent selecting |
+|---|---|---|---|---|
+| **gsm8k** | 1.1 | 0.0 (0%) | 0% | 0% |
+| **tau2** | 11.4 | 0.0 (0%) | 0% | 0% |
+| **appworld** | 29.2 | 14.6 (50%) | 68% | 81% |
+
+Measured over the **266 task rows that carry chat spans** in the v1.28 matrices, both platforms. `gsm8k` and `tau2` expose fewer than the agent's `max_selected_tools = 30` and so measure **exactly zero** selection calls — they are the control for the detector. `appworld` is above the threshold and pairs **1:1**: 511 selection calls against 511 assistant calls, every turn. A selection call averages **12,602 input tokens** against **5,888** for the assistant call it precedes — it carries every tool name and description, while the assistant call carries only the 30 winners' schemas. The split is stable across clusters: 67% on OpenShift (ykt3 Service, ykt2 workloads) and 70% on KinD (single-node local).
+<!-- /shortlist -->
+
+Two things follow. Read appworld's token and dollar figures as **mostly a tool-selection bill**, not a
+task-solving one; and remember the model never sees more than 30 of appworld's tools at once, with
+`api_docs` dropped from the surface so it cannot go looking for the others. That is a mechanical
+contributor to the 0.0 below, independent of model capability. Nothing upstream works this way, and
+`report.ndjson` does not separate the two call kinds — only `span_report.*` does.
+
 **What it stresses.** Long-horizon planning and composition. ~29 LLM calls and ~15 tool calls per
 task, ~270k input tokens, and a median of **4.4 minutes per task** — with a real tail: the slowest
 task that finished took 592s, and **15 of the 50 attempted tasks hit the 600 s per-task timeout** and

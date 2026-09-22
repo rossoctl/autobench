@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-21T17:38:30Z
+**Last modified:** 2026-09-22T03:56:21Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -306,6 +306,31 @@ separate: 161 of its 171 priced rows ran gpt-5-mini and 10 ran gpt-4.1, whose pe
 higher. The dollar rows also cover 266 of the 267 rows — one task on OpenShift leg #6 died before its
 first model call, so it carries `model: unknown` and no cost, and its exclusion is why the ratio rows
 divide by a 523-token gsm8k task rather than the rounded 520 above.
+
+**Half of appworld's LLM calls buy tool selection, not progress.** The agent image
+(`exgentic-a2a-tool_calling`) defaults to `enable_tool_shortlisting = True, max_selected_tools = 30`:
+above 30 exposed tools, each turn opens with an extra LLM call that ranks the tool *names*, and only
+the winners' schemas reach the real call. appworld is the only benchmark in the matrix above that
+threshold, so its 29.20 LLM calls per task are ~15 assistant turns each preceded by a selection call —
+and the selection call is the dearer half, carrying every name and description against the assistant
+call's 30 schemas:
+
+<!-- Regenerate this table: python3 reference/gen-shortlist-audit.py <ocp.json> <label> <kind.json> <label> -->
+<!-- shortlist -->
+| benchmark | LLM calls / task | of which are tool-selection calls | input tokens spent selecting | output tokens spent selecting |
+|---|---|---|---|---|
+| **gsm8k** | 1.1 | 0.0 (0%) | 0% | 0% |
+| **tau2** | 11.4 | 0.0 (0%) | 0% | 0% |
+| **appworld** | 29.2 | 14.6 (50%) | 68% | 81% |
+
+Measured over the **266 task rows that carry chat spans** in the v1.28 matrices, both platforms. `gsm8k` and `tau2` expose fewer than the agent's `max_selected_tools = 30` and so measure **exactly zero** selection calls — they are the control for the detector. `appworld` is above the threshold and pairs **1:1**: 511 selection calls against 511 assistant calls, every turn. A selection call averages **12,602 input tokens** against **5,888** for the assistant call it precedes — it carries every tool name and description, while the assistant call carries only the 30 winners' schemas. The split is stable across clusters: 67% on OpenShift (ykt3 Service, ykt2 workloads) and 70% on KinD (single-node local).
+<!-- /shortlist -->
+
+So appworld's `$0.589` per task is mostly a *selection* bill, and the model never sees more than 30 of
+its tools at once — with `api_docs` dropped from the MCP surface, it cannot go looking for the rest
+(§4.4). `report.ndjson` does not separate the two call kinds; only `span_report.*` does, which is what
+the generator above reads. Turning it off is an agent-side setting we do not currently pass, and no
+matrix has measured the difference.
 
 **The rate card.** Read off the LiteLLM admin UI's per-model pages on **2026-09-17** and kept in
 [`reference/model_prices.json`](../reference/model_prices.json), which is the single source every
@@ -1790,6 +1815,7 @@ published artifacts is a manual browser print or a hand-edited table.
 | `docs/DEVELOPER_GUIDE.pdf`, `docs/12_RUNS_CROSS_CLUSTER.pdf` | `python3 reference/gen_pdf.py` | the `.md` beside it |
 | the table of contents in this file | `python3 reference/gen_toc.py docs/DEVELOPER_GUIDE.md` | this file's own headings |
 | §7.5's 12 one-line commands | `reference/run12_specs.json` | the same specs `reference/run-12.py` executes |
+| the tool-selection table in §2 and in the primer | `python3 reference/gen-shortlist-audit.py <run12.json> "<label>" …` | `span_report.ndjson` in each leg's mirror |
 | `docs/AutoBench.pptx` | `uv run --with python-pptx python docs/generate_pptx.py` | `results/12run-*.md` + this guide |
 | `docs/AutoBench.pdf` | `python3 reference/gen_pdf.py` (LibreOffice) | `docs/AutoBench.pptx` |
 
