@@ -1,8 +1,8 @@
 # AutoBench Service — 12 Parameterized Runs (cross-cluster)
 
 **Topology:** AutoBench Service on **ykt3**, benchmark workloads on **ykt2** (cross-cluster split).
-**LLM:** shared RH LiteLLM base `https://litemaas.rhoai.rh-aiservices-bu.com/v1`, default model
-`openai/Qwen3.6-35B-A3B`.
+**LLM:** the shared RH LiteLLM gateway (endpoint deliberately not printed — this repo is public),
+default model `openai/Qwen3.6-35B-A3B`.
 **Auth:** `benchmarker` ROPC token (realm `rossoctl`), same user configured on both ykt2 and ykt3 Keycloaks.
 **Date:** 2026-08-10/11. All runs invoked through the Service HTTP API (deploy → run → report → S3 export).
 
