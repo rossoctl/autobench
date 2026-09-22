@@ -11,23 +11,12 @@ Writes, and owns completely, the <!-- shortlist --> block in
 the way gen_toc.py owns <!-- toc --> and gen-cost-charts.py owns <!-- charts -->. Every number
 in that block is formatted from the artifacts, so a sentence there cannot drift from the data.
 
-WHY THIS EXISTS. The agent image (`exgentic-a2a-tool_calling`) defaults to
-`enable_tool_shortlisting=True, max_selected_tools=30`: when a benchmark exposes more than 30
-tools, the agent spends an *extra* LLM call per turn asking the model to rank the tool names,
-then sends only the winners' schemas to the real call. Nothing upstream does this, nothing in
-`report.ndjson` separates it, and it is not free -- so the only way to size it is off the spans.
+WHAT IS COUNTED and HOW A SELECTION CALL IS IDENTIFIED: see `shortlistlib.py`, which holds the
+rule and the reasoning behind it, and is shared with the two 12-run report generators so all
+three documents repeat the same classification rather than three drifting copies of it.
 
-HOW A SHORTLIST CALL IS IDENTIFIED. Structurally, never by token size: within one task, order
-the `chat` and `execute_tool` spans by start time; a `chat` immediately followed by another
-`chat` is a shortlist call, and a `chat` followed by a tool span (or ending the task) is the
-assistant call whose tool_call fired it. The rule would also catch a text-only assistant turn,
-which is why gsm8k and tau2 are the control: both sit under the 30-tool threshold and must
-measure exactly zero. They do. appworld pairs 1:1 exactly, every assistant turn preceded by a
-shortlist call.
-
-`max_tokens == 1` chat spans are capability probes from an older agent era, not turns; they are
-excluded. Platform labels are taken from argv -- never print a Service endpoint or a mirror
-path, these documents are published.
+Platform labels are taken from argv -- never print a Service endpoint or a mirror path, these
+documents are published.
 """
 from __future__ import annotations
 
@@ -36,10 +25,14 @@ import pathlib
 import re
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import shortlistlib as SL  # noqa: E402
+
 REPO = pathlib.Path(__file__).resolve().parent.parent
 DOCS = [REPO / "docs" / "BENCHMARKS_PRIMER.md", REPO / "docs" / "DEVELOPER_GUIDE.md"]
-THRESHOLD = 30          # max_selected_tools, read off the agent image
+THRESHOLD = SL.THRESHOLD
 ORDER = ["gsm8k", "tau2", "appworld"]
+pct = SL.pct
 
 
 def audit(path: str) -> dict[str, dict]:
@@ -53,27 +46,9 @@ def audit(path: str) -> dict[str, dict]:
         if not sp.exists():
             continue
         rows = [json.loads(l) for l in sp.read_text().splitlines() if l.strip()]
-        acc = per.setdefault(bench, dict(tasks=0, sl=0, asst=0,
-                                         sl_in=0, sl_out=0, as_in=0, as_out=0, legs=0))
+        acc = per.setdefault(bench, SL.new_acc() | {"legs": 0})
         acc["legs"] += 1
-        for task in sorted({r["task_id"] for r in rows if r.get("task_id")}):
-            seq = sorted(
-                (r for r in rows
-                 if r.get("task_id") == task
-                 and (r.get("kind") == "chat" or str(r.get("name", "")).startswith("execute_tool"))
-                 and r.get("request_max_tokens") != 1),
-                key=lambda r: r["start_time"])
-            if not any(r.get("kind") == "chat" for r in seq):
-                continue
-            acc["tasks"] += 1
-            for i, r in enumerate(seq):
-                if r.get("kind") != "chat":
-                    continue
-                nxt = seq[i + 1] if i + 1 < len(seq) else None
-                pre = "sl" if (nxt is not None and nxt.get("kind") == "chat") else "as"
-                acc["sl" if pre == "sl" else "asst"] += 1
-                acc[f"{pre}_in"] += r.get("input_tokens") or 0
-                acc[f"{pre}_out"] += r.get("output_tokens") or 0
+        SL.tally_rows(rows, acc)
     return per
 
 
@@ -87,10 +62,6 @@ def merge(sets: list[dict[str, dict]]) -> dict[str, dict]:
     return out
 
 
-def pct(part: int, whole: int) -> str:
-    return "0%" if not whole else f"{round(100 * part / whole)}%"
-
-
 def block(pooled: dict[str, dict], sides: list[tuple[str, dict[str, dict]]]) -> str:
     lines = [
         "| benchmark | LLM calls / task | of which are tool-selection calls | input tokens spent selecting | output tokens spent selecting |",
@@ -100,23 +71,23 @@ def block(pooled: dict[str, dict], sides: list[tuple[str, dict[str, dict]]]) -> 
         a = pooled.get(bench)
         if not a or not a["tasks"]:
             continue
-        calls = (a["sl"] + a["asst"]) / a["tasks"]
-        share = pct(a["sl"], a["sl"] + a["asst"])
+        calls = (a["sel"] + a["asst"]) / a["tasks"]
+        share = pct(a["sel"], a["sel"] + a["asst"])
         lines.append(
-            f"| **{bench}** | {calls:.1f} | {a['sl'] / a['tasks']:.1f} ({share}) "
-            f"| {pct(a['sl_in'], a['sl_in'] + a['as_in'])} "
-            f"| {pct(a['sl_out'], a['sl_out'] + a['as_out'])} |")
+            f"| **{bench}** | {calls:.1f} | {a['sel'] / a['tasks']:.1f} ({share}) "
+            f"| {pct(a['sel_in'], a['sel_in'] + a['as_in'])} "
+            f"| {pct(a['sel_out'], a['sel_out'] + a['as_out'])} |")
 
     tot = sum(a["tasks"] for a in pooled.values())
-    hits = [b for b in ORDER if pooled.get(b, {}).get("sl")]
-    zero = [b for b in ORDER if b in pooled and not pooled[b]["sl"]]
+    hits = [b for b in ORDER if pooled.get(b, {}).get("sel")]
+    zero = [b for b in ORDER if b in pooled and not pooled[b]["sel"]]
     a = pooled.get(hits[0]) if hits else None
     say = []
     if a:
-        sl_per = a["sl_in"] / a["sl"]
+        sl_per = a["sel_in"] / a["sel"]
         as_per = a["as_in"] / a["asst"]
         by_side = " and ".join(
-            f"{pct(s[bench]['sl_in'], s[bench]['sl_in'] + s[bench]['as_in'])} on {lab}"
+            f"{pct(s[bench]['sel_in'], s[bench]['sel_in'] + s[bench]['as_in'])} on {lab}"
             for lab, s in sides for bench in [hits[0]] if bench in s and s[bench]["tasks"])
         say.append(
             f"Measured over the **{tot} task rows that carry chat spans** in the v1.28 matrices, "
@@ -124,7 +95,7 @@ def block(pooled: dict[str, dict], sides: list[tuple[str, dict[str, dict]]]) -> 
             f"{' and '.join('`' + b + '`' for b in zero)} expose fewer than the agent's "
             f"`max_selected_tools = {THRESHOLD}` and so measure **exactly zero** selection calls — "
             f"they are the control for the detector. `{hits[0]}` is above the threshold and pairs "
-            f"**1:1**: {a['sl']} selection calls against {a['asst']} assistant calls, every turn. "
+            f"**1:1**: {a['sel']} selection calls against {a['asst']} assistant calls, every turn. "
             f"A selection call averages **{sl_per:,.0f} input tokens** against "
             f"**{as_per:,.0f}** for the assistant call it precedes — it carries every tool name and "
             f"description, while the assistant call carries only the {THRESHOLD} winners' schemas. "
@@ -162,9 +133,9 @@ def main() -> int:
             a = s.get(bench)
             if not a or not a["tasks"]:
                 continue
-            print(f"{bench:10} {label:40} {a['tasks']:5d} {a['sl']:7d} {a['asst']:5d} "
-                  f"{pct(a['sl_in'], a['sl_in'] + a['as_in']):>5} "
-                  f"{pct(a['sl_out'], a['sl_out'] + a['as_out']):>5}")
+            print(f"{bench:10} {label:40} {a['tasks']:5d} {a['sel']:7d} {a['asst']:5d} "
+                  f"{pct(a['sel_in'], a['sel_in'] + a['as_in']):>5} "
+                  f"{pct(a['sel_out'], a['sel_out'] + a['as_out']):>5}")
     print()
     rewrite(DOCS, block(pooled, sides))
     return 0

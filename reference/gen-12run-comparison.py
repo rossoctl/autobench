@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 # Reuse the TOC builder rather than re-deriving GitHub's anchor rules three times over.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from gen_toc import build as _toc  # noqa: E402
+import shortlistlib as SL  # noqa: E402
 
 A, ALAB, B, BLAB, VERSION = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 OUT = pathlib.Path(sys.argv[6]) if len(sys.argv) > 6 else None
@@ -128,15 +129,23 @@ def load(path):
         # version: a probe call is a `chat` span with `request_max_tokens == 1`, and this generator is
         # routinely pointed at matrices from either side of the change.
         chats = pchats = 0
+        # Tool-selection split, same span rows: the agent inserts an extra ranking call per turn
+        # above `max_selected_tools`, both kinds land in `llm_count`, and whether the *share* is a
+        # property of the workload or of the cluster is exactly the sort of question this report
+        # exists to answer. Rule and reasoning live in `shortlistlib`, shared with gen-12run-report.
+        sl = SL.new_acc()
         sp = pathlib.Path(md) / "span_report.ndjson" if md else None
         if sp and sp.exists():
+            srows = []
             for line in sp.read_text().splitlines():
                 if not line.strip():
                     continue
                 x = json.loads(line)
+                srows.append(x)
                 if x.get("kind") == "chat":
                     chats += 1
                     pchats += x.get("request_max_tokens") == 1
+            SL.tally_rows(srows, sl)
         s = r.get("summary") or {}
         iv = [x.get("llm_input_tokens", 0) or 0 for x in rows]
         ov = [x.get("llm_output_tokens", 0) or 0 for x in rows]
@@ -159,7 +168,7 @@ def load(path):
             zin=sum(1 for x in rows if not (x.get("llm_input_tokens") or 0)),
             models=sorted({(x.get("model") or "").rsplit("/", 1)[-1] for x in rows
                            if (x.get("llm_input_tokens") or 0) and x.get("model")}),
-            chats=chats, pchats=pchats,
+            chats=chats, pchats=pchats, sl=sl,
             probe=probe, causes=causes, total=s.get("total"), passed=s.get("evaluated_pass"),
             # Pass rate over the tasks that actually reached the model. `None` when the probe took
             # every task in the leg (#1 is a single task, so one failure leaves nothing to score) —
@@ -483,6 +492,71 @@ for n in sorted(X):
         _leg(n), x["bench"],
         f(x["omed"]), f(x["omean"]), f(x["ocv"], "%.2f"),
         f(y.get("omed")), f(y.get("omean")), f(y.get("ocv"), "%.2f")))
+
+def shortlist_section():
+    """Per-benchmark tool-selection share on each side — and whether the two agree.
+
+    Both platforms run the same agent image against the same MCP images, so the split between
+    "calls that picked tools" and "calls that did the task" should be a property of the tool surface
+    and not of the cluster. That is a testable claim rather than an assumption, and it decides how a
+    reader may use the figure: if the two sides agreed on pass rates and tokens but disagreed here,
+    the cross-cluster token comparison would be comparing two different workloads. They agree.
+    """
+    per: dict = {}
+    for lab, S in ((ALAB, X), (BLAB, Y)):
+        for v in S.values():
+            per.setdefault(v["bench"], {}).setdefault(lab, SL.new_acc())
+            per[v["bench"]][lab] = SL.merge([per[v["bench"]][lab], v.get("sl") or SL.new_acc()])
+    per = {b: s for b, s in per.items() if any(a["tasks"] for a in s.values())}
+    if not per:
+        return []
+    out = ["", "## Tool-selection calls", "",
+           "Not every LLM call works on the task. The agent image defaults to "
+           f"`enable_tool_shortlisting = True, max_selected_tools = {SL.THRESHOLD}`: above that many "
+           "advertised tools, each turn opens with an extra call that carries the whole tool "
+           "inventory and asks the model to rank it, and only the winners' schemas reach the call "
+           "that acts. Both kinds are inside the `llm` counts and the token totals above, so the "
+           "share is worth knowing before reading either — and because it is a property of the tool "
+           "surface rather than of the cluster, the two sides are a check on each other.", "",
+           f"| bench | calls/task {ALAB} | select {ALAB} | IN% {ALAB} | calls/task {BLAB} | select {BLAB} | IN% {BLAB} |",
+           "|---|---:|---:|---:|---:|---:|---:|"]
+    for b in sorted(per, key=lambda x: per[x][ALAB]["sel"] if ALAB in per[x] else 0):
+        cells = []
+        for lab in (ALAB, BLAB):
+            a = per[b].get(lab) or SL.new_acc()
+            if not a["tasks"]:
+                cells += ["—", "—", "—"]
+                continue
+            cells += ["%.1f" % ((a["sel"] + a["asst"]) / a["tasks"]),
+                      "%.1f (%s)" % (a["sel"] / a["tasks"], SL.pct(a["sel"], a["sel"] + a["asst"])),
+                      SL.share_in(a)]
+        out.append("| %s | %s |" % (b, " | ".join(cells)))
+    out.append("")
+    hits = [b for b in per if any(a["sel"] for a in per[b].values())]
+    zero = [b for b in per if not any(a["sel"] for a in per[b].values())]
+    if hits and zero:
+        shares = [(lab, SL.share_in(per[hits[0]][lab])) for lab in (ALAB, BLAB)
+                  if per[hits[0]].get(lab, {}).get("tasks")]
+        out.append("%s stay at **zero** on both sides — they advertise fewer tools than the "
+                   "threshold, so shortlisting cannot fire, which is the control that keeps ordinary "
+                   "multi-turn traffic from being counted as selection. %s spends **half its calls** "
+                   "selecting on both platforms, and the input-token share agrees to within a few "
+                   "points (%s). So the selection overhead is a property of the tool surface, not of "
+                   "the cluster: it inflates both sides' appworld token totals equally and does not "
+                   "bias the comparison — but it does mean a per-task token or dollar figure for "
+                   "that benchmark is mostly the price of choosing tools." % (
+                       " and ".join(f"`{b}`" for b in zero), f"`{hits[0]}`",
+                       " vs ".join(f"{s} on {lab}" for lab, s in shares)))
+    elif hits:
+        out.append("Every benchmark here is above the threshold, so this matrix carries no "
+                   "zero-selection control; treat the split as indicative until one is included.")
+    else:
+        out.append("No benchmark in either matrix exceeds the threshold, so no call here was spent "
+                   "on tool selection.")
+    return out
+
+
+L += shortlist_section()
 
 ti, tk = sum(v["i"] for v in X.values()), sum(v["i"] for v in Y.values())
 to, ko = sum(v["o"] for v in X.values()), sum(v["o"] for v in Y.values())

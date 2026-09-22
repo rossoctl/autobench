@@ -1,6 +1,6 @@
 # 12-Run Comparison — OpenShift (ykt3 Service, ykt2 workloads) vs KinD (single-node local), both Service v1.28
 
-**Report generated:** 2026-09-17T12:54:26Z
+**Report generated:** 2026-09-22T04:22:44Z
 
 **Platforms compared:** OpenShift (ykt3 Service, ykt2 workloads) vs KinD (single-node local)
 
@@ -24,6 +24,7 @@ All numbers are derived from the mirrored `report.ndjson` and `run.json` artifac
 - [Token distribution per task](#token-distribution-per-task)
   - [Input tokens](#input-tokens)
   - [Output tokens](#output-tokens)
+- [Tool-selection calls](#tool-selection-calls)
 - [Totals](#totals)
 - [What matches](#what-matches)
 - [Where they differ](#where-they-differ)
@@ -124,6 +125,18 @@ For each direction: `median` (robust centre), then `mean`, then `CV` (population
 | 10 | tau2 | 1904 | 2040 | 0.29 | 1986 | 1931 | 0.28 |
 | 11 | appworld | 32764 | 35093 | 0.13 | 19973 | 21278 | 0.16 |
 | 12 | appworld | 22355 | 27801 | 0.50 | 16866 | 18910 | 0.52 |
+
+## Tool-selection calls
+
+Not every LLM call works on the task. The agent image defaults to `enable_tool_shortlisting = True, max_selected_tools = 30`: above that many advertised tools, each turn opens with an extra call that carries the whole tool inventory and asks the model to rank it, and only the winners' schemas reach the call that acts. Both kinds are inside the `llm` counts and the token totals above, so the share is worth knowing before reading either — and because it is a property of the tool surface rather than of the cluster, the two sides are a check on each other.
+
+| bench | calls/task OpenShift (ykt3 Service, ykt2 workloads) | select OpenShift (ykt3 Service, ykt2 workloads) | IN% OpenShift (ykt3 Service, ykt2 workloads) | calls/task KinD (single-node local) | select KinD (single-node local) | IN% KinD (single-node local) |
+|---|---:|---:|---:|---:|---:|---:|
+| gsm8k | 1.1 | 0.0 (0%) | 0% | 1.1 | 0.0 (0%) | 0% |
+| tau2 | 11.3 | 0.0 (0%) | 0% | 11.5 | 0.0 (0%) | 0% |
+| appworld | 32.9 | 16.4 (50%) | 67% | 23.7 | 11.9 (50%) | 70% |
+
+`gsm8k` and `tau2` stay at **zero** on both sides — they advertise fewer tools than the threshold, so shortlisting cannot fire, which is the control that keeps ordinary multi-turn traffic from being counted as selection. `appworld` spends **half its calls** selecting on both platforms, and the input-token share agrees to within a few points (67% on OpenShift (ykt3 Service, ykt2 workloads) vs 70% on KinD (single-node local)). So the selection overhead is a property of the tool surface, not of the cluster: it inflates both sides' appworld token totals equally and does not bias the comparison — but it does mean a per-task token or dollar figure for that benchmark is mostly the price of choosing tools.
 
 ## Totals
 

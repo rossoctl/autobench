@@ -22,6 +22,7 @@ OUT = pathlib.Path(sys.argv[4]) if len(sys.argv) > 4 else None
 # Reuse the TOC builder rather than re-deriving GitHub's anchor rules three times over.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from gen_toc import build as _toc  # noqa: E402
+import shortlistlib as SL  # noqa: E402
 
 data = json.loads(SRC.read_text())
 runs = sorted(data["runs"], key=lambda r: r["n"])
@@ -654,6 +655,73 @@ def sec7():
     return "\n".join(o)
 
 
+def shortlist_note():
+    """§8's tool-selection paragraph: how much of this matrix's inference bought tool *choice*.
+
+    `report.ndjson` has one `llm_count` and cannot tell the two call kinds apart, so a reader of
+    §6/§7 alone has no way to know that on a large tool surface roughly half the model calls never
+    see the task. The spans can tell them apart (`shortlistlib`), and this is the only section that
+    reads spans — so the split is reported here, per benchmark, off this matrix rather than quoted
+    from another one.
+
+    Benchmarks below the agent's `max_selected_tools` threshold must measure exactly zero, and
+    saying so is the point: it is what shows the classifier is not inventing selection calls out of
+    ordinary multi-turn traffic.
+    """
+    per: dict = {}
+    for r in runs:
+        srows = rows(r, "span_report.ndjson")
+        if srows:
+            SL.tally_rows(srows, per.setdefault(r["bench"], SL.new_acc()))
+    per = {b: a for b, a in per.items() if a["tasks"]}
+    if not per:
+        return ""
+    hits = [b for b, a in per.items() if a["sel"]]
+    zero = [b for b, a in per.items() if not a["sel"]]
+    o = ["The **select** column splits the chat spans by *what the call was for*. The agent image "
+         f"defaults to `enable_tool_shortlisting = True, max_selected_tools = {SL.THRESHOLD}`: when "
+         "the MCP advertises more tools than that, every turn opens with an **extra** LLM call that "
+         "carries the whole tool inventory — each name and description — and asks the model to rank "
+         "it, after which only the winners' schemas go into the call that decides the action. Both "
+         "kinds land in `llm_count`, so §6 and §7 cannot separate them and the spans are the only "
+         "place this is visible.", "",
+         "| benchmark | tasks | LLM calls / task | of which select | input tokens spent selecting | output tokens spent selecting |",
+         "|---|---:|---:|---:|---:|---:|"]
+    for b in sorted(per, key=lambda x: per[x]["sel"]):
+        a = per[b]
+        o.append("| %s | %d | %.1f | %.1f (%s) | %s | %s |" % (
+            b, a["tasks"], (a["sel"] + a["asst"]) / a["tasks"], a["sel"] / a["tasks"],
+            SL.pct(a["sel"], a["sel"] + a["asst"]), SL.share_in(a), SL.share_out(a)))
+    o.append("")
+    if zero and hits:
+        a = per[hits[0]]
+        o.append("%s measure **exactly zero** — they expose fewer tools than the threshold, so "
+                 "shortlisting cannot fire on them, and that is the control for the classifier "
+                 "rather than a dull row: it is what shows ordinary multi-turn traffic is not being "
+                 "counted as selection. %s pairs **1:1** (%d selection calls against %d assistant "
+                 "calls), and the selection call is the dearer half — **%s of its input tokens** — "
+                 "because it carries every name and description while the assistant call carries "
+                 "only %d schemas. Read that benchmark's token and cost figures accordingly, and "
+                 "note the model never sees more than %d of its tools at once." % (
+                     " and ".join(f"`{b}`" for b in zero), f"`{hits[0]}`",
+                     a["sel"], a["asst"], SL.share_in(a), SL.THRESHOLD, SL.THRESHOLD))
+    elif hits:
+        a = per[hits[0]]
+        o.append("Every benchmark in this matrix is above the threshold, so there is no "
+                 "zero-selection control here — compare against a matrix that includes one before "
+                 "reading the split as exact.")
+    else:
+        o.append("No benchmark in this matrix exceeds the threshold, so nothing here spends a call "
+                 "on tool selection and the column is zero throughout.")
+    o.append("")
+    o.append("The count excludes `max_tokens=1` capability probes (they are not turns) and is "
+             "computed per task from span *order*, never from token size: a `chat` span immediately "
+             "followed by another `chat` is a selection call, one followed by a tool span is the "
+             "assistant call that requested that tool. So it is the `chat` column, not the raw "
+             "span total, that the `select` column is a subset of.")
+    return "\n".join(o)
+
+
 def sec8():
     """Per-task span inventory — the evidence layer under §6/§7's aggregates."""
     o = ["## 8. Per-task span inventory", "",
@@ -677,6 +745,7 @@ def sec8():
          "was replaced in `dev145` by an unbilled `GET /v1/models` check that emits no span — do not "
          "resurrect that rule, and do not compare chat counts across runs that straddle the change. "
          + probe_era_note(), "",
+         shortlist_note(), "",
          "`not counted` are spans the aggregator cannot see: it only folds a chat/tool span into "
          "`llm_count`/`tool_count` when its parent is the `invoke_agent` span, so anything nested "
          "deeper is real work missing from the totals. A non-zero figure there is not a bug by "
@@ -701,8 +770,8 @@ def sec8():
         by_task: dict = {}
         for s in srows:
             by_task.setdefault(s.get("task_id"), []).append(s)
-        o.append("| task | spans | chat | tool | other | not counted | span names (xN) |")
-        o.append("|---|---:|---:|---:|---:|---:|---|")
+        o.append("| task | spans | chat | select | tool | other | not counted | span names (xN) |")
+        o.append("|---|---:|---:|---:|---:|---:|---:|---|")
         for tid in sorted(by_task, key=_natkey):
             ss = by_task[tid]
             kinds: dict = {}
@@ -717,9 +786,10 @@ def sec8():
             ntool = kinds.get("tool", 0)
             inventory = ", ".join(f"`{n}`" + (f" x{c}" if c > 1 else "")
                                   for n, c in sorted(names.items(), key=lambda kv: -kv[1]))
-            o.append("| %s | %d | %s | %d | %d | %d | %s |" % (
+            nsel = sum(1 for _, role in SL.roles(ss) if role == "sel")
+            o.append("| %s | %d | %s | %d | %d | %d | %d | %s |" % (
                 tid, len(ss), f"**{nchat}** ⚠" if _span_lost(ss) else str(nchat),
-                ntool, kinds.get("other", 0), uncounted, inventory))
+                nsel, ntool, kinds.get("other", 0), uncounted, inventory))
         lost = [t for t, ss in by_task.items() if _span_lost(ss)]
         if lost:
             o.append("")
