@@ -46,7 +46,11 @@ benchmark, runs it with the tool-calling agent, and reports.
 > live: 168 tasks). On the current 12-run matrices both legs reach terminal `succeeded` with bounded
 > per-task verdicts on **both** OpenShift and KinD. `pass_rate` is **0.0 by design** — gemini-2.5-pro
 > driving the generic `tool_calling` agent solves no appworld tasks; the acceptance gate is that the
-> pipeline runs tasks to completion and scores them honestly, which it does. Also note the tau2
+> pipeline runs tasks to completion and scores them honestly, which it does. Read that 0.0 as a
+> verdict on the *configuration*, not on the model: the agent shortlists appworld's tool surface to
+> 30 tools per turn — half its LLM calls buy tool selection rather than progress — and the MCP image
+> drops `api_docs`, so it cannot go looking for the tools that did not make the cut. Both are
+> measured in `docs/BENCHMARKS_PRIMER.md` and in §8 of the reports under `docs/results/`. Also note the tau2
 > failures in #9/#10 above are long since fixed (per-task timeouts + a 4Gi MCP): those legs now score
 > 0.8-0.9. Everything in this file is the 2026-08-10/11 snapshot; see `SERVICE_DESIGN_DECISIONS.md`
 > and the published reports under `docs/results/` for current numbers.
