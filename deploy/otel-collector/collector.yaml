@@ -44,8 +44,10 @@ data:
       batch: {}
     exporters:
       otlphttp/mlflow:
-        # Exact MLflow OTLP path on the target (MLflow) cluster's Route.
-        traces_endpoint: https://rh-ai.apps.ykt3.hcp.res.ibm.com/mlflow/v1/traces
+        # PLACEHOLDER — substitute your own host. This repo is public, so no live endpoint is
+        # committed here. The shape is what matters: the MLflow Route on the *target* (MLflow)
+        # cluster, plus MLflow's exact OTLP path. Must be the full `/v1/traces` URL, not a base.
+        traces_endpoint: https://rh-ai.apps.ykt3.example.com/mlflow/v1/traces
         headers:
           authorization: "Bearer ${env:MLFLOW_BEARER_TOKEN}"
           x-mlflow-experiment-id: "3"
