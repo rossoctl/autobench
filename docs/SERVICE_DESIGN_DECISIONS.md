@@ -655,7 +655,7 @@ workload endpoints the Service dials — `registry.mcp_url`/`agent_url`, which c
 
 **Decision: add optional per-instance `mcp_endpoint_template` / `agent_endpoint_template`** (URL
 templates with `{service}`/`{namespace}` placeholders, e.g.
-`https://{service}.{namespace}.apps.ykt2.hcp.res.ibm.com`). When set, the Service dials those
+`https://{service}.{namespace}.apps.ykt2.example.com`). When set, the Service dials those
 external-route URLs (MCP appends the benchmark's `mcp_path`); when unset it composes the co-located
 `svc.cluster.local` address exactly as before — so co-located (kind / same-cluster) instances are
 unchanged. The operator encodes whatever host pattern their routes use, so the Service never guesses

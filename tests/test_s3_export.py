@@ -7,7 +7,7 @@ from autobench import s3_export
 from autobench.models import MLflowTraceRecord, S3Config
 
 
-ISS = "https://keycloak-keycloak.apps.ykt2.hcp.res.ibm.com/realms/kagenti"
+ISS = "https://keycloak-keycloak.apps.ykt2.example.com/realms/kagenti"
 
 
 class _FakeS3Client:
@@ -49,7 +49,7 @@ def _records(n=2):
 def test_source_key_strips_scheme_and_sanitizes():
     assert (
         s3_export.source_key(ISS)
-        == "keycloak-keycloak.apps.ykt2.hcp.res.ibm.com-realms-kagenti"
+        == "keycloak-keycloak.apps.ykt2.example.com-realms-kagenti"
     )
 
 
@@ -57,7 +57,7 @@ def test_run_prefix_hierarchy_with_prefix():
     cfg = S3Config(bucket="b", prefix="bench/")
     prefix = s3_export.run_prefix(cfg, "alice", ISS, "gsm8k", "abc123")
     assert prefix == (
-        "bench/alice/keycloak-keycloak.apps.ykt2.hcp.res.ibm.com-realms-kagenti/gsm8k/abc123"
+        "bench/alice/keycloak-keycloak.apps.ykt2.example.com-realms-kagenti/gsm8k/abc123"
     )
 
 
@@ -115,7 +115,7 @@ async def test_export_run_uploads_all_formats(monkeypatch):
     for put in fake.puts:
         assert put["Bucket"] == "bench-bkt"
         assert put["Key"].startswith(
-            "p/alice/keycloak-keycloak.apps.ykt2.hcp.res.ibm.com-realms-kagenti/gsm8k/run-1/"
+            "p/alice/keycloak-keycloak.apps.ykt2.example.com-realms-kagenti/gsm8k/run-1/"
         )
         assert put["ACL"] == "public-read"
     # NDJSON has one line per record.

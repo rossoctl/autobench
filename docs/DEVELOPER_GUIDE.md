@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-22T03:56:21Z
+**Last modified:** 2026-09-24T15:08:59Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -14,6 +14,10 @@ multi-turn) on the `ykt3` and `kind-rossoctl` clusters.
 - Design rationale (what the Service can and cannot enact) lives in
   [`SERVICE_DESIGN_DECISIONS.md`](./SERVICE_DESIGN_DECISIONS.md) and
   [`KUBECTL_DEPENDENCY_INVENTORY.md`](./KUBECTL_DEPENDENCY_INVENTORY.md).
+- **Every host below is a placeholder on `example.com`** — this repo is public, so it names
+  platforms rather than endpoints. Route *shapes* are real (`<service>-<namespace>.apps.<cluster>`),
+  so substitute your own domain and the recipes work unchanged. The two exceptions are the S3
+  object URLs in §6.6 and §7.0, which are live and anonymously fetchable from the public bucket.
 
 **In a hurry?** §3 gets you a token, §7.0 is one benchmark run start to finish as copy-pasteable
 `curl`, and §7.1 is the same thing as a single command.
@@ -769,7 +773,7 @@ Every block below is copy-pasteable once these four variables are exported (see 
 the token; §7.1 wraps this whole section in a single command if you would rather not paste):
 
 ```bash
-export SVC="https://autobench-rossoctl-system.apps.ykt3.hcp.res.ibm.com"   # Service base URL
+export SVC="https://autobench-rossoctl-system.apps.ykt3.example.com"   # Service base URL
 export BENCH=gsm8k          # gsm8k | tau2 | appworld
 export SCOPE="namespace=team1&agent=tool_calling&experiment=default"
 export TOKEN="…"            # from §3; never echo this
@@ -1202,8 +1206,8 @@ steps.
 
 ```bash
 # ---- 0. environment (the cross-cluster instance: Service on ykt3, workloads on ykt2/team1) ----
-export SVC="https://autobench-rossoctl-system.apps.ykt3.hcp.res.ibm.com"
-export KC="https://keycloak-keycloak.apps.ykt2.hcp.res.ibm.com"   # the instance's iss origin
+export SVC="https://autobench-rossoctl-system.apps.ykt3.example.com"
+export KC="https://keycloak-keycloak.apps.ykt2.example.com"   # the instance's iss origin
 export REALM=rossoctl KC_CLIENT=rossoctl KC_USER=benchmarker
 export BENCH=gsm8k
 export SCOPE="namespace=team1&agent=tool_calling&experiment=default"
@@ -1240,7 +1244,7 @@ done
 # On OpenShift the Route 502s for ~10s AFTER the Service reports Ready, so gate on the card too:
 AGENT=$(curl -s $CURL_OPTS "$SVC/benchmarks/$BENCH/status?$SCOPE" -H "Authorization: Bearer $TOKEN" \
         | python3 -c 'import sys,json; print(json.load(sys.stdin)["agent_name"])')
-until curl -sf -o /dev/null "https://$AGENT-team1.apps.ykt2.hcp.res.ibm.com/.well-known/agent-card.json"; do
+until curl -sf -o /dev/null "https://$AGENT-team1.apps.ykt2.example.com/.well-known/agent-card.json"; do
   echo "waiting for the agent card"; sleep 5
 done; sleep 15
 
@@ -1318,11 +1322,11 @@ deploy, the readiness-stability and agent-card gates, run, 424 retry, poll, arti
 local mirror — and exits non-zero if the run did not succeed.
 
 ```bash
-export BM_BASE="https://autobench-rossoctl-system.apps.ykt3.hcp.res.ibm.com"
-export BM_ISS="https://keycloak-keycloak.apps.ykt2.hcp.res.ibm.com/realms/rossoctl"
+export BM_BASE="https://autobench-rossoctl-system.apps.ykt3.example.com"
+export BM_ISS="https://keycloak-keycloak.apps.ykt2.example.com/realms/rossoctl"
 export BM_PASSWORD_FILE="$HOME/.rossoctl-ykt3/benchmarker.pass"     # chmod 600
 export BM_INSECURE=1
-export BM_CARD_TEMPLATE="https://{service}-{namespace}.apps.ykt2.hcp.res.ibm.com/.well-known/agent-card.json"
+export BM_CARD_TEMPLATE="https://{service}-{namespace}.apps.ykt2.example.com/.well-known/agent-card.json"
 
 # See "What you need on the client side" above for install options; the shortest is:
 #   uv tool install "rossoctl-autobench @ git+https://github.com/rossoctl/autobench"
@@ -1533,11 +1537,11 @@ separate one-line commands, see §7.5.)
 git clone https://github.com/rossoctl/autobench && cd autobench
 
 # Same five variables as §7.1 — plus a label, which names the state file and the reports.
-export BM_BASE=https://autobench-rossoctl-system.apps.ykt3.hcp.res.ibm.com
-export BM_ISS=https://keycloak-keycloak.apps.ykt2.hcp.res.ibm.com/realms/rossoctl
+export BM_BASE=https://autobench-rossoctl-system.apps.ykt3.example.com
+export BM_ISS=https://keycloak-keycloak.apps.ykt2.example.com/realms/rossoctl
 export BM_PASSWORD_FILE="$HOME/.rossoctl-ykt3/benchmarker.pass"
 export BM_INSECURE=1
-export BM_CARD_TEMPLATE="https://{service}-{namespace}.apps.ykt2.hcp.res.ibm.com/.well-known/agent-card.json"
+export BM_CARD_TEMPLATE="https://{service}-{namespace}.apps.ykt2.example.com/.well-known/agent-card.json"
 export BM_LABEL=ocp-dev146
 
 # Space the legs that share prompts past the LLM gateway's completion cache, and interleave the

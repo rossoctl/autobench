@@ -372,14 +372,14 @@ def test_workload_urls_default_in_cluster():
 
 def test_workload_urls_templated_cross_cluster():
     defn = registry.BENCHMARKS["gsm8k"]
-    tmpl = "https://{service}.{namespace}.apps.ykt2.hcp.res.ibm.com"
+    tmpl = "https://{service}.{namespace}.apps.ykt2.example.com"
     assert (
         registry.mcp_url(defn, "team1", tmpl)
-        == "https://exgentic-mcp-gsm8k.team1.apps.ykt2.hcp.res.ibm.com/mcp"
+        == "https://exgentic-mcp-gsm8k.team1.apps.ykt2.example.com/mcp"
     )
     assert (
         registry.agent_url(defn, "tool_calling", "team1", template=tmpl)
-        == "https://exgentic-a2a-tool-calling-gsm8k.team1.apps.ykt2.hcp.res.ibm.com"
+        == "https://exgentic-a2a-tool-calling-gsm8k.team1.apps.ykt2.example.com"
     )
 
 

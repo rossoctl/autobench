@@ -9,8 +9,8 @@ as a single `all` command or step by step, so the same tool serves both "just ru
 "show me what each HTTP call does".
 
     # everything, on the cross-cluster OpenShift instance
-    export BM_BASE=https://autobench-rossoctl-system.apps.ykt3.hcp.res.ibm.com
-    export BM_ISS=https://keycloak-keycloak.apps.ykt2.hcp.res.ibm.com/realms/rossoctl
+    export BM_BASE=https://autobench-rossoctl-system.apps.ykt3.example.com
+    export BM_ISS=https://keycloak-keycloak.apps.ykt2.example.com/realms/rossoctl
     export BM_PASSWORD_FILE=~/.rossoctl-ykt3/benchmarker.pass
     export BM_INSECURE=1
     autobench-cli all --benchmark gsm8k --tasks 1

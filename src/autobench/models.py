@@ -106,7 +106,7 @@ class InstanceConfig(BaseModel):
     dials to reach the workload MCP tool and A2A agent. When unset the Service
     composes the co-located in-cluster `*.svc.cluster.local` address; set them
     (with `{service}`/`{namespace}` placeholders, e.g.
-    `https://{service}.{namespace}.apps.ykt2.hcp.res.ibm.com`) when the workloads
+    `https://{service}.{namespace}.apps.ykt2.example.com`) when the workloads
     live on a different cluster reachable only via external routes. Only the
     Service->workload dial is affected; the intra-cluster agent->tool `MCP_URL`
     injected into the agent pod always stays `svc.cluster.local`.
