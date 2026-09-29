@@ -48,7 +48,11 @@ Flags (each also has an env fallback):
                                           over from. Those two are environment facts this script
                                           cannot discover, and a cluster rebuild should reproduce
                                           them rather than lose them.
-  --llm-base URL       WORKLOAD_LLM_BASE  LLM gateway base (kind needs the INTERNAL one)
+  --llm-profile P      LLM_PROFILE        intranet|internet — selects the INTRANET_LLM_* or
+                                          INTERNET_LLM_* variable set (see llm-profiles.sh). The
+                                          gateway follows the cluster's NETWORK, not its platform.
+  --llm-api-base URL   WORKLOAD_LLM_API_BASE  gateway origin; overrides the profile's
+                                          (--llm-base is the old name for this flag)
   --llm-model M        WORKLOAD_LLM_MODEL default model, e.g. openai/<gateway model id>
   --otel-endpoint URL  WORKLOAD_OTEL_ENDPOINT  (default: the in-cluster collector on :8335)
   --agent-runner R     WORKLOAD_AGENT_RUNNER   (default: service — `direct` emits no agent spans,
@@ -99,7 +103,11 @@ MLFLOW_NAMESPACE="${MLFLOW_NAMESPACE:-rossoctl-system}"
 MLFLOW_URL="${MLFLOW_URL:-}"
 MLFLOW_EXPERIMENT_ID="${MLFLOW_EXPERIMENT_ID:-}"
 COPY_FROM="${COPY_FROM:-}"
-WORKLOAD_LLM_BASE="${WORKLOAD_LLM_BASE:-}"
+# WORKLOAD_LLM_API_BASE is the canonical name — it matches the instance-file field this script
+# writes (workload_llm.api_base) and the OpenShift sibling's variable. WORKLOAD_LLM_BASE is accepted
+# as an alias: it was never a deliberate second name, just this flag being added a day after the
+# OpenShift one and named after the flag (--llm-base) rather than the field.
+WORKLOAD_LLM_API_BASE="${WORKLOAD_LLM_API_BASE:-${WORKLOAD_LLM_BASE:-}}"
 WORKLOAD_LLM_MODEL="${WORKLOAD_LLM_MODEL:-}"
 WORKLOAD_OTEL_ENDPOINT="${WORKLOAD_OTEL_ENDPOINT:-http://otel-collector.rossoctl-system.svc.cluster.local:8335}"
 WORKLOAD_AGENT_RUNNER="${WORKLOAD_AGENT_RUNNER:-service}"
@@ -124,7 +132,8 @@ while [ $# -gt 0 ]; do
         --mlflow-url)       MLFLOW_URL="$2"; shift 2 ;;
         --experiment-id)    MLFLOW_EXPERIMENT_ID="$2"; shift 2 ;;
         --copy-from)        COPY_FROM="$2"; shift 2 ;;
-        --llm-base)         WORKLOAD_LLM_BASE="$2"; shift 2 ;;
+        --llm-profile)      LLM_PROFILE="$2"; shift 2 ;;
+        --llm-api-base|--llm-base) WORKLOAD_LLM_API_BASE="$2"; shift 2 ;;
         --llm-model)        WORKLOAD_LLM_MODEL="$2"; shift 2 ;;
         --otel-endpoint)    WORKLOAD_OTEL_ENDPOINT="$2"; shift 2 ;;
         --agent-runner)     WORKLOAD_AGENT_RUNNER="$2"; shift 2 ;;
@@ -138,6 +147,11 @@ while [ $# -gt 0 ]; do
 done
 
 command -v "$KUBECTL_BIN" >/dev/null || die "$KUBECTL_BIN is required"
+
+# A selected profile fills in whatever the flags did not: base, model, key file, bypass list.
+# shellcheck source=reference/llm-profiles.sh
+. "$(dirname "${BASH_SOURCE[0]}")/llm-profiles.sh"
+llm_profile_resolve || die "could not resolve LLM_PROFILE=${LLM_PROFILE:-}"
 [ -n "$KC_SERVICE_USERNAME" ] || die "KC_SERVICE_USERNAME must be set in the environment (Service ROPC login username)"
 [ -n "$KC_SERVICE_PASSWORD" ] || die "KC_SERVICE_PASSWORD must be set in the environment (Service ROPC login password)"
 [ -n "$KUBE_CONTEXT" ] || KUBE_CONTEXT="kind-${KIND_CLUSTER_NAME}"
@@ -225,14 +239,26 @@ if [ -n "$COPY_FROM" ]; then
     [ "$S3_JSON"  = null ] && warn "--copy-from has no .s3 — artifacts will not be published"
     [ "$LLM_JSON" = null ] && warn "--copy-from has no .workload_llm — runs will use the benchmark default model"
 fi
-if [ -n "$WORKLOAD_LLM_BASE" ] || [ -n "$WORKLOAD_LLM_MODEL" ]; then
-    LLM_JSON="$(jq -cn --argjson cur "$LLM_JSON" --arg b "$WORKLOAD_LLM_BASE" --arg m "$WORKLOAD_LLM_MODEL" \
+if [ -n "$WORKLOAD_LLM_API_BASE" ] || [ -n "$WORKLOAD_LLM_MODEL" ]; then
+    # The proxy-bypass list is part of the gateway's configuration, not a separate concern: where the
+    # cluster injects an egress proxy, an in-network gateway missing from this list is unreachable.
+    # Only computed when a base is being set here, and never over a list carried in by --copy-from.
+    LLM_NO_PROXY=""
+    if [ -n "$WORKLOAD_LLM_API_BASE" ]; then
+        # Bypass entries are HOSTS: strip scheme, then port, then path from each URL.
+        host_of() { local h="${1#*://}"; h="${h%%/*}"; printf '%s' "${h%%:*}"; }
+        LLM_NO_PROXY="$(llm_profile_no_proxy \
+            "$(host_of "$WORKLOAD_OTEL_ENDPOINT")" "$(host_of "$KC_BACKCHANNEL_URL")")"
+    fi
+    LLM_JSON="$(jq -cn --argjson cur "$LLM_JSON" --arg b "$WORKLOAD_LLM_API_BASE" \
+        --arg m "$WORKLOAD_LLM_MODEL" --arg np "$LLM_NO_PROXY" \
         '($cur // {}) | (if $b != "" then .api_base = $b else . end)
-                      | (if $m != "" then .default_model = $m else . end)')"
+                      | (if $m != "" then .default_model = $m else . end)
+                      | (if $b != "" and (.no_proxy // "") == "" then .no_proxy = $np else . end)')"
 fi
 if [ "$LLM_JSON" = null ]; then
-    warn "no workload_llm (pass --copy-from, or --llm-base/--llm-model): the agent will use the"
-    warn "  benchmark's baked-in default model, which the cluster's key may not be able to reach"
+    warn "no workload_llm (pass --llm-profile, --copy-from, or --llm-api-base/--llm-model): the agent"
+    warn "  will use the benchmark's baked-in default model, which the cluster's key may not reach"
 fi
 
 # --- 3. write instances/<encoded-iss-host>.json ---

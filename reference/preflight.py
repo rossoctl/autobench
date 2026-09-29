@@ -60,6 +60,42 @@ DEFAULT_NS = "rossoctl-system"
 # `team1` (24 of 24), so a second namespace is opt-in via --teams rather than assumed: reporting an
 # unused `team2` as a FAILURE buries the rows that matter under noise nobody will act on.
 DEFAULT_TEAMS = ("team1",)
+
+# The LLM gateway profile, mirroring reference/llm-profiles.sh. Kept in step with it by hand — both
+# are small, and importing shell into python is worse than duplicating four lines.
+LLM_PROFILE_ENV_FILE = os.environ.get(
+    "LLM_PROFILE_ENV_FILE", os.path.expanduser("~/.rossoctl-llm/profiles.env")
+)
+
+
+def llm_profile_base(profile: str) -> str | None:
+    """The api_base the named profile declares, from the environment or profiles.env."""
+    if profile not in ("intranet", "internet"):
+        return None
+    name = f"{profile.upper()}_LLM_API_BASE"
+    if os.environ.get(name):
+        return os.environ[name]
+    try:
+        with open(LLM_PROFILE_ENV_FILE, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith(f"{name}="):
+                    return line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return None
+
+
+def llm_profile_from_values(path: str) -> str | None:
+    """The `llmProfile:` declared in a chart values file, so one file is the source of truth."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("llmProfile:"):
+                    return line.split(":", 1)[1].strip().strip('"') or None
+    except OSError:
+        return None
+    return None
 COLLECTOR_DEPLOY = "otel-collector"
 MLFLOW_EXPORTER = "otlphttp/mlflow"
 INSTANCES_SECRET = "autobench-instances"
@@ -542,7 +578,7 @@ def read_instances(cluster: Cluster, namespace: str) -> dict[str, dict] | None:
 
 def check_instance_config(
     rep: Report, cluster: Cluster, namespace: str, platform: str, collector: dict,
-    instances: dict[str, dict] | None
+    instances: dict[str, dict] | None, llm_profile: str | None = None,
 ) -> None:
     rep.section(f"Instance config (Secret {INSTANCES_SECRET})")
     if instances is None:
@@ -636,16 +672,35 @@ def check_instance_config(
         if base:
             rep.ok(f"{name}: workload_llm", f"{urllib.parse.urlsplit(base).netloc} "
                                             f"model {llm.get('default_model') or '(benchmark default)'}")
-            # The two gateways keep separate key tables, so a key moved between platforms does not
-            # fail closed — it 401s per completion, mid-run.
-            internal = "vpc-int" in base
-            if platform == "openshift" and internal:
-                rep.fail(f"{name}: LLM gateway", "names the INTERNAL gateway, which is KinD-only")
-            elif platform == "kind" and not internal:
+            # The two gateways keep separate key tables, so a base that disagrees with the key in
+            # openai-secret does not fail closed — it 401s per completion, mid-run, and the leg
+            # finishes with zeroes. What the base must agree with is the DECLARED profile, not the
+            # platform: an OpenShift cluster on the organisation's intranet uses the internal
+            # gateway, exactly like a local kind cluster, so deriving it from `platform` (as this
+            # check used to) fails a correct install.
+            expect = llm_profile_base(llm_profile) if llm_profile else None
+            if llm_profile and expect:
+                if base == expect:
+                    rep.ok(f"{name}: LLM gateway matches the {llm_profile} profile")
+                else:
+                    rep.fail(
+                        f"{name}: LLM gateway matches the {llm_profile} profile",
+                        f"instance points at {urllib.parse.urlsplit(base).netloc}, the "
+                        f"{llm_profile} profile declares "
+                        f"{urllib.parse.urlsplit(expect).netloc} — separate key tables, so this "
+                        "401s per completion mid-run rather than failing at deploy",
+                    )
+            elif llm_profile:
                 rep.warn(
-                    f"{name}: LLM gateway",
-                    "KinD normally needs the INTERNAL gateway; the external one is unroutable "
-                    "from here on a split-tunnel VPN",
+                    f"{name}: LLM gateway vs the {llm_profile} profile",
+                    f"{llm_profile.upper()}_LLM_API_BASE is unset here and absent from "
+                    f"{LLM_PROFILE_ENV_FILE}, so the base cannot be verified",
+                )
+            else:
+                rep.warn(
+                    f"{name}: LLM gateway profile",
+                    "undeclared — pass --llm-profile, or --values with llmProfile set, to check "
+                    "the base against the gateway whose key table issued the key",
                 )
         else:
             rep.warn(f"{name}: workload_llm.api_base", "unset — the agent uses the image default")
@@ -852,6 +907,12 @@ def main() -> int:
     ap.add_argument("--teams", default=",".join(DEFAULT_TEAMS),
                     help="comma-separated workload namespaces to check — the ones you deploy into "
                          "(default: %(default)s; every run12 spec names team1)")
+    ap.add_argument("--llm-profile", choices=("intranet", "internet"),
+                    help="which LLM gateway this cluster must use (default: $LLM_PROFILE, or the "
+                         "llmProfile in --values). Orthogonal to --platform: an OpenShift cluster on "
+                         "the intranet uses `intranet`")
+    ap.add_argument("--values", help="chart values file to read llmProfile from, e.g. "
+                                     "deploy/helm/values-kind.yaml")
     ap.add_argument("--gateway", default="http", help="kind only: Gateway name (default: %(default)s)")
     ap.add_argument("--image", help="expected Service image, to compare against what is deployed")
     ap.add_argument("--chart", default=CHART_DIR, help="chart directory (default: %(default)s)")
@@ -865,11 +926,15 @@ def main() -> int:
         context = p.stdout.strip() or None
     platform = args.platform or infer_platform(context)
     teams = [t for t in args.teams.split(",") if t]
+    # Precedence: the flag, then a values file (one declaration shared with the release), then the
+    # environment. Never inferred from the platform — that is the mistake this replaced.
+    llm_profile = args.llm_profile or (llm_profile_from_values(args.values) if args.values else None) \
+        or os.environ.get("LLM_PROFILE") or None
 
     rep = Report(quiet=args.json)
     if not args.json:
         print(f"AutoBench preflight — platform={platform} context={context or '(current)'} "
-              f"namespace={args.namespace}")
+              f"namespace={args.namespace} llm-profile={llm_profile or '(undeclared)'}")
 
     cluster = Cluster(context)
     check_tooling(rep, platform, cluster)
@@ -895,7 +960,8 @@ def main() -> int:
         collector = check_collector(rep, cluster, args.namespace)
         check_mlflow(rep, cluster, platform, args.namespace, collector)
         check_ingress(rep, cluster, platform, args.namespace, args.gateway)
-        check_instance_config(rep, cluster, args.namespace, platform, collector, instances)
+        check_instance_config(rep, cluster, args.namespace, platform, collector, instances,
+                              llm_profile=llm_profile)
         iss_hint = next((cfg.get("iss") for cfg in (instances or {}).values() if cfg.get("iss")), None)
         check_identity(rep, iss_hint)
         check_service_install(rep, cluster, args.namespace, args.image)

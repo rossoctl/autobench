@@ -10,6 +10,18 @@ service credentials and is generated out-of-band. Without it the pod stays unrea
 
     # if absent, on OpenShift:  reference/ocp-service-bootstrap.sh --cluster <name> ...
     #             on kind:      reference/kind-service-bootstrap.sh
+{{ if (include "autobench.llmProfile" .) }}
+This release declares llmProfile={{ include "autobench.llmProfile" . }}, so the instance file must
+carry that profile's gateway. Generate it with the matching selector and check them against the live
+cluster:
+
+    reference/{ocp,kind}-service-bootstrap.sh --llm-profile {{ include "autobench.llmProfile" . }} ...
+    python3 reference/preflight.py --llm-profile {{ include "autobench.llmProfile" . }} --context <ctx>
+{{- else }}
+No llmProfile is declared for this release, so nothing can check that the instance file's gateway is
+the one whose key table issued the key in openai-secret. A mismatch does not fail at deploy: it 401s
+per completion, mid-run, and the leg finishes with zeroes. Set llmProfile to intranet or internet.
+{{- end }}
 
 Verify the rollout, then the API:
 

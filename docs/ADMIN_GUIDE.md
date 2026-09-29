@@ -41,7 +41,7 @@ install, §6 is the only verification that means anything.
   - [3.2 The Service pod](#32-the-service-pod)
   - [3.3 The workload pods — injected, not configured](#33-the-workload-pods--injected-not-configured)
   - [3.4 KinD and OpenShift differ — and the differences fail silently](#34-kind-and-openshift-differ--and-the-differences-fail-silently)
-  - [3.5 The LiteLLM gateway: two profiles](#35-the-litellm-gateway-two-profiles)
+  - [3.5 The LiteLLM gateway: two named profiles](#35-the-litellm-gateway-two-named-profiles)
 - [4. The instance-config Secret](#4-the-instance-config-secret)
 - [5. Installing with Helm](#5-installing-with-helm)
   - [5.1 OpenShift](#51-openshift)
@@ -222,9 +222,11 @@ used once, and hashed if it is reported at all.
 | `KC_SERVICE_CLIENT_SECRET` | both bootstrap scripts | only if the Keycloak client is confidential |
 | `KC_USER_PASSWORD` | `kind-post-setup.sh` | the password to *seed*; falls back to `~/.rossoctl-kind/benchmarker.pass` (`KC_CRED_FILE`) |
 | `KC_ADMIN_PASSWORD` | `kind-post-setup.sh` | optional — read from the in-cluster `keycloak-initial-admin` Secret when unset |
-| `BM_WORKLOAD_LLM_KEY` | `kind-post-setup.sh` | the workload LLM key; falls back to `~/.rossoctl-kind/litellm.key` (`LLM_KEY_FILE`) |
+| `LLM_PROFILE` | both bootstrap scripts, `kind-post-setup.sh`, `preflight.py` | `intranet` \| `internet` — selects one of the two gateway variable sets (§3.5) |
+| `INTRANET_LLM_*` / `INTERNET_LLM_*` | `reference/llm-profiles.sh`, read by all of the above | the profiles themselves: base, model, key file, optional bypass list (§3.5) |
+| `BM_WORKLOAD_LLM_KEY` | `kind-post-setup.sh` | the workload LLM key; falls back to the selected profile's key file, else `~/.rossoctl-kind/litellm.key` (`LLM_KEY_FILE`) |
 | `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | `ocp-service-bootstrap.sh` | override `--s3-from`, which otherwise copies them in-process from an existing instance file |
-| `WORKLOAD_LLM_API_BASE`, `WORKLOAD_LLM_MODEL` | `ocp-service-bootstrap.sh` | the gateway has **no default** on purpose: this repo is public |
+| `WORKLOAD_LLM_API_BASE`, `WORKLOAD_LLM_MODEL` | both bootstrap scripts | set by `LLM_PROFILE` when you use one; an explicit export wins. The gateway has **no default** on purpose: this repo is public |
 | `MLFLOW_URL`, `MLFLOW_EXPERIMENT_ID`, `MLFLOW_WORKSPACE`, `MLFLOW_TOKEN_SECRET` | `ocp-service-bootstrap.sh` | the id and workspace default to what the collector exports |
 | `WORKLOAD_OTEL_ENDPOINT`, `WORKLOAD_OTEL_INSECURE`, `WORKLOAD_AGENT_RUNNER` | both bootstrap scripts | see §3.4 on the runner |
 | `IMAGE`, `CLUSTER`, `KUBE_CONTEXT`, `REALM`, `CLIENT`, `KC_HOST` | `kind-post-setup.sh` | plain overrides, no secrets |
@@ -301,7 +303,7 @@ points *at*.
 
 | | KinD | OpenShift | if you get it wrong |
 |---|---|---|---|
-| LLM gateway | the **internal** gateway | the **external** gateway | the two keep separate key tables, so a key moved across does not fail closed — it 401s per completion, mid-run |
+| LLM gateway | usually the **internal** gateway | usually the **external** one — but this follows the *network*, not the platform (§3.5) | the two keep separate key tables, so a key moved across does not fail closed — it 401s per completion, mid-run |
 | `openai-secret` | a key from the internal gateway | a key from the external one | same |
 | MLflow read path | `mlflow-reader` (§8), no auth | the cluster's own MLflow on `:8443` with a ServiceAccount bearer and `insecure_tls` | a refused read is invisible: the run passes, every token count is 0 |
 | MLflow experiment | `0` | `1`, workspace `team1` on ykt5 | identical signature to the above |
@@ -316,46 +318,115 @@ With the current image, `service` is what emits agent spans; `direct` yields a c
 **zero-token rows**, which is exactly what a broken MLflow looks like. Do not infer it — detect it,
 by looking for a non-zero token row in `report.ndjson` (§6).
 
-### 3.5 The LiteLLM gateway: two profiles
+### 3.5 The LiteLLM gateway: two named profiles
 
 The gateway is the one piece of configuration that is neither discoverable from the cluster nor
-shared between platforms, so it gets its own section. There are two profiles, and the deciding
-question is not KinD-versus-OpenShift — it is **whether the cluster's pods sit inside the
-organisation's network**.
+shared between clusters, so it gets its own section — and it is configured as a **named profile**
+rather than as a set of per-cluster values, because the failure it causes is silent.
 
-| | intranet cluster (a personal KinD on the VPN) | cluster outside the intranet |
+The deciding question is **where the cluster's pods sit on the network**, not which Kubernetes it
+runs. An OpenShift cluster deployed on the organisation's intranet uses the same internal gateway a
+local KinD cluster on the VPN does; a KinD cluster on a laptop off the VPN uses the external one.
+`platform` and `llmProfile` are therefore independent, and nothing derives one from the other.
+
+| | `intranet` | `internet` |
 |---|---|---|
 | which gateway | the **internal** LiteLLM (`…vpc-int…`) | the **external** LiteLLM (`…vpc…`) |
-| why not the other one | the external host is not routed on a split-tunnel VPN — connect times out | the internal host is in a routed private range reachable only from inside |
-| `workload_llm.api_base` | the internal base | the external base |
-| `workload_llm.default_model` | an id from *that* gateway's catalogue | likewise — the catalogues are **not** identical |
-| key in `team1/openai-secret` (`apikey`) | issued by the internal gateway | issued by the external one |
-| supplied at install as | `BM_WORKLOAD_LLM_KEY`, or `~/.rossoctl-kind/litellm.key` (`600`) | `TEAM_NAMESPACES`-scoped Secret already on the cluster, or the same env var |
-| set in the instance file by | `kind-service-bootstrap.sh --llm-base` / `--llm-model` (env `WORKLOAD_LLM_BASE`, `WORKLOAD_LLM_MODEL`) | `ocp-service-bootstrap.sh --llm-api-base` / `--llm-model` (env **`WORKLOAD_LLM_API_BASE`**, `WORKLOAD_LLM_MODEL`) |
-| egress proxy | bypass required if the pods inherit an `HTTP_PROXY` | same |
+| who uses it | any cluster whose pods are inside the org network — a personal KinD on the VPN, *or* an intranet OpenShift cluster | a cluster reached from outside it |
+| why not the other | the external host is not routed on a split-tunnel VPN — connect times out | the internal host is in a routed private range, reachable only from inside |
+| model catalogue | ids from *that* gateway | **not** the same ids |
+| key table | its own | its own — this is the whole problem |
 
-Four things to know before you configure either:
+#### The two variable sets
 
-- **The two env var names differ by one word.** The KinD script reads `WORKLOAD_LLM_BASE`; the
-  OpenShift script reads `WORKLOAD_LLM_API_BASE`. Exporting the other one is not an error — the
-  value is simply not picked up, and `ocp-service-bootstrap.sh` then refuses with
-  `--llm-api-base is required` while `kind-service-bootstrap.sh` warns and writes no `workload_llm`
-  at all, leaving the agent on the benchmark's built-in default.
-- **The key never travels in the instance file.** It lives only in the cluster Secret
-  `openai-secret`, key `apikey`, and reaches the pod as `OPENAI_API_KEY` through a `secretKeyRef`.
-  Moving a key between the two gateways is the single most common failure here: the tables are
-  separate, so it does not fail closed — it 401s per completion, mid-run.
-- **The proxy-bypass list is part of the gateway configuration, not a separate concern.** Where the
+Each profile is one set of environment variables, distinguished only by prefix, defined in
+`reference/llm-profiles.sh`:
+
+| `intranet` | `internet` | what it is |
+|---|---|---|
+| `INTRANET_LLM_API_BASE` | `INTERNET_LLM_API_BASE` | the gateway origin — scheme + host, no path |
+| `INTRANET_LLM_MODEL` | `INTERNET_LLM_MODEL` | a model id from **that** gateway's catalogue |
+| `INTRANET_LLM_KEY_FILE` | `INTERNET_LLM_KEY_FILE` | `chmod 600` file holding that gateway's key (default `~/.rossoctl-llm/<profile>.key`) |
+| `INTRANET_LLM_NO_PROXY` | `INTERNET_LLM_NO_PROXY` | optional explicit egress-proxy bypass list; otherwise built for you |
+
+`LLM_PROFILE=intranet|internet` (or `--llm-profile`) selects one, and the scripts copy it into the
+canonical `WORKLOAD_LLM_API_BASE` / `WORKLOAD_LLM_MODEL` / `LLM_KEY_FILE` they already read. An
+explicitly exported `WORKLOAD_LLM_*` still wins, so nothing that worked before behaves differently.
+
+Bases and model ids are not secrets, so keep them in a file instead of re-exporting per shell. The
+**keys stay out of it**, in their own per-profile files:
+
+```bash
+mkdir -p ~/.rossoctl-llm
+cat > ~/.rossoctl-llm/profiles.env <<'EOF'
+INTRANET_LLM_API_BASE=https://<internal gateway host>
+INTRANET_LLM_MODEL=openai/aws/claude-haiku-4-5
+INTERNET_LLM_API_BASE=https://<external gateway host>
+INTERNET_LLM_MODEL=openai/Azure/gpt-5-mini-2025-08-07
+EOF
+umask 077
+printf '%s' '<internal gateway key>' > ~/.rossoctl-llm/intranet.key
+printf '%s' '<external gateway key>' > ~/.rossoctl-llm/internet.key
+```
+
+Per-profile key files are the point: the two tables are separate, so one file holding "the" key is
+exactly how a key gets used against the gateway that never issued it.
+
+#### Selecting a profile for a deployment
+
+The profile is declared **once**, as `llmProfile` in the chart values file, and everything else reads
+it from there:
+
+```yaml
+# deploy/helm/values-kind.yaml            # deploy/helm/values-ykt5.yaml
+platform: kind                            # platform: openshift
+llmProfile: intranet                      # llmProfile: internet
+```
+
+```bash
+reference/ocp-service-bootstrap.sh  --llm-profile internet --cluster ykt5 --context <ctx> ...
+LLM_PROFILE=intranet reference/kind-post-setup.sh
+python3 reference/preflight.py --values deploy/helm/values-kind.yaml --context kind-rossoctl
+```
+
+The chart **does not** render the gateway into the Service pod, and cannot: the Service reads the
+gateway from `workload_llm.api_base` in the instance-config Secret (§4) — not from its own
+environment — and injects `OPENAI_API_BASE`/`LLM_API_BASE` onto each workload pod at deploy time
+(§3.3). So `llmProfile` is a **declaration**, and it does two things that matter:
+
+- the bootstrap scripts take the profile from it, so the instance file they write cannot disagree
+  with the release installed beside it;
+- `preflight.py` **FAILS** when the live instance file's `api_base` is not that profile's base:
+
+```
+FAIL  keycloak.localtest.me_8080.json: LLM gateway matches the internet profile — instance points
+      at <internal host>, the internet profile declares <external host> — separate key tables, so
+      this 401s per completion mid-run rather than failing at deploy
+```
+
+That is the entire point of naming the profiles: it converts a mid-run 401 storm, whose only visible
+symptom is a leg that finishes with zeroes, into a pre-install error. `helm` rejects a
+mistyped profile for the same reason — `llmProfile: intranett` fails the render rather than being
+quietly ignored downstream.
+
+#### Four details that have cost time
+
+- **The key never travels in the instance file.** It lives only in `openai-secret` / `apikey` in each
+  workload namespace, and reaches the pod as `OPENAI_API_KEY` through a `secretKeyRef`.
+- **The proxy-bypass list is part of the gateway's configuration, not a separate concern.** Where the
   cluster injects an egress proxy, an in-network gateway base must be excluded from it or every
   completion leaves through a proxy that cannot reach it. `workload_llm.no_proxy` (and
   `disable_proxy: true`, which injects an empty `HTTP_PROXY`/`http_proxy`) are rendered onto the
-  **agent** pod only. `ocp-service-bootstrap.sh` builds the list for you — `127.0.0.1`, `localhost`,
-  the gateway host, the collector, and Keycloak's in-cluster service. `kind-service-bootstrap.sh`
-  does **not** build it: it carries `workload_llm` over wholesale from `--copy-from`, so a KinD
-  bootstrap run without that flag silently loses the bypass list along with the base and the model.
+  **agent** pod only. Both bootstrap scripts now build the list — loopback, the gateway host, the
+  collector, and Keycloak's in-cluster service — where before only the OpenShift one did, so a KinD
+  bootstrap without `--copy-from` silently lost it.
+- **`WORKLOAD_LLM_BASE` was never a second setting.** It is an accepted alias for
+  `WORKLOAD_LLM_API_BASE` in the KinD script, kept only so existing invocations keep working; the
+  canonical name matches the instance-file field (`workload_llm.api_base`) on both platforms.
 - **Do not verify a gateway with `curl`.** LiteLLM strips the `openai/` prefix, so the configured
-  model name 403s by hand, and reasoning models reject `max_tokens` with a 400 (`max_completion_tokens`
-  is the accepted field). The only trustworthy probe is a 1-task `gsm8k` leg (§6).
+  model name 403s by hand, and reasoning models reject `max_tokens` with a 400
+  (`max_completion_tokens` is the accepted field). The only trustworthy probe is a 1-task `gsm8k`
+  leg (§6).
 
 ## 4. The instance-config Secret
 

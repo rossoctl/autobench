@@ -26,10 +26,13 @@
 #                        printf '%s' '<benchmarker password>' > ~/.rossoctl-kind/benchmarker.pass
 #   KC_ADMIN_PASSWORD  Keycloak master admin password       (optional; auto-read
 #                      from the in-cluster keycloak-initial-admin secret if unset)
-#   BM_WORKLOAD_LLM_KEY  the workload LLM key, issued by the INTERNAL gateway. If unset,
-#                      read from ~/.rossoctl-kind/litellm.key (chmod 600, override with
-#                      KC_CRED_FILE's sibling LLM_KEY_FILE). Also does not change across
-#                      upgrades, so create that file once the same way.
+#   BM_WORKLOAD_LLM_KEY  the workload LLM key, issued by the gateway this cluster can reach. If
+#                      unset, read from the selected profile's file — ~/.rossoctl-llm/<profile>.key
+#                      when LLM_PROFILE is set, else ~/.rossoctl-kind/litellm.key (chmod 600,
+#                      override with LLM_KEY_FILE). Also does not change across upgrades, so create
+#                      that file once the same way.
+#   LLM_PROFILE        intranet|internet — which gateway pair to use (see llm-profiles.sh). A kind
+#                      cluster on the org VPN is `intranet`; one on a laptop off it is `internet`.
 #                      NOT named OPENAI_API_KEY on purpose: that name is commonly exported in a
 #                      developer's shell profile for an unrelated provider, and this script writes
 #                      whatever it finds into cluster Secrets. A namespaced name cannot be
@@ -71,12 +74,24 @@ export KC_ADMIN_PASSWORD KC_USER_PASSWORD
 # table — the key ykt2/ykt5 hold is issued by the external one and 401s here. Like the
 # benchmarker password it does not change across rebuilds, so keep it in a chmod-600 file:
 #   umask 077; printf '%s' '<key>' > ~/.rossoctl-kind/litellm.key
-LLM_KEY_FILE="${LLM_KEY_FILE:-$HOME/.rossoctl-kind/litellm.key}"
-if [ -z "${BM_WORKLOAD_LLM_KEY:-}" ] && [ -f "$LLM_KEY_FILE" ]; then
-  perm="$(stat -f '%A' "$LLM_KEY_FILE" 2>/dev/null || stat -c '%a' "$LLM_KEY_FILE" 2>/dev/null || echo '')"
-  case "$perm" in 600|400) ;; *) echo "refusing: $LLM_KEY_FILE must be chmod 600 (is ${perm:-unknown})" >&2; exit 1 ;; esac
-  IFS= read -r BM_WORKLOAD_LLM_KEY < "$LLM_KEY_FILE" || true
+# Set LLM_PROFILE=intranet|internet and the key comes from that profile's own file
+# (~/.rossoctl-llm/<profile>.key), along with the api_base and model the instance file will carry —
+# see llm-profiles.sh. Per-profile files are the point: the two gateways keep separate key tables, so
+# a single file holding "the" key is exactly how a key gets used against the gateway that never
+# issued it. With no profile set, the legacy per-cluster path still works unchanged.
+# shellcheck source=reference/llm-profiles.sh
+. "$REFERENCE_DIR/llm-profiles.sh"
+llm_profile_resolve || exit 1
+LEGACY_LLM_KEY_FILE="$HOME/.rossoctl-kind/litellm.key"
+[ -n "${LLM_KEY_FILE:-}" ] || LLM_KEY_FILE="$LEGACY_LLM_KEY_FILE"
+llm_profile_load_key || exit 1
+if [ -z "${BM_WORKLOAD_LLM_KEY:-}" ] && [ "$LLM_KEY_FILE" != "$LEGACY_LLM_KEY_FILE" ] \
+   && [ -f "$LEGACY_LLM_KEY_FILE" ]; then
+  echo "NOTE: $LLM_KEY_FILE is absent; falling back to $LEGACY_LLM_KEY_FILE" >&2
+  LLM_KEY_FILE="$LEGACY_LLM_KEY_FILE"
+  llm_profile_load_key || exit 1
 fi
+export LLM_PROFILE   # kind-service-bootstrap.sh writes the matching api_base/model/no_proxy
 
 # --- 0. safety: act on the kind cluster only ---
 kubectl config use-context "$CTX" >/dev/null

@@ -21,6 +21,31 @@
 # raw-manifest install").
 platform: openshift
 
+# Which LLM gateway this cluster's workloads must use: intranet | internet (empty = undeclared).
+#
+# ORTHOGONAL TO `platform`, deliberately. The gateway follows where the cluster sits on the NETWORK,
+# not which Kubernetes it runs: an OpenShift cluster deployed on the organisation's intranet uses
+# `intranet`, exactly like a local kind cluster on the VPN, while a kind cluster on a laptop off the
+# VPN uses `internet`. Nothing derives one value from the other.
+#
+# The chart does NOT render this into the Service pod, because the Service does not read the gateway
+# from its environment — the gateway is `workload_llm.api_base` in the instance-config Secret, which
+# the chart references and never creates (see `instancesSecret` below), and the Service injects
+# OPENAI_API_BASE/LLM_API_BASE from it onto each workload pod at deploy time. So this value has two
+# jobs, both real:
+#
+#   1. it is the single declaration of intent, read by reference/{kind,ocp}-service-bootstrap.sh
+#      (`--llm-profile`, or `LLM_PROFILE`) so the instance file they write cannot disagree with the
+#      release that is installed beside it;
+#   2. reference/preflight.py FAILS when the live instance file's api_base is not this profile's
+#      base — which turns "401 per completion, mid-run, leg finishes with zeroes" into a pre-install
+#      error, the whole reason the two profiles are named rather than typed out per cluster.
+#
+# The bases, models and key files themselves are NOT chart values: they are the INTRANET_LLM_* /
+# INTERNET_LLM_* environment sets documented in reference/llm-profiles.sh, because one of them is a
+# credential path and this repo is public.
+llmProfile: ""
+
 image:
   repository: ghcr.io/rossoctl/autobench
   # Defaults to .Chart.AppVersion when empty.

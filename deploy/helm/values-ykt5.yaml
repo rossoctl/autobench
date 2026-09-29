@@ -7,6 +7,11 @@
 # The instance-config Secret must exist first — see the chart's values.yaml.
 platform: openshift
 
+# ykt5 is reached from outside the organisation's network, so it uses the EXTERNAL gateway. This is
+# a property of the cluster's placement, not of OpenShift: an OpenShift cluster on the intranet
+# would declare `intranet` here and use the same gateway a local kind cluster does.
+llmProfile: internet
+
 route:
   enabled: true
   # Empty: the router generates autobench-<namespace>.apps.<cluster>, matching ykt3's Route.

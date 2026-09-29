@@ -31,3 +31,17 @@ Fail loudly on an unknown platform rather than silently rendering the wrong secu
 {{- end -}}
 {{- $p -}}
 {{- end -}}
+
+{{/*
+The declared LLM gateway profile. Empty is allowed — an install that predates the profiles, or one
+whose gateway is set only in the instance file — but a typo is not: `intranett` would otherwise be
+silently accepted here and then silently ignored by the bootstrap scripts, which is the failure mode
+this whole mechanism exists to remove.
+*/}}
+{{- define "autobench.llmProfile" -}}
+{{- $p := .Values.llmProfile | default "" -}}
+{{- if not (or (eq $p "") (eq $p "intranet") (eq $p "internet")) -}}
+{{- fail (printf "llmProfile must be \"intranet\", \"internet\" or empty, got %q" $p) -}}
+{{- end -}}
+{{- $p -}}
+{{- end -}}

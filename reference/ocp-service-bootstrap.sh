@@ -46,8 +46,12 @@ Flags (each also has an env fallback):
   --mlflow-workspace W  MLFLOW_WORKSPACE      (default: read from the collector's export headers)
   --mlflow-token-secret S  MLFLOW_TOKEN_SECRET  ServiceAccount-token Secret holding the read
                         bearer, in rossoctl-system (default: mlflow-reader-token)
-  --llm-api-base URL    WORKLOAD_LLM_API_BASE   the EXTERNAL gateway (no default — required, and
-                        deliberately not baked in: this repo is public)
+  --llm-profile P       LLM_PROFILE        intranet|internet — selects the INTRANET_LLM_* or
+                        INTERNET_LLM_* variable set (see llm-profiles.sh). An OpenShift cluster on
+                        the organisation's intranet uses `intranet`, same as a local kind cluster:
+                        the gateway follows the NETWORK, not the platform.
+  --llm-api-base URL    WORKLOAD_LLM_API_BASE   gateway origin; overrides the profile's. No default
+                        and not baked in: this repo is public)
   --llm-model M         WORKLOAD_LLM_MODEL      (default: openai/Azure/gpt-5-mini-2025-08-07)
   --otel-endpoint URL   WORKLOAD_OTEL_ENDPOINT  (default: the in-cluster collector on :8335)
   --otel-insecure B     WORKLOAD_OTEL_INSECURE  true|false (default: true for an in-cluster http URL)
@@ -115,6 +119,7 @@ while [ $# -gt 0 ]; do
         --mlflow-experiment)  MLFLOW_EXPERIMENT_ID="$2"; shift 2 ;;
         --mlflow-workspace)   MLFLOW_WORKSPACE="$2"; shift 2 ;;
         --mlflow-token-secret) MLFLOW_TOKEN_SECRET="$2"; shift 2 ;;
+        --llm-profile)        LLM_PROFILE="$2"; shift 2 ;;
         --llm-api-base)       WORKLOAD_LLM_API_BASE="$2"; shift 2 ;;
         --llm-model)          WORKLOAD_LLM_MODEL="$2"; shift 2 ;;
         --otel-endpoint)      WORKLOAD_OTEL_ENDPOINT="$2"; shift 2 ;;
@@ -133,7 +138,10 @@ done
 [ -n "$CLUSTER" ] || { usage; die "--cluster is required"; }
 [ -n "${KC_SERVICE_USERNAME:-}" ] || die "KC_SERVICE_USERNAME must be set in the environment"
 [ -n "${KC_SERVICE_PASSWORD:-}" ] || die "KC_SERVICE_PASSWORD must be set in the environment"
-[ -n "$WORKLOAD_LLM_API_BASE" ] || die "--llm-api-base is required (the EXTERNAL gateway; the internal one is kind-only)"
+# shellcheck source=reference/llm-profiles.sh
+. "$(dirname "${BASH_SOURCE[0]}")/llm-profiles.sh"
+llm_profile_resolve || die "could not resolve LLM_PROFILE=${LLM_PROFILE:-}"
+[ -n "$WORKLOAD_LLM_API_BASE" ] || die "a gateway is required: --llm-profile intranet|internet, or --llm-api-base"
 command -v "$KUBECTL_BIN" >/dev/null || die "$KUBECTL_BIN is required"
 
 APPS_DOMAIN="${APPS_DOMAIN:-apps.${CLUSTER}.hcp.res.ibm.com}"
@@ -281,12 +289,22 @@ for ns in $TEAM_NAMESPACES; do
         || check "hf-secret in ${ns}" 1 "absent — the MCP pod stays in CreateContainerConfigError"
 done
 
-# The gateway this config points the workloads at must be the one whose key table issued that key.
-case "$WORKLOAD_LLM_API_BASE" in
-    *vpc-int*) check "LLM gateway is the external one" 1 \
-        "--llm-api-base names the INTERNAL (vpc-int) gateway, which is kind-only; its key table is separate" ;;
-    *)         check "LLM gateway is the external one" 0 ;;
-esac
+# The gateway this config points the workloads at must be the one whose key table issued the key in
+# openai-secret. Which gateway that is depends on where this cluster sits on the network — an
+# OpenShift cluster on the intranet uses the internal one — so the only thing assertable here is
+# that the base agrees with the DECLARED profile. With no profile declared there is nothing to
+# compare against and the check is skipped rather than guessed: the previous version of this check
+# rejected the internal gateway outright, which is wrong for an intranet OpenShift cluster.
+if [ -n "${LLM_PROFILE:-}" ]; then
+    if llm_profile_base_matches "$WORKLOAD_LLM_API_BASE"; then
+        check "LLM gateway matches the ${LLM_PROFILE} profile" 0
+    else
+        check "LLM gateway matches the ${LLM_PROFILE} profile" 1 \
+            "--llm-api-base is not the ${LLM_PROFILE} profile's base; the two gateways keep separate key tables, so this 401s per completion mid-run"
+    fi
+else
+    warn "no --llm-profile: the base cannot be checked against the gateway that issued the key"
+fi
 
 # The collector's HTTP receiver. The shipped ConfigMap says 4318, but the Deployment overrides it
 # on the command line (`--set receivers::otlp::protocols::http::endpoint=0.0.0.0:8335`), so 8335 is

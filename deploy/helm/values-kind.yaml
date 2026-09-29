@@ -8,6 +8,11 @@
 # team secrets and the instance config, and the chart is only the last step of that.
 platform: kind
 
+# This laptop's kind cluster is on the organisation VPN, so its workloads must use the INTERNAL
+# gateway — the external one is not routed on a split tunnel. Change to `internet` for a kind
+# cluster off the VPN; nothing about `platform: kind` implies either.
+llmProfile: intranet
+
 # There is no Route CRD on kind; ingress is the shared istio gateway.
 route:
   enabled: false
