@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-09-29T04:14:57Z
+**Last modified:** 2026-09-29T04:20:05Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -551,7 +551,10 @@ like missing telemetry rather than a refused read. It is a "reader" by conventio
 settings are measured rather than chosen: `--workers 1` (MLflow 3.x defaults to four) and a **4Gi**
 limit. Gate on a 200 from `/api/2.0/mlflow/traces` rather than on the pod going Ready — two pip
 installs run at container start — and pass `experiment_ids`, since that endpoint answers 400
-without it. Point the collector at it with:
+without it. Probe from **inside** the pod (MLflow 3.x rejects the API server's service proxy as a
+DNS-rebinding attempt) with `python`, not `curl`, which the image does not ship.
+`reference/kind-post-setup.sh` does all of this, including pointing the collector at the reader;
+by hand it is:
 
 ```bash
 python3 reference/kind-collector-mlflow.py            # patch + restart; idempotent

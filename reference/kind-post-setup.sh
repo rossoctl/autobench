@@ -9,9 +9,13 @@
 #   1. build + kind-load the autobench image
 #   2. re-seed the `benchmarker` Keycloak user (incl. the firstName/lastName the
 #      realm requires for ROPC — keycloak-ensure-user.sh omits them)
-#   3. generate the per-instance config + create the autobench-instances secret
-#   4. deploy the Service (Deployment + Service + kind HTTPRoute), pinned to the image
-#   5. verify /healthz
+#   3. stand up the MLflow read path (mlflow-reader + point the collector at it)
+#   4. generate the per-instance config + create the autobench-instances secret
+#   5. deploy the Service (Deployment + Service + kind HTTPRoute), pinned to the image
+#   6. verify /healthz
+#
+# Step 3 is not optional if you want token reports: without it the collector's export 401s against
+# the OIDC-gated MLflow and every run publishes `model: "unknown"` with zero tokens, successfully.
 #
 # DEV/TEST ONLY. No secret is ever echoed. Secrets are resolved as:
 #   KC_USER_PASSWORD   the `benchmarker` password. If unset, read from a chmod-600
@@ -161,13 +165,58 @@ if [ -z "${BM_WORKLOAD_LLM_KEY:-}" ]; then
   echo "      so MCP pods start and every completion 401s. Install the key, then re-run this script." >&2
 fi
 
+# --- 2c. the MLflow read path (without it every token count in every report reads 0) ---
+# Two halves, and both have to point at the same place: mlflow-reader serves the writer's postgres
+# with no auth, and the collector has to export to IT rather than to the OIDC-gated `mlflow` that
+# rossoctl-deps installs. Getting this wrong is silent — the run passes, `model` is "unknown", and
+# every token count is 0, which reads like an agent that emitted no telemetry.
+echo "==> ensuring the MLflow read path (mlflow-reader + collector export)"
+kubectl --context "$CTX" apply -f "$BENCH_REPO/deploy/kind/mlflow-reader.yaml"
+kubectl --context "$CTX" -n rossoctl-system rollout status deploy/mlflow-reader --timeout=300s
+# Gate on the API, not on the pod: two pip installs run at container start, so Ready precedes
+# usable by a wide margin. Three details make this the only probe that works: the query runs from
+# INSIDE the pod (MLflow 3.x rejects the API server's service proxy as a DNS-rebinding attempt),
+# `experiment_ids` is required (without it the endpoint answers 400, which reads like a broken
+# server), and the image ships no curl — python is what is there.
+MLFLOW_PROBE="import urllib.request;urllib.request.urlopen('http://localhost:5000/api/2.0/mlflow/traces?experiment_ids=0&max_results=1',timeout=10)"
+MLFLOW_READY=0
+for _ in $(seq 1 30); do
+  if kubectl --context "$CTX" -n rossoctl-system exec deploy/mlflow-reader -- \
+      python -c "$MLFLOW_PROBE" >/dev/null 2>&1; then
+    MLFLOW_READY=1; break
+  fi
+  sleep 5
+done
+if [ "$MLFLOW_READY" = 1 ]; then
+  echo "==> mlflow-reader answers /api/2.0/mlflow/traces"
+else
+  echo "WARNING: mlflow-reader is Ready but its traces API is not answering — token reports will be" >&2
+  echo "         empty. Check the container's lastState: one MLflow 3.x worker idles at ~2.3 GiB, so" >&2
+  echo "         an OOMKill leaves a log ending on 'Application startup complete' with no error." >&2
+fi
+python3 "$REFERENCE_DIR/kind-collector-mlflow.py" --context "$CTX"
+
 # --- 3. generate per-instance config + (re)create the autobench-instances secret ---
 echo "==> generating instance config + secret"
 export KC_SERVICE_USERNAME="$BENCH_USER" KC_SERVICE_PASSWORD="$KC_USER_PASSWORD"
 OUT_DIR="$(mktemp -d)"; trap 'rm -rf "$OUT_DIR"' EXIT
+# `s3` and `workload_llm` cannot be discovered from a cluster — which bucket credentials to publish
+# with, and which gateway issued the key in openai-secret. Carry them over from the last generated
+# file (instances/ is gitignored and survives a cluster rebuild), or they are dropped silently and
+# the run publishes nothing.
+COPY_FROM="${COPY_FROM:-$BENCH_REPO/instances/keycloak.localtest.me_8080.json}"
+COPY_ARGS=()
+if [ -f "$COPY_FROM" ]; then
+  COPY_ARGS=(--copy-from "$COPY_FROM")
+  echo "==> carrying s3 + workload_llm over from $(basename "$COPY_FROM")"
+else
+  echo "NOTE: no previous instance file at $COPY_FROM — the generated config will have no s3" >&2
+  echo "      (artifacts unpublished) and no workload_llm (the agent uses the image default)." >&2
+  echo "      Pass COPY_FROM=<file>, or --llm-base/--llm-model to kind-service-bootstrap.sh." >&2
+fi
 "$REFERENCE_DIR/kind-service-bootstrap.sh" \
   --cluster "$CLUSTER" --context "$CTX" --realm "$REALM" --client "$CLIENT" \
-  --keycloak-host "$KC_HOST" --out-dir "$OUT_DIR"
+  --keycloak-host "$KC_HOST" --out-dir "$OUT_DIR" "${COPY_ARGS[@]}"
 FROM_FILE_ARGS=()
 for f in "$OUT_DIR"/*.json; do FROM_FILE_ARGS+=(--from-file="$(basename "$f")=$f"); done
 kubectl --context "$CTX" -n rossoctl-system create secret generic autobench-instances \
