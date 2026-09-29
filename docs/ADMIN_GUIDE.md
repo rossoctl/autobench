@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-09-29T04:20:05Z
+**Last modified:** 2026-09-29T22:12:31Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -42,6 +42,7 @@ install, §6 is the only verification that means anything.
   - [3.3 The workload pods — injected, not configured](#33-the-workload-pods--injected-not-configured)
   - [3.4 KinD and OpenShift differ — and the differences fail silently](#34-kind-and-openshift-differ--and-the-differences-fail-silently)
   - [3.5 The LiteLLM gateway: two named profiles](#35-the-litellm-gateway-two-named-profiles)
+  - [3.6 The `benchmarker` password: how it gets in, and how it is checked](#36-the-benchmarker-password-how-it-gets-in-and-how-it-is-checked)
 - [4. The instance-config Secret](#4-the-instance-config-secret)
 - [5. Installing with Helm](#5-installing-with-helm)
   - [5.1 OpenShift](#51-openshift)
@@ -127,7 +128,7 @@ find it by reading logs at the layer where it hurts.
 |---|---|---|
 | Rossoctl ≥ v0.8.0 | `rossoctl-system` | fields dropped from the deploy request, silently (§2.1) |
 | `agentruntimes` + `agentcards` CRDs | cluster | `/deploy` fails at the operator |
-| `benchmarker` user, **ROPC enabled** on the client | realm | token request 400s; on this realm a missing `firstName`/`lastName` yields `Account is not fully set up` |
+| `benchmarker` user with a **password credential**, **ROPC enabled** on the client | realm | token request 400s; on this realm a missing `firstName`/`lastName` yields `Account is not fully set up`. Checked in two tiers, because ROPC alone cannot distinguish a wrong password from an absent one (§3.6) |
 | `rossoctl-operator` realm role on that user | realm | `/deploy` surfaces the operator's 403 as a **502** |
 | `openai-secret` / `apikey` | `team1` | empty or foreign key ⇒ a 401 **per completion, mid-run**; the leg finishes with zeroes rather than failing |
 | `hf-secret` / `hf-token` (may be empty) | `team1` | MCP pod `CreateContainerConfigError`, the agent then crash-loops against it, and the *run* reports 424 |
@@ -200,9 +201,19 @@ first:
   cluster — and a `workload_otel` endpoint on `:443` is resolved through the Route to the
   collector's port instead of being rejected.
 
-Setting `KC_SERVICE_USERNAME` and `KC_SERVICE_PASSWORD` in the environment enables the two
-identity checks (an actual ROPC login, and the `rossoctl-operator` role). Without them those two
-are skipped, not failed.
+The **identity** section is the one that needs a credential from you, and it is not optional in
+practice: every `/deploy` the Service makes is a ROPC login as `benchmarker`, so a password that is
+absent, stale or blocked by a required action does not degrade the install — it makes every run fail
+with a 502 wrapping a 403. Pass it in and preflight logs in for real:
+
+```bash
+python3 reference/preflight.py --platform kind --context kind-rossoctl \
+        --password-file ~/.rossoctl-kind/benchmarker.pass
+```
+
+With no password at all the script falls back to the one inside the instance Secret, which is the
+copy that actually matters. §3.6 covers the four intake routes, the two tiers of the check, and what
+each failure cause means.
 
 ## 3. Environment variables
 
@@ -217,11 +228,13 @@ used once, and hashed if it is reported at all.
 
 | variable | used by | notes |
 |---|---|---|
-| `KC_SERVICE_USERNAME` | both bootstrap scripts, `preflight.py` | the ROPC login the Service uses against Rossoctl (`benchmarker`) |
-| `KC_SERVICE_PASSWORD` | both bootstrap scripts, `preflight.py` | **required**; written into the instance file, never echoed |
+| `KC_SERVICE_USERNAME` | both bootstrap scripts, `preflight.py` | the ROPC login the Service uses against Rossoctl (default `benchmarker`); `--username` overrides |
+| `KC_SERVICE_PASSWORD` | both bootstrap scripts, `preflight.py` | **required**; written into the instance file, never echoed. `--password-file` / `--password-stdin` / `--password` take precedence (§3.6) |
 | `KC_SERVICE_CLIENT_SECRET` | both bootstrap scripts | only if the Keycloak client is confidential |
-| `KC_USER_PASSWORD` | `kind-post-setup.sh` | the password to *seed*; falls back to `~/.rossoctl-kind/benchmarker.pass` (`KC_CRED_FILE`) |
-| `KC_ADMIN_PASSWORD` | `kind-post-setup.sh` | optional — read from the in-cluster `keycloak-initial-admin` Secret when unset |
+| `KC_USER_PASSWORD` | `kind-post-setup.sh` | the password to *seed*; the same three flags override it, and it falls back to `~/.rossoctl-kind/benchmarker.pass` (`KC_CRED_FILE`) |
+| `KC_ADMIN_PASSWORD` | `kind-post-setup.sh`, `preflight.py` | optional — read from the in-cluster `keycloak-initial-admin` Secret when unset. In `preflight.py` it enables the Admin-API tier of §3.6 |
+| `KC_ADMIN_USER` | `preflight.py` | optional, default `admin` — the master-realm admin the Admin-API tier logs in as |
+| `KC_ISS` | `preflight.py` | optional — the issuer to log in against, when neither `--iss` nor the instance file supplies one |
 | `LLM_PROFILE` | both bootstrap scripts, `kind-post-setup.sh`, `preflight.py` | `intranet` \| `internet` — selects one of the two gateway variable sets (§3.5) |
 | `INTRANET_LLM_*` / `INTERNET_LLM_*` | `reference/llm-profiles.sh`, read by all of the above | the profiles themselves: base, model, key file, optional bypass list (§3.5) |
 | `BM_WORKLOAD_LLM_KEY` | `kind-post-setup.sh` | the workload LLM key; falls back to the selected profile's key file, else `~/.rossoctl-kind/litellm.key` (`LLM_KEY_FILE`) |
@@ -428,6 +441,101 @@ quietly ignored downstream.
   (`max_completion_tokens` is the accepted field). The only trustworthy probe is a 1-task `gsm8k`
   leg (§6).
 
+### 3.6 The `benchmarker` password: how it gets in, and how it is checked
+
+This credential is load-bearing **per run**, not per install. The Service holds no cluster
+credential of its own: each `POST /benchmarks/{name}/deploy` is a fresh ROPC password grant as
+`benchmarker` against the realm, and the resulting token is what Rossoctl authorises. An install can
+therefore be completely healthy — pod Running, `/healthz` 200, `GET /benchmarks` listing every
+benchmark — and still fail every single run with a 502 that wraps Keycloak's 403.
+
+There is no Keycloak object scoped to `team1`, incidentally: `team1` is a Kubernetes namespace, and
+the authorisation artifact for deploying into it is the **`rossoctl-operator` realm role** on the
+user in the `rossoctl` realm. So "is the password set for team1" is really five questions — does the
+user exist, is it enabled, does it have a `password` credential, is its profile complete enough for
+the realm to issue a token, and does it carry that role — and the checks below answer them
+separately.
+
+#### Four ways in, in precedence order
+
+Every script that needs the password takes the same four, most explicit first:
+
+| route | used as | notes |
+|---|---|---|
+| `--password-file F` | `preflight.py`, both bootstrap scripts, `kind-post-setup.sh` | **preferred.** The value never reaches argv or an environment. The file must be `600` or `400` or it is refused |
+| `--password-stdin` | same | for a pipeline or a secret manager: `pass show … \| script --password-stdin` |
+| `--password P` | same | accepted, and warns every time: argv is world-readable through `ps` and `/proc/<pid>/cmdline`, and it lands in your shell history |
+| the environment | `KC_SERVICE_PASSWORD` (bootstrap, preflight), `KC_USER_PASSWORD` (`kind-post-setup.sh`) | the original route, unchanged |
+
+Two conveniences on top: `kind-post-setup.sh` falls back to `~/.rossoctl-kind/benchmarker.pass`
+(`KC_CRED_FILE`), so on KinD no credential flag is ever needed; and `preflight.py` falls back to the
+`service_credential` inside the live `autobench-instances` Secret, so it can check an install whose
+password you do not have to hand.
+
+Only the **source** is printed, alongside an 8-char SHA-256 prefix of the value:
+
+```
+Identity — the benchmarker credential every /deploy authenticates with
+  ok    benchmarker password from file ~/.rossoctl-kind/benchmarker.pass — user benchmarker, sha8 8bb6f116
+```
+
+That hash is also how the supplied password is compared against the Secret's copy without either
+being shown. **A mismatch is a FAILURE, not a warning** — the Secret's copy is the one the Service
+presents, so a green preflight next to a Service that 502s on every deploy would be worse than no
+check at all.
+
+Because a trailing newline is welded onto the value by every editor, the file readers take the
+**first line only**. A password with `\n` on the end fails ROPC with exactly the message a wrong
+password gives.
+
+#### Two tiers, because ROPC cannot tell three failures apart
+
+Keycloak answers `invalid_grant` / "Invalid user credentials" identically for a **wrong password**, a
+user with **no password credential**, and **no such user**. Those need three different fixes, so
+`preflight.py` asks the Admin REST API first when it can, and the ROPC login second:
+
+```
+  ok    user benchmarker exists in realm rossoctl — id e7557a3c-0a9f-4427-9d1a-3ab69727abc4
+  ok    password credential set on benchmarker — credential type(s): password
+  ok    ROPC login as benchmarker — against http://keycloak.localtest.me:8080/realms/rossoctl
+  ok    realm role rossoctl-operator
+```
+
+The admin tier needs `KC_ADMIN_PASSWORD`, or an in-cluster `keycloak-initial-admin` Secret (which is
+how KinD ships — nothing to supply there). Without one it is skipped with a note and the ROPC login
+stands alone as the behavioural check. When the tier *has* run, its finding is threaded into the
+failure text, which is the difference between a guess and an answer:
+
+```
+FAIL  ROPC login as benchmarker — 'Invalid user credentials' — a password credential IS set on this
+      user (checked above), so the password given to this script is not the one Keycloak holds.
+```
+
+The causes and their fixes:
+
+| cause | what it means | fix |
+|---|---|---|
+| `Invalid user credentials`, password credential **is** set | the password you supplied is not the one Keycloak holds | supply the right one, or re-seed with `reference/keycloak-ensure-user.sh` |
+| `Invalid user credentials`, **no** password credential | the user exists with no password at all | `reference/keycloak-ensure-user.sh` |
+| `Invalid user credentials`, **no such user** | not in this realm | `reference/keycloak-ensure-user.sh`; check you have the right realm |
+| `Account is not fully set up` | the password may be **correct** — a required action is pending, or `firstName`/`lastName` are unset, which this realm's user profile demands before it issues a token | set both (`kind-post-setup.sh` patches them), clear the required action |
+| `unauthorized_client` / `invalid_client` | the client is confidential, or has `directAccessGrantsEnabled: false` | `KC_SERVICE_CLIENT_SECRET`, or `keycloak-ensure-user.sh`, which enables Direct Access Grants idempotently |
+| login ok, role missing | every `/deploy` will 403 | grant the `rossoctl-operator` realm role |
+
+#### Where in the flow each script checks
+
+- **`kind-post-setup.sh`** seeds the user, then patches `firstName`/`lastName`, then grants the role.
+  It deliberately calls `keycloak-ensure-user.sh` *without* `--verify`: before that patch the realm
+  refuses a token no matter how correct the password is, so verifying there would fail on a healthy
+  setup.
+- **`kind-service-bootstrap.sh`** verifies at the end of that chain, immediately before it writes the
+  password into the instance file, and **dies** rather than writing an unusable one. It also warns
+  when the token carries no `rossoctl-operator` role. `SKIP_CRED_CHECK=1` writes the file anyway —
+  only useful when Keycloak is not reachable from where you are running.
+- **`ocp-service-bootstrap.sh`** reports the source as a precheck row and logs in as another,
+  alongside the Rossoctl-version and gateway-profile checks.
+- **`preflight.py`** is the read-only pre-`helm` gate, and the only one with the admin tier.
+
 ## 4. The instance-config Secret
 
 One JSON file per issuer, keyed by `iss`, mounted read-only at `/etc/service/instances`. **No
@@ -437,19 +545,22 @@ generated out-of-band and must never pass through Helm values or a values file.
 One script per platform, so the file has reproducible provenance instead of being hand-assembled:
 
 ```bash
-# OpenShift — runs eleven prechecks before it writes anything
-KC_SERVICE_USERNAME=benchmarker KC_SERVICE_PASSWORD=… \
+# OpenShift — prechecks the whole chain (ten rows on a single-namespace cluster) before writing
 reference/ocp-service-bootstrap.sh --cluster ykt5 --context <ctx> \
   --apps-domain apps.ykt5.example.com \
+  --password-file ~/.rossoctl-ykt5/benchmarker.pass \
   --llm-api-base https://<external-gateway>/v1 \
   --out-dir instances/
 
-# KinD
-KC_SERVICE_USERNAME=benchmarker KC_SERVICE_PASSWORD=… \
+# KinD — verifies the credential before writing it into the file
 reference/kind-service-bootstrap.sh --context kind-rossoctl \
+  --password-file ~/.rossoctl-kind/benchmarker.pass \
   --copy-from instances/keycloak.localtest.me_8080.json \
   --out-dir instances/
 ```
+
+Both also accept `--password-stdin`, `--password`, or `KC_SERVICE_PASSWORD` in the environment, and
+default the user to `benchmarker` (`--username` overrides) — see §3.6.
 
 Then, on either platform:
 
@@ -510,7 +621,8 @@ selector is immutable. If the check fails, the chart is wrong — not the manife
 ### 5.1 OpenShift
 
 ```bash
-python3 reference/preflight.py --platform openshift --context <ctx>        # 0 failures first
+python3 reference/preflight.py --platform openshift --context <ctx> \
+        --password-file ~/.rossoctl-ykt5/benchmarker.pass                  # 0 failures first
 helm upgrade --install autobench deploy/helm/autobench \
   -n rossoctl-system --kube-context <ctx> -f deploy/helm/values-ykt5.yaml
 oc -n rossoctl-system rollout status deploy/autobench-service
@@ -532,7 +644,8 @@ alone it installs a pod with nothing to authenticate as.
 ```bash
 IMAGE=ghcr.io/rossoctl/autobench:v1.29 reference/kind-post-setup.sh    # first time / after a rebuild
 
-python3 reference/preflight.py --platform kind --context kind-rossoctl
+python3 reference/preflight.py --platform kind --context kind-rossoctl \
+        --password-file ~/.rossoctl-kind/benchmarker.pass
 helm upgrade --install autobench deploy/helm/autobench \
   -n rossoctl-system --kube-context kind-rossoctl -f deploy/helm/values-kind.yaml
 curl -fsS http://autobench.localtest.me:8080/healthz                  # {"status":"ok"}
@@ -629,7 +742,7 @@ not emit spans for. Preflight separates the first three; only a run separates th
 | symptom | actual cause | how to confirm |
 |---|---|---|
 | run passes, every token count 0, `model: "unknown"` | refused MLflow read, wrong experiment id, unreachable collector, or the wrong `workload_agent_runner` | §2.4, then §6 |
-| `/deploy` returns **502** | the operator returned 403 — the service user lacks the `rossoctl-operator` realm role | the role mapping in the realm |
+| `/deploy` returns **502** | Keycloak or the operator returned 403 — the service credential no longer logs in, or the user lacks the `rossoctl-operator` realm role. The install itself looks healthy: the password is only used per deploy | `preflight.py --password-file …` (§3.6); then the role mapping in the realm |
 | `/deploy` returns **424**, agent `CrashLoopBackOff` | collector endpoint on 4318, or `hf-secret` missing so the MCP pod never started | the collector's `command`; `get secret hf-secret` |
 | token request 400 `Account is not fully set up` | the realm requires `firstName`/`lastName` for ROPC | the user's profile |
 | tasks error on the first completion, run finishes with zeroes | `openai-secret` empty, or holding the *other* gateway's key | `preflight.py` prints both namespaces' `sha8`; compare them |

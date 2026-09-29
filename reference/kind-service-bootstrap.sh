@@ -61,6 +61,12 @@ Flags (each also has an env fallback):
   --out-dir DIR        OUT_DIR            where to write the config (default: ./instances)
   --kubectl BIN        KUBECTL_BIN        kubectl binary            (default: kubectl)
   --client ID          KC_SERVICE_CLIENT_ID  client the Service logs in through (default: rossoctl)
+  --username U         KC_SERVICE_USERNAME   the user the Service logs in as (default: benchmarker)
+  --password-file F    the benchmarker password from a chmod-600 file. PREFERRED — the value never
+                                          reaches argv, so `ps` cannot see it and it is not left in
+                                          shell history.
+  --password-stdin     read the password from stdin (pipeline or secret manager)
+  --password P         the password on the command line — accepted, but argv is world-readable
   -h, --help
 
 MLflow on kind: the `mlflow` Deployment rossoctl-deps installs runs mlflow-oidc-auth, which
@@ -75,12 +81,16 @@ BACKCHANNEL URL (not composed from iss — the iss host is unreachable in-cluste
 iss is stored for identity matching only. That credential is the `benchmarker`
 identity — per-instance by design, seeded here as a deploy-time default and
 overridable at runtime via the benchmarker config API. The generated file
-therefore carries it. Secrets are read from the environment, never the
-command line:
-  KC_SERVICE_USERNAME        benchmarker login username     (required)
-  KC_SERVICE_PASSWORD        benchmarker login password     (required)
+therefore carries it:
+  KC_SERVICE_USERNAME        login username     (required; --username overrides)
+  KC_SERVICE_PASSWORD        login password     (required unless a --password* flag is given)
   KC_SERVICE_CLIENT_SECRET   client secret, if confidential (optional)
 No cluster credential is written — Rossoctl performs cluster ops server-side.
+
+Because the generated file BAKES that password in, the script logs in with it before writing:
+every /deploy the Service makes is a ROPC login as this user, so a wrong one produces an install
+that looks healthy and a 502 wrapping a 403 on every single run. Set SKIP_CRED_CHECK=1 to write
+the file anyway (only useful when Keycloak is not reachable from here yet).
 EOF
 }
 
@@ -115,9 +125,13 @@ S3_PREFIX="${S3_PREFIX:-kind/}"
 OUT_DIR="${OUT_DIR:-./instances}"
 KUBECTL_BIN="${KUBECTL_BIN:-kubectl}"
 KC_SERVICE_CLIENT_ID="${KC_SERVICE_CLIENT_ID:-rossoctl}"
-KC_SERVICE_USERNAME="${KC_SERVICE_USERNAME:-}"
+KC_SERVICE_USERNAME="${KC_SERVICE_USERNAME:-benchmarker}"
 KC_SERVICE_PASSWORD="${KC_SERVICE_PASSWORD:-}"
 KC_SERVICE_CLIENT_SECRET="${KC_SERVICE_CLIENT_SECRET:-}"
+SKIP_CRED_CHECK="${SKIP_CRED_CHECK:-}"
+CRED_PASSWORD_FILE=""
+CRED_PASSWORD_STDIN=""
+CRED_PASSWORD_ARGV=""
 
 # --- flag parsing ---
 while [ $# -gt 0 ]; do
@@ -141,6 +155,10 @@ while [ $# -gt 0 ]; do
         --out-dir)          OUT_DIR="$2"; shift 2 ;;
         --kubectl)          KUBECTL_BIN="$2"; shift 2 ;;
         --client)           KC_SERVICE_CLIENT_ID="$2"; shift 2 ;;
+        --username)         KC_SERVICE_USERNAME="$2"; shift 2 ;;
+        --password-file)    CRED_PASSWORD_FILE="$2"; shift 2 ;;
+        --password-stdin)   CRED_PASSWORD_STDIN=1; shift ;;
+        --password)         CRED_PASSWORD_ARGV="$2"; shift 2 ;;
         -h|--help)          usage; exit 0 ;;
         *)                  usage; die "unknown argument '$1'" ;;
     esac
@@ -152,8 +170,21 @@ command -v "$KUBECTL_BIN" >/dev/null || die "$KUBECTL_BIN is required"
 # shellcheck source=reference/llm-profiles.sh
 . "$(dirname "${BASH_SOURCE[0]}")/llm-profiles.sh"
 llm_profile_resolve || die "could not resolve LLM_PROFILE=${LLM_PROFILE:-}"
-[ -n "$KC_SERVICE_USERNAME" ] || die "KC_SERVICE_USERNAME must be set in the environment (Service ROPC login username)"
-[ -n "$KC_SERVICE_PASSWORD" ] || die "KC_SERVICE_PASSWORD must be set in the environment (Service ROPC login password)"
+[ -n "$KC_SERVICE_USERNAME" ] || die "--username (or KC_SERVICE_USERNAME) must not be empty"
+
+# shellcheck source=reference/credfile.sh
+. "$(dirname "${BASH_SOURCE[0]}")/credfile.sh"
+CRED_N=0
+[ -n "$CRED_PASSWORD_FILE" ]  && CRED_N=$((CRED_N+1))
+[ -n "$CRED_PASSWORD_STDIN" ] && CRED_N=$((CRED_N+1))
+[ -n "$CRED_PASSWORD_ARGV" ]  && CRED_N=$((CRED_N+1))
+[ "$CRED_N" -le 1 ] || die "--password-file, --password-stdin and --password are mutually exclusive"
+CRED_RC=0; cred_resolve_password KC_SERVICE_PASSWORD || CRED_RC=$?   # `; rc=$?` trips set -e first
+case "$CRED_RC" in
+    0) ;;
+    2) die "no password for ${KC_SERVICE_USERNAME}: pass --password-file <chmod-600 file>, --password-stdin, --password, or set KC_SERVICE_PASSWORD" ;;
+    *) exit 1 ;;   # cred_read_file already said why
+esac
 [ -n "$KUBE_CONTEXT" ] || KUBE_CONTEXT="kind-${KIND_CLUSTER_NAME}"
 
 kc() { "$KUBECTL_BIN" --context "$KUBE_CONTEXT" "$@"; }
@@ -180,6 +211,42 @@ if [ -z "$ISS" ]; then
     warn "could not fetch .well-known (HTTP ${HTTP_STATUS}); using constructed iss ${ISS}"
 else
     log "    iss = ${ISS}"
+fi
+
+# --- 1b. the credential this file will BAKE IN actually logs in ---
+#
+# Against the ingress host rather than the backchannel URL, because the backchannel is svc DNS and
+# unreachable from here; both reach the same realm, and it is the realm's answer we want.
+#
+# This is the one check the script cannot skip without making its output untrustworthy: the password
+# lands in the instance file, the Service presents it on every /deploy, and a wrong one fails no
+# earlier than the first benchmark — as a 502 wrapping Keycloak's 403, which reads like a Rossoctl
+# problem. keycloak-ensure-user.sh sets the password; kind-post-setup.sh then patches the
+# firstName/lastName the realm's user profile requires, and only AFTER that patch can a login
+# succeed — hence the check belongs here, at the end of the chain, not in either of those.
+log "==> Verifying the ${KC_SERVICE_USERNAME} credential (${CRED_PASSWORD_SOURCE}, sha8 $(printf '%s' "$KC_SERVICE_PASSWORD" | shasum -a 256 | cut -c1-8))..."
+if [ -n "$SKIP_CRED_CHECK" ]; then
+    warn "SKIP_CRED_CHECK=1 — not verifying the password; every /deploy will fail if it is wrong"
+else
+    req POST "http://${KC_HOST}/realms/${KC_REALM}/protocol/openid-connect/token" \
+        -d client_id="$KC_SERVICE_CLIENT_ID" \
+        ${KC_SERVICE_CLIENT_SECRET:+-d client_secret="$KC_SERVICE_CLIENT_SECRET"} \
+        -d grant_type=password -d username="$KC_SERVICE_USERNAME" \
+        --data-urlencode "password=${KC_SERVICE_PASSWORD}"
+    CRED_TOK="$(printf '%s' "$BODY" | jq -r '.access_token // empty' 2>/dev/null || true)"
+    if [ -n "$CRED_TOK" ]; then
+        log "    ROPC login ok"
+        # The realm role every /deploy needs; without it the Service surfaces Keycloak's 403 as a 502.
+        CRED_ROLES="$(cred_jwt_realm_roles "$CRED_TOK")"
+        case ",$CRED_ROLES," in
+            *,rossoctl-operator,*) log "    realm role rossoctl-operator ok" ;;
+            *) warn "the token carries no rossoctl-operator realm role — every /deploy will 403; grant it (kind-post-setup.sh does)" ;;
+        esac
+    elif [ "$HTTP_STATUS" = "000" ]; then
+        warn "Keycloak at ${KC_HOST} did not answer, so the password is unverified"
+    else
+        die "$(printf '%s password rejected by realm %s: %s' "$KC_SERVICE_USERNAME" "$KC_REALM" "$(cred_ropc_cause "$HTTP_STATUS" "$BODY")")"
+    fi
 fi
 
 # --- 2. read MLflow client-credentials from mlflow-oauth-secret (default) ---

@@ -18,12 +18,16 @@
 # the OIDC-gated MLflow and every run publishes `model: "unknown"` with zero tokens, successfully.
 #
 # DEV/TEST ONLY. No secret is ever echoed. Secrets are resolved as:
-#   KC_USER_PASSWORD   the `benchmarker` password. If unset, read from a chmod-600
-#                      credentials file (default ~/.rossoctl-kind/benchmarker.pass,
-#                      override with KC_CRED_FILE). The password does not change
-#                      across upgrades, so create that file ONCE:
+#   KC_USER_PASSWORD   the `benchmarker` password — from `--password-file`, `--password-stdin` or
+#                      `--password` if given, else this variable, else a chmod-600 credentials file
+#                      (default ~/.rossoctl-kind/benchmarker.pass, override with KC_CRED_FILE). The
+#                      password does not change across upgrades, so create that file ONCE and no
+#                      credential flag is ever needed:
 #                        umask 077; mkdir -p ~/.rossoctl-kind
 #                        printf '%s' '<benchmarker password>' > ~/.rossoctl-kind/benchmarker.pass
+#                      Step 4 logs in with whatever this resolves to, because step 2 CANNOT: the
+#                      realm refuses a token until the firstName/lastName patch below has run, so
+#                      keycloak-ensure-user.sh is deliberately called without --verify.
 #   KC_ADMIN_PASSWORD  Keycloak master admin password       (optional; auto-read
 #                      from the in-cluster keycloak-initial-admin secret if unset)
 #   BM_WORKLOAD_LLM_KEY  the workload LLM key, issued by the gateway this cluster can reach. If
@@ -54,16 +58,64 @@ KC_SERVER="${KC_SERVER:-http://${KC_HOST}}"
 BENCH_USER="${BENCH_USER:-benchmarker}"
 BENCH_EMAIL="${BENCH_EMAIL:-benchmarker@localtest.me}"
 TEAM_NAMESPACES="${TEAM_NAMESPACES:-team1}"
-
-# --- secrets (env, else chmod-600 file; admin pw falls back to the cluster secret) ---
 KC_CRED_FILE="${KC_CRED_FILE:-$HOME/.rossoctl-kind/benchmarker.pass}"
-if [ -z "${KC_USER_PASSWORD:-}" ] && [ -f "$KC_CRED_FILE" ]; then
-  # refuse a world/group-readable credentials file
-  perm="$(stat -f '%A' "$KC_CRED_FILE" 2>/dev/null || stat -c '%a' "$KC_CRED_FILE" 2>/dev/null || echo '')"
-  case "$perm" in 600|400) ;; *) echo "refusing: $KC_CRED_FILE must be chmod 600 (is ${perm:-unknown})" >&2; exit 1 ;; esac
-  IFS= read -r KC_USER_PASSWORD < "$KC_CRED_FILE" || true
-fi
-: "${KC_USER_PASSWORD:?set KC_USER_PASSWORD or create $KC_CRED_FILE (chmod 600) — never echoed}"
+
+# --- flags ---
+# Only the credential has flags; everything else stays env-only (see the header). Unknown arguments
+# are an error rather than ignored, which is what they used to be — this script had no parser at all.
+usage() {
+  cat <<EOF
+Usage: kind-post-setup.sh [flags]
+
+Stands the AutoBench Service back up on a freshly recreated local kind cluster.
+
+Flags:
+  --username U        the Keycloak user to seed        (default: ${BENCH_USER}; env BENCH_USER)
+  --password-file F   its password, from a chmod-600 file. The default is ${KC_CRED_FILE},
+                      so with that file in place no credential flag is needed at all.
+  --password-stdin    read the password from stdin
+  --password P        the password on the command line — accepted, but argv is world-readable
+                      via \`ps\`, and it lands in your shell history
+  -h, --help
+
+Everything else is environment-only: IMAGE, CLUSTER, KUBE_CONTEXT, REALM, CLIENT, KC_HOST,
+TEAM_NAMESPACES, KC_ADMIN_PASSWORD, LLM_PROFILE, LLM_KEY_FILE, BM_WORKLOAD_LLM_KEY.
+EOF
+}
+CRED_PASSWORD_FILE=""
+CRED_PASSWORD_STDIN=""
+CRED_PASSWORD_ARGV=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --username)       BENCH_USER="$2"; shift 2 ;;
+    --password-file)  CRED_PASSWORD_FILE="$2"; shift 2 ;;
+    --password-stdin) CRED_PASSWORD_STDIN=1; shift ;;
+    --password)       CRED_PASSWORD_ARGV="$2"; shift 2 ;;
+    -h|--help)        usage; exit 0 ;;
+    *)                usage; echo "Error: unknown argument '$1'" >&2; exit 1 ;;
+  esac
+done
+
+# --- secrets (flags, else env, else chmod-600 file; admin pw falls back to the cluster secret) ---
+# shellcheck source=reference/credfile.sh
+. "$REFERENCE_DIR/credfile.sh"
+CRED_N=0
+[ -n "$CRED_PASSWORD_FILE" ]  && CRED_N=$((CRED_N+1))
+[ -n "$CRED_PASSWORD_STDIN" ] && CRED_N=$((CRED_N+1))
+[ -n "$CRED_PASSWORD_ARGV" ]  && CRED_N=$((CRED_N+1))
+[ "$CRED_N" -le 1 ] || { echo "Error: --password-file, --password-stdin and --password are mutually exclusive" >&2; exit 1; }
+# The default credentials file is the last resort, so a flag or an export always wins over it — and
+# it is only reached for when it EXISTS, so an absent one falls through to the message below that
+# names all four routes rather than complaining about one path you never asked for.
+[ "$CRED_N" != 0 ] || [ -n "${KC_USER_PASSWORD:-}" ] || [ ! -f "$KC_CRED_FILE" ] \
+  || CRED_PASSWORD_FILE="$KC_CRED_FILE"
+CRED_RC=0; cred_resolve_password KC_USER_PASSWORD || CRED_RC=$?   # `; rc=$?` would trip set -e first
+case "$CRED_RC" in
+  0) ;;
+  2) echo "Error: no password for ${BENCH_USER}: pass --password-file <chmod-600 file>, --password-stdin, --password, set KC_USER_PASSWORD, or create $KC_CRED_FILE" >&2; exit 1 ;;
+  *) exit 1 ;;   # cred_read_file already said why
+esac
+echo "==> ${BENCH_USER} password from ${CRED_PASSWORD_SOURCE}"
 if [ -z "${KC_ADMIN_PASSWORD:-}" ]; then
   KC_ADMIN_PASSWORD="$(kubectl --context "$CTX" -n keycloak get secret keycloak-initial-admin \
     -o jsonpath='{.data.password}' 2>/dev/null | base64 -d || true)"

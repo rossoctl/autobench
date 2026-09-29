@@ -32,9 +32,26 @@ Usage
 
 Exit status is 0 when nothing FAILed (warnings do not fail the run), 1 otherwise.
 
-Optional, and skipped with a note when absent: `KC_SERVICE_USERNAME` + `KC_SERVICE_PASSWORD` in
-the environment enable the identity checks (ROPC login, and the `rossoctl-operator` realm role
-without which every `/deploy` surfaces a 403 as a 502).
+The `benchmarker` credential is checked, not assumed
+----------------------------------------------------
+Every `/deploy` the Service makes is a ROPC login as that user, so an absent, stale or
+required-action-blocked password does not degrade the install — it makes every run fail with a 502
+wrapping a 403. The password is taken from, in order: `--password-file` (a chmod-600 file — the
+preferred form, because the value never reaches argv), `--password-stdin`, `--password` (accepted,
+but argv is world-readable), `$KC_SERVICE_PASSWORD`, and finally the `service_credential` inside the
+instance Secret. That last source is the most useful one: it is the copy the Service actually
+presents, so checking it says something about the install rather than about your shell. When a
+password is supplied *and* the Secret holds one, a mismatch is a FAILURE — otherwise a green
+preflight can sit next to a Service that 502s on every deploy.
+
+    python3 reference/preflight.py --password-file ~/.rossoctl-kind/benchmarker.pass
+
+Two things ROPC cannot distinguish are "the password is wrong" and "the user has no password
+credential at all" — Keycloak answers `invalid_grant` to both. With a Keycloak admin credential
+(`KC_ADMIN_PASSWORD`, or an in-cluster `keycloak-initial-admin` Secret, which is how KinD ships) the
+Admin REST API is asked directly: does the user exist, is it enabled, is a `password` credential
+set, are `firstName`/`lastName` present, is a required action pending. Without one that tier is
+skipped with a note and the ROPC login stands as the behavioural check.
 """
 
 from __future__ import annotations
@@ -769,60 +786,358 @@ def _check_otel_endpoint(
         rep.ok(f"{name}: workload_otel endpoint (cross-cluster, via Route)", detail)
 
 
-def check_identity(rep: Report, iss_hint: str | None) -> None:
-    rep.section("Identity (optional — needs KC_SERVICE_USERNAME + KC_SERVICE_PASSWORD)")
-    user = os.environ.get("KC_SERVICE_USERNAME")
-    password = os.environ.get("KC_SERVICE_PASSWORD")
-    client_id = os.environ.get("KC_SERVICE_CLIENT_ID", "rossoctl")
-    client_secret = os.environ.get("KC_SERVICE_CLIENT_SECRET")
-    iss = os.environ.get("KC_ISS") or iss_hint
-    if not (user and password):
-        rep.skip("ROPC login", "KC_SERVICE_USERNAME / KC_SERVICE_PASSWORD not set")
-        return
-    if not iss:
-        rep.skip("ROPC login", "no issuer known (set KC_ISS, or create the instance Secret first)")
-        return
+def _post_form(url: str, form: dict[str, str], timeout: int = 30) -> tuple[int, dict | str]:
+    """POST a form and return (status, parsed body). Never raises on an HTTP error status.
 
-    form = {
-        "client_id": client_id,
-        "grant_type": "password",
-        "username": user,
-        "password": password,
-    }
-    if client_secret:
-        form["client_secret"] = client_secret
+    Keycloak puts the *reason* a password grant failed in the 400 body, and that reason is the
+    whole value of this check — "wrong password" and "the realm wants firstName/lastName" are
+    different jobs for whoever is installing. urlopen raises on 4xx, so the body has to be read
+    off the exception.
+    """
     req = urllib.request.Request(
-        f"{iss.rstrip('/')}/protocol/openid-connect/token",
-        data=urllib.parse.urlencode(form).encode(),
-        method="POST",
+        url, data=urllib.parse.urlencode(form).encode(), method="POST"
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            token = json.load(resp).get("access_token", "")
-    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as exc:
-        rep.fail(
-            f"ROPC login as {user}",
-            f"{exc} — a 400 'Account is not fully set up' means the realm requires "
-            "firstName/lastName on the user",
-        )
-        return
-    rep.ok(f"ROPC login as {user}")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.load(resp)
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", "replace")
+        try:
+            return exc.code, json.loads(raw)
+        except json.JSONDecodeError:
+            return exc.code, raw
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        return 0, str(exc)
 
-    # The realm role every /deploy needs. Without it the Service surfaces the operator's 403 as a 502.
+
+def _get_json_authed(url: str, token: str, timeout: int = 30) -> tuple[int, object]:
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     try:
-        payload = token.split(".")[1]
-        payload += "=" * (-len(payload) % 4)
-        roles = json.loads(base64.urlsafe_b64decode(payload)).get("realm_access", {}).get("roles", [])
-    except (IndexError, ValueError, json.JSONDecodeError):
-        rep.warn("realm role rossoctl-operator", "could not decode the token payload")
-        return
-    if "rossoctl-operator" in roles:
-        rep.ok("realm role rossoctl-operator")
-    else:
-        rep.fail(
-            "realm role rossoctl-operator",
-            "absent from the token — /deploy will fail with a 502 wrapping a 403",
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.load(resp)
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        return 0, str(exc)
+
+
+def _ropc_cause(status: int, body: dict | str, user_state: str | None = None) -> str:
+    """Turn Keycloak's refusal into the thing the installer has to go and fix.
+
+    `user_state` is what the Admin API tier found, when it ran — "ok" (a password credential is
+    set), "no-password", or "absent". It resolves the ambiguity Keycloak leaves in `invalid_grant`,
+    which is the same response for a wrong password, a user with no password, and no user at all.
+    """
+    if status == 0:
+        return f"could not reach the token endpoint: {body}"
+    err = desc = ""
+    if isinstance(body, dict):
+        err = str(body.get("error") or "")
+        desc = str(body.get("error_description") or "")
+    blob = f"{err} {desc}".lower()
+    if "not fully set up" in blob:
+        return (
+            "'Account is not fully set up' — the PASSWORD may be correct; the user has a pending "
+            "required action, or no firstName/lastName, which the rossoctl realm's user profile "
+            "requires before it will issue a ROPC token"
         )
+    if "disabled" in blob:
+        return "the account is disabled in Keycloak"
+    if "invalid user credentials" in blob or err == "invalid_grant":
+        if user_state == "ok":
+            return (
+                "'Invalid user credentials' — a password credential IS set on this user (checked "
+                "above), so the password given to this script is not the one Keycloak holds. Reset "
+                "it with reference/keycloak-ensure-user.sh, or supply the right one"
+            )
+        if user_state == "no-password":
+            return "'Invalid user credentials' — and the user has NO password credential (see above)"
+        if user_state == "absent":
+            return "'Invalid user credentials' — and no such user exists in the realm (see above)"
+        return (
+            "'Invalid user credentials' — the password does not match, or the user has no password "
+            "credential set at all. Keycloak reports these identically; supply a Keycloak admin "
+            "credential (KC_ADMIN_PASSWORD, or an in-cluster keycloak-initial-admin Secret) and "
+            "this script will tell you which"
+        )
+    if err in ("unauthorized_client", "invalid_client"):
+        return (
+            f"{err} — the client is confidential or has directAccessGrantsEnabled=false; set "
+            "KC_SERVICE_CLIENT_SECRET, or enable Direct Access Grants "
+            "(reference/keycloak-ensure-user.sh does it idempotently)"
+        )
+    detail = desc or err or str(body)
+    return f"HTTP {status}: {detail}"
+
+
+def read_password_file(path: str) -> str:
+    """Read a credential file, refusing one other users can read.
+
+    Same rule as every other credential file in reference/: `600` or `400`. The trailing newline a
+    text editor adds is stripped — a password with a newline welded on fails ROPC with exactly the
+    message a wrong password gives, and that has cost an afternoon before.
+    """
+    mode = os.stat(path).st_mode & 0o777
+    if mode not in (0o600, 0o400):
+        raise PermissionError(f"{path} must be chmod 600 (is {mode:o})")
+    with open(path, encoding="utf-8") as fh:
+        return fh.readline().rstrip("\n")
+
+
+def resolve_service_credential(
+    args: argparse.Namespace, instances: dict[str, dict] | None
+) -> tuple[str | None, str | None, str, str | None]:
+    """Where the `benchmarker` credential comes from: (username, password, source, error).
+
+    Precedence is most-explicit-first, ending at the instance Secret — which is the interesting
+    one, because that is the copy the Service will actually present to Rossoctl. Checking a
+    password from your shell proves something about your shell; checking the one in the Secret
+    proves something about the install.
+    """
+    user = args.username or os.environ.get("KC_SERVICE_USERNAME")
+    if args.password_file:
+        try:
+            return user, read_password_file(args.password_file), f"file {args.password_file}", None
+        except OSError as exc:
+            return user, None, f"file {args.password_file}", str(exc)
+    if args.password_stdin:
+        pw = sys.stdin.readline().rstrip("\n")
+        return user, pw or None, "stdin", None if pw else "nothing on stdin"
+    if args.password:
+        return user, args.password, "--password (argv)", None
+    if os.environ.get("KC_SERVICE_PASSWORD"):
+        return user, os.environ["KC_SERVICE_PASSWORD"], "env KC_SERVICE_PASSWORD", None
+    for name, cfg in sorted((instances or {}).items()):
+        cred = cfg.get("service_credential") or {}
+        if cred.get("password"):
+            return (
+                user or cred.get("username"),
+                cred["password"],
+                f"Secret {INSTANCES_SECRET} ({name})",
+                None,
+            )
+    return user, None, "(none)", None
+
+
+def _keycloak_admin_token(rep: Report, cluster: Cluster, base: str) -> str | None:
+    """A master-realm admin token, if one can be had without asking anybody to type anything.
+
+    Optional by design: it buys the one distinction ROPC cannot make — "no password is set" versus
+    "the password is wrong". On KinD the admin password is sitting in `keycloak-initial-admin`; on a
+    managed OpenShift Keycloak it usually is not, and then this tier just does not run.
+    """
+    password = os.environ.get("KC_ADMIN_PASSWORD")
+    username = os.environ.get("KC_ADMIN_USER", "admin")
+    if not password:
+        data = cluster.secret_data("keycloak", "keycloak-initial-admin") or {}
+        if data.get("password"):
+            password = data["password"].decode("utf-8", "replace")
+            username = (data.get("username") or b"admin").decode("utf-8", "replace")
+    if not password:
+        return None
+    status, body = _post_form(
+        f"{base}/realms/master/protocol/openid-connect/token",
+        {"client_id": "admin-cli", "grant_type": "password",
+         "username": username, "password": password},
+    )
+    if status == 200 and isinstance(body, dict):
+        return body.get("access_token")
+    rep.warn(
+        "Keycloak admin API reachable",
+        f"admin login as {username} failed ({_ropc_cause(status, body)}) — the "
+        "'is a password actually set?' check is skipped",
+    )
+    return None
+
+
+def _check_user_via_admin_api(
+    rep: Report, cluster: Cluster, base: str, realm: str, username: str
+) -> str | None:
+    """Answer the literal question — is a password SET on this user — from the Admin REST API.
+
+    Returns "ok", "no-password" or "absent" when it could tell; None when the tier did not run.
+    """
+    token = _keycloak_admin_token(rep, cluster, base)
+    if not token:
+        rep.skip(
+            f"password credential set on {username}",
+            "no Keycloak admin credential available (export KC_ADMIN_PASSWORD to enable); the "
+            "ROPC login below is then the only check of the password",
+        )
+        return None
+    admin = f"{base}/admin/realms/{urllib.parse.quote(realm)}"
+    status, body = _get_json_authed(
+        f"{admin}/users?username={urllib.parse.quote(username)}&exact=true", token
+    )
+    if status != 200 or not isinstance(body, list):
+        rep.warn(f"user {username} exists in realm {realm}", f"user lookup failed: HTTP {status}")
+        return None
+    if not body:
+        rep.fail(
+            f"user {username} exists in realm {realm}",
+            "absent — create it with reference/keycloak-ensure-user.sh",
+        )
+        return "absent"
+    user_obj = body[0]
+    uid = user_obj.get("id", "")
+    rep.ok(f"user {username} exists in realm {realm}", f"id {uid}")
+    if not user_obj.get("enabled", True):
+        rep.fail(f"user {username} enabled", "disabled in Keycloak — every ROPC login will fail")
+    # The realm's user profile requires both, and without them ROPC 400s "Account is not fully set
+    # up" even though the password is perfectly correct. keycloak-ensure-user.sh does not set them.
+    missing = [f for f in ("firstName", "lastName") if not user_obj.get(f)]
+    if missing:
+        rep.fail(
+            f"user {username} profile complete",
+            f"{', '.join(missing)} unset — the rossoctl realm requires both, and ROPC then 400s "
+            "'Account is not fully set up' with a correct password",
+        )
+    if user_obj.get("requiredActions"):
+        rep.fail(
+            f"user {username} has no pending required actions",
+            f"{', '.join(user_obj['requiredActions'])} — a required action blocks the password grant",
+        )
+
+    status, creds = _get_json_authed(f"{admin}/users/{uid}/credentials", token)
+    if status != 200 or not isinstance(creds, list):
+        rep.warn(f"password credential set on {username}", f"credential lookup failed: HTTP {status}")
+        return None
+    types = [c.get("type") for c in creds if isinstance(c, dict)]
+    if "password" in types:
+        # Only the type — a credential representation never carries the secret itself, and nothing
+        # here would print it if it did.
+        rep.ok(f"password credential set on {username}", f"credential type(s): {', '.join(types)}")
+        return "ok"
+    rep.fail(
+        f"password credential set on {username}",
+        "the user has NO password credential — set one with reference/keycloak-ensure-user.sh "
+        f"(types present: {', '.join(types) or 'none'})",
+    )
+    return "no-password"
+
+
+def check_identity(
+    rep: Report, cluster: Cluster, instances: dict[str, dict] | None,
+    args: argparse.Namespace, iss_hint: str | None,
+) -> None:
+    """The `benchmarker` credential: is a password set, does it work, is it the one the Service has.
+
+    Not optional, and not the same check three times. Every `/deploy` the Service makes is a ROPC
+    login as this user, so a credential that is absent, stale or blocked by a required action does
+    not degrade the install — it makes every benchmark run fail with a 502 wrapping a 403.
+    """
+    rep.section("Identity — the benchmarker credential every /deploy authenticates with")
+    user, password, source, err = resolve_service_credential(args, instances)
+    client_id = os.environ.get("KC_SERVICE_CLIENT_ID", "rossoctl")
+    client_secret = os.environ.get("KC_SERVICE_CLIENT_SECRET")
+    user = user or "benchmarker"
+
+    if err:
+        rep.fail(f"benchmarker password from {source}", err)
+        return
+    if not password:
+        rep.fail(
+            "benchmarker password available",
+            "not supplied and not in the instance Secret. Give it to this script one of four ways: "
+            "--password-file <chmod-600 file> (preferred), --password-stdin, --password <value> "
+            "(visible in `ps`), or export KC_SERVICE_PASSWORD",
+        )
+        return
+    rep.ok(f"benchmarker password from {source}", f"user {user}, sha8 {sha8(password)}")
+    if source == "--password (argv)":
+        rep.warn(
+            "password passed on the command line",
+            "argv is world-readable (`ps`, /proc/<pid>/cmdline) and lands in your shell history — "
+            "prefer --password-file or --password-stdin",
+        )
+
+    # The copy in the Secret is the one the Service presents. Validating a different one is how a
+    # green preflight coexists with a Service that 502s on every deploy.
+    for name, cfg in sorted((instances or {}).items()):
+        cred = cfg.get("service_credential") or {}
+        if not cred.get("password") or source.startswith(f"Secret {INSTANCES_SECRET}"):
+            continue
+        if cred.get("username") and cred["username"] != user:
+            # Checking a different user on purpose (--username); the two passwords have no reason
+            # to agree, and reporting that as a failure is noise.
+            continue
+        if cred["password"] == password:
+            rep.ok(f"{name}: instance password matches the one checked here")
+        else:
+            rep.fail(
+                f"{name}: instance password matches the one checked here",
+                f"the Secret holds sha8 {sha8(cred['password'])}, this check used "
+                f"sha8 {sha8(password)} — the Service will present the Secret's, so a pass below "
+                "proves nothing about it. Regenerate the instance file, or drop the override",
+            )
+
+    iss = args.iss or os.environ.get("KC_ISS") or iss_hint or _discover_iss(cluster, args)
+    if not iss:
+        rep.fail(
+            "issuer known",
+            "cannot check the credential without one — pass --iss "
+            "https://<keycloak>/realms/<realm>, or create the instance Secret first",
+        )
+        return
+    iss = iss.rstrip("/")
+    base, _, realm = iss.partition("/realms/")
+
+    # Existence and "is a password set" first, so that when the login below fails its explanation is
+    # already on screen rather than being a list of things it might have been.
+    user_state = _check_user_via_admin_api(rep, cluster, base, realm, user) if realm else None
+
+    form = {"client_id": client_id, "grant_type": "password",
+            "username": user, "password": password}
+    if client_secret:
+        form["client_secret"] = client_secret
+    status, body = _post_form(f"{iss}/protocol/openid-connect/token", form)
+    token = body.get("access_token", "") if (status == 200 and isinstance(body, dict)) else ""
+    if token:
+        rep.ok(f"ROPC login as {user}", f"against {iss}")
+    else:
+        rep.fail(f"ROPC login as {user}", _ropc_cause(status, body, user_state))
+
+    if token:
+        # The realm role every /deploy needs. Without it the Service surfaces the operator's 403 as
+        # a 502, which reads like the Service is broken rather than unauthorised.
+        try:
+            payload = token.split(".")[1]
+            payload += "=" * (-len(payload) % 4)
+            roles = (
+                json.loads(base64.urlsafe_b64decode(payload))
+                .get("realm_access", {}).get("roles", [])
+            )
+        except (IndexError, ValueError, json.JSONDecodeError):
+            rep.warn("realm role rossoctl-operator", "could not decode the token payload")
+            roles = None
+        if roles is not None:
+            if "rossoctl-operator" in roles:
+                rep.ok("realm role rossoctl-operator")
+            else:
+                rep.fail(
+                    "realm role rossoctl-operator",
+                    "absent from the token — /deploy will fail with a 502 wrapping a 403",
+                )
+
+
+def _discover_iss(cluster: Cluster, args: argparse.Namespace) -> str | None:
+    """Find Keycloak's issuer from the cluster, for a preflight run before the Secret exists.
+
+    A Route on OpenShift, an HTTPRoute on KinD. Deliberately does not guess a hostname: an issuer
+    that is merely plausible produces a confident-looking FAIL against a Keycloak nobody uses.
+    """
+    realm = args.realm
+    obj = cluster.get_json("-n", "keycloak", "get", "route", "keycloak")
+    host = ((obj or {}).get("spec") or {}).get("host")
+    if host:
+        return f"https://{host}/realms/{realm}"
+    routes = cluster.get_json("-n", "keycloak", "get", "httproute", "keycloak") or {}
+    hostnames = ((routes.get("spec") or {}).get("hostnames") or [])
+    if hostnames:
+        # KinD publishes the istio gateway on a host port, and the issuer carries it.
+        port = f":{args.kind_gateway_port}" if args.kind_gateway_port else ""
+        return f"http://{hostnames[0]}{port}/realms/{realm}"
+    return None
 
 
 def check_service_install(rep: Report, cluster: Cluster, namespace: str, image: str | None) -> None:
@@ -913,6 +1228,23 @@ def main() -> int:
                          "the intranet uses `intranet`")
     ap.add_argument("--values", help="chart values file to read llmProfile from, e.g. "
                                      "deploy/helm/values-kind.yaml")
+    ap.add_argument("--username", help="Keycloak user the Service logs in as (default: "
+                                       "$KC_SERVICE_USERNAME, the instance Secret's, else benchmarker)")
+    pw = ap.add_mutually_exclusive_group()
+    pw.add_argument("--password-file", help="read the benchmarker password from a chmod-600 file "
+                                           "(preferred: the value never reaches argv)")
+    pw.add_argument("--password-stdin", action="store_true",
+                    help="read the benchmarker password from stdin")
+    pw.add_argument("--password", help="the benchmarker password literally. WARNING: argv is "
+                                      "world-readable via `ps` — prefer --password-file")
+    ap.add_argument("--iss", help="Keycloak issuer, e.g. https://<host>/realms/rossoctl (default: "
+                                 "$KC_ISS, the instance Secret's iss, else discovered from the "
+                                 "Keycloak Route/HTTPRoute)")
+    ap.add_argument("--realm", default="rossoctl",
+                    help="realm to use when the issuer has to be discovered (default: %(default)s)")
+    ap.add_argument("--kind-gateway-port", default="8080",
+                    help="kind only: host port the istio gateway is published on, used when the "
+                         "issuer is discovered from an HTTPRoute (default: %(default)s)")
     ap.add_argument("--gateway", default="http", help="kind only: Gateway name (default: %(default)s)")
     ap.add_argument("--image", help="expected Service image, to compare against what is deployed")
     ap.add_argument("--chart", default=CHART_DIR, help="chart directory (default: %(default)s)")
@@ -963,7 +1295,7 @@ def main() -> int:
         check_instance_config(rep, cluster, args.namespace, platform, collector, instances,
                               llm_profile=llm_profile)
         iss_hint = next((cfg.get("iss") for cfg in (instances or {}).values() if cfg.get("iss")), None)
-        check_identity(rep, iss_hint)
+        check_identity(rep, cluster, instances, args, iss_hint)
         check_service_install(rep, cluster, args.namespace, args.image)
     if not args.skip_chart:
         check_chart(rep, args.chart, platform)

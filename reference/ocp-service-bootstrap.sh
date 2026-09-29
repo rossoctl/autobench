@@ -60,18 +60,30 @@ Flags (each also has an env fallback):
                         e.g. 'https://{service}-{namespace}.apps.ykt2.example.com'. Leave
                         unset when Service and workloads share the cluster (ykt5) — the Service
                         then dials svc.cluster.local.
+  --username U          KC_SERVICE_USERNAME  the user the Service logs in as (default: benchmarker)
+  --password-file F     the benchmarker password, from a chmod-600 file. PREFERRED: the value never
+                        reaches argv, so it is not visible to `ps` and not left in shell history.
+  --password-stdin      read the password from stdin (for a pipeline or a secret manager)
+  --password P          the password on the command line. Accepted, but argv is world-readable —
+                        use --password-file unless you are in a throwaway shell.
   --s3-prefix P         S3_PREFIX          (default: <cluster>/)
   --s3-from FILE        S3_FROM            existing instance JSON to copy s3 credentials from,
-                        read in-process (default: the newest instances/*.json with s3 creds)
+                        read in-process (default: the last <out-dir>/*.json in glob order that has
+                        s3 creds — so a non-default --out-dir usually finds none)
   --out-dir DIR         OUT_DIR            (default: ./instances)
   --skip-precheck       SKIP_PRECHECK=1    write the file even if a check fails
   -h, --help
 
-Secrets, from the environment only:
-  KC_SERVICE_USERNAME   benchmarker login username   (required)
-  KC_SERVICE_PASSWORD   benchmarker login password   (required)
+Secrets:
+  KC_SERVICE_USERNAME   login username (required; --username overrides)
+  KC_SERVICE_PASSWORD   login password (required unless --password-file/-stdin/--password is given;
+                        those take precedence, in that order)
   KC_SERVICE_CLIENT_SECRET  client secret, if confidential (optional)
   S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY  override --s3-from
+
+The password is load-bearing per RUN, not just per install: every /deploy the Service makes is a
+ROPC login as this user, so a stale or unset one does not degrade the install — it makes every
+benchmark fail with a 502 wrapping a 403. The precheck below therefore logs in for real.
 EOF
 }
 
@@ -105,6 +117,10 @@ S3_FROM="${S3_FROM:-}"
 OUT_DIR="${OUT_DIR:-./instances}"
 SKIP_PRECHECK="${SKIP_PRECHECK:-}"
 KUBECTL_BIN="${KUBECTL_BIN:-kubectl}"
+KC_SERVICE_USERNAME="${KC_SERVICE_USERNAME:-benchmarker}"
+CRED_PASSWORD_FILE=""
+CRED_PASSWORD_STDIN=""
+CRED_PASSWORD_ARGV=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -126,6 +142,10 @@ while [ $# -gt 0 ]; do
         --otel-insecure)      WORKLOAD_OTEL_INSECURE="$2"; shift 2 ;;
         --agent-runner)       WORKLOAD_AGENT_RUNNER="$2"; shift 2 ;;
         --endpoint-template)  ENDPOINT_TEMPLATE="$2"; shift 2 ;;
+        --username)           KC_SERVICE_USERNAME="$2"; shift 2 ;;
+        --password-file)      CRED_PASSWORD_FILE="$2"; shift 2 ;;
+        --password-stdin)     CRED_PASSWORD_STDIN=1; shift ;;
+        --password)           CRED_PASSWORD_ARGV="$2"; shift 2 ;;
         --s3-prefix)          S3_PREFIX="$2"; shift 2 ;;
         --s3-from)            S3_FROM="$2"; shift 2 ;;
         --out-dir)            OUT_DIR="$2"; shift 2 ;;
@@ -136,8 +156,21 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$CLUSTER" ] || { usage; die "--cluster is required"; }
-[ -n "${KC_SERVICE_USERNAME:-}" ] || die "KC_SERVICE_USERNAME must be set in the environment"
-[ -n "${KC_SERVICE_PASSWORD:-}" ] || die "KC_SERVICE_PASSWORD must be set in the environment"
+[ -n "${KC_SERVICE_USERNAME:-}" ] || die "--username (or KC_SERVICE_USERNAME) must not be empty"
+
+# shellcheck source=reference/credfile.sh
+. "$(dirname "${BASH_SOURCE[0]}")/credfile.sh"
+n=0
+[ -n "$CRED_PASSWORD_FILE" ]  && n=$((n+1))
+[ -n "$CRED_PASSWORD_STDIN" ] && n=$((n+1))
+[ -n "$CRED_PASSWORD_ARGV" ]  && n=$((n+1))
+[ "$n" -le 1 ] || die "--password-file, --password-stdin and --password are mutually exclusive"
+rc=0; cred_resolve_password KC_SERVICE_PASSWORD || rc=$?   # `; rc=$?` would trip set -e first
+case "$rc" in
+    0) ;;
+    2) die "no password for ${KC_SERVICE_USERNAME}: pass --password-file <chmod-600 file>, --password-stdin, --password, or set KC_SERVICE_PASSWORD" ;;
+    *) exit 1 ;;   # cred_read_file already said why
+esac
 # shellcheck source=reference/llm-profiles.sh
 . "$(dirname "${BASH_SOURCE[0]}")/llm-profiles.sh"
 llm_profile_resolve || die "could not resolve LLM_PROFILE=${LLM_PROFILE:-}"
@@ -254,19 +287,34 @@ else
     check "Rossoctl >= 0.8.0" 1 "found ${ROSSOCTL_VER} — upgrade the cluster before deploying AutoBench"
 fi
 
-# ROPC actually works for this credential, against this iss.
-TOK="$(curl -sS "${ISS}/protocol/openid-connect/token" \
+# Where the password came from, so a green precheck says WHICH credential it proved. The value is
+# hashed, never shown; the hash is also what lets you compare it against the instance file's copy
+# (reference/preflight.py does that comparison) without either being printed.
+check "${KC_SERVICE_USERNAME} password from ${CRED_PASSWORD_SOURCE} (sha8 $(sha8 "$KC_SERVICE_PASSWORD"))" 0
+[ "$CRED_PASSWORD_SOURCE" = "--password (argv)" ] && \
+    warn "argv is world-readable; prefer --password-file for anything but a throwaway shell"
+
+# ROPC actually works for this credential, against this iss. The failure is CLASSIFIED rather than
+# lumped: "wrong password", "no password credential", "profile incomplete" and "client not
+# direct-access" need four different fixes, and Keycloak's own wording separates only some of them.
+ROPC_BODY="$(curl -sS "${ISS}/protocol/openid-connect/token" \
+        -o /dev/stdout -w '\n%{http_code}' \
         -d client_id="$KC_SERVICE_CLIENT_ID" \
         ${KC_SERVICE_CLIENT_SECRET:+-d client_secret="$KC_SERVICE_CLIENT_SECRET"} \
         -d grant_type=password -d username="$KC_SERVICE_USERNAME" \
-        --data-urlencode "password=${KC_SERVICE_PASSWORD}" 2>/dev/null | jq -r '.access_token // empty')"
-[ -n "$TOK" ] && check "ROPC login as ${KC_SERVICE_USERNAME}" 0 \
-              || check "ROPC login as ${KC_SERVICE_USERNAME}" 1 "no access_token (user missing, wrong password, or firstName/lastName unset)"
+        --data-urlencode "password=${KC_SERVICE_PASSWORD}" 2>/dev/null || true)"
+ROPC_STATUS="${ROPC_BODY##*$'\n'}"
+ROPC_BODY="${ROPC_BODY%$'\n'*}"
+TOK="$(printf '%s' "$ROPC_BODY" | jq -r '.access_token // empty' 2>/dev/null || true)"
+if [ -n "$TOK" ]; then
+    check "ROPC login as ${KC_SERVICE_USERNAME}" 0
+else
+    check "ROPC login as ${KC_SERVICE_USERNAME}" 1 "$(cred_ropc_cause "$ROPC_STATUS" "$ROPC_BODY")"
+fi
 
 # The realm role every /deploy needs. Without it the Service surfaces a 403 as a 502.
 if [ -n "$TOK" ]; then
-    ROLES="$(printf '%s' "$TOK" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null \
-             | jq -r '.realm_access.roles // [] | join(",")' 2>/dev/null || true)"
+    ROLES="$(cred_jwt_realm_roles "$TOK")"   # padded: `base64 -d` on a raw JWT segment truncates
     case ",$ROLES," in *,rossoctl-operator,*) check "realm role rossoctl-operator" 0 ;;
         *) check "realm role rossoctl-operator" 1 "not in the token's realm_access.roles" ;; esac
 fi
