@@ -1,0 +1,37 @@
+AutoBench Service {{ .Values.image.tag | default .Chart.AppVersion }} installed as {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+{{ if ne (include "autobench.platform" .) "openshift" }}
+WARNING: platform={{ .Values.platform }} is not a validated install path yet — only `openshift` is.
+KinD is deployed with reference/kind-post-setup.sh and deploy/*.yaml until the OpenShift chart is
+validated on a live cluster.
+{{ end }}
+Requires Rossoctl v0.8.0 or later on this cluster. An older operator accepts the Service's deploy
+request and silently drops fields from it, so the benchmark runs in a shape you did not configure.
+
+This chart does NOT create the instance-config Secret {{ .Values.instancesSecret }} — it holds ROPC
+service credentials and is generated out-of-band. Without it the pod stays unready:
+
+    kubectl -n {{ .Release.Namespace }} get secret {{ .Values.instancesSecret }}
+
+    # if absent, on OpenShift:  reference/ocp-service-bootstrap.sh --cluster <name> ...
+    #             on kind:      reference/kind-service-bootstrap.sh
+
+Verify the rollout, then the API:
+
+    kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "autobench.name" . }}
+{{- if and (eq (include "autobench.platform" .) "openshift") .Values.route.enabled }}
+
+    HOST=$(oc -n {{ .Release.Namespace }} get route {{ include "autobench.name" . | trimSuffix "-service" }} -o jsonpath='{.spec.host}')
+    curl -fsS "https://$HOST/healthz"
+{{- else if and (eq (include "autobench.platform" .) "kind") .Values.httpRoute.enabled }}
+
+    curl -fsS http://{{ .Values.httpRoute.hostname }}:{{ .Values.service.port }}/healthz
+{{- else }}
+
+    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "autobench.name" . }} 18080:{{ .Values.service.port }}
+    curl -fsS http://127.0.0.1:18080/healthz
+{{- end }}
+
+/benchmarks and /deploy need a caller bearer token; /healthz does not. Remember the list endpoint
+returns `items`, not `benchmarks`, and only summarises each benchmark — read
+GET /benchmarks/<name> to see an agent's container_image, extra_env or model_override.

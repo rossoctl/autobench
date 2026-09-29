@@ -22,13 +22,22 @@
 #                        printf '%s' '<benchmarker password>' > ~/.rossoctl-kind/benchmarker.pass
 #   KC_ADMIN_PASSWORD  Keycloak master admin password       (optional; auto-read
 #                      from the in-cluster keycloak-initial-admin secret if unset)
+#   BM_WORKLOAD_LLM_KEY  the workload LLM key, issued by the INTERNAL gateway. If unset,
+#                      read from ~/.rossoctl-kind/litellm.key (chmod 600, override with
+#                      KC_CRED_FILE's sibling LLM_KEY_FILE). Also does not change across
+#                      upgrades, so create that file once the same way.
+#                      NOT named OPENAI_API_KEY on purpose: that name is commonly exported in a
+#                      developer's shell profile for an unrelated provider, and this script writes
+#                      whatever it finds into cluster Secrets. A namespaced name cannot be
+#                      inherited by accident. (Inside the pod the value still arrives as
+#                      OPENAI_API_KEY — registry.py maps it from the Secret's `apikey`.)
 set -euo pipefail
 set +x  # never trace: keeps secrets out of the terminal
 
 # --- config (env-overridable) ---
 REFERENCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BENCH_REPO="${BENCH_REPO:-$(cd "$REFERENCE_DIR/.." && pwd)}"
-IMAGE="${IMAGE:-ghcr.io/rossoctl/autobench:v1.28}"
+IMAGE="${IMAGE:-ghcr.io/rossoctl/autobench:v1.29}"
 CLUSTER="${CLUSTER:-rossoctl}"
 CTX="${KUBE_CONTEXT:-kind-${CLUSTER}}"
 REALM="${REALM:-rossoctl}"
@@ -53,6 +62,16 @@ if [ -z "${KC_ADMIN_PASSWORD:-}" ]; then
 fi
 : "${KC_ADMIN_PASSWORD:?could not read Keycloak admin password from keycloak-initial-admin; export KC_ADMIN_PASSWORD}"
 export KC_ADMIN_PASSWORD KC_USER_PASSWORD
+# The workload LLM key. KinD must use the INTERNAL gateway (`vpc-int`), which has its own key
+# table — the key ykt2/ykt5 hold is issued by the external one and 401s here. Like the
+# benchmarker password it does not change across rebuilds, so keep it in a chmod-600 file:
+#   umask 077; printf '%s' '<key>' > ~/.rossoctl-kind/litellm.key
+LLM_KEY_FILE="${LLM_KEY_FILE:-$HOME/.rossoctl-kind/litellm.key}"
+if [ -z "${BM_WORKLOAD_LLM_KEY:-}" ] && [ -f "$LLM_KEY_FILE" ]; then
+  perm="$(stat -f '%A' "$LLM_KEY_FILE" 2>/dev/null || stat -c '%a' "$LLM_KEY_FILE" 2>/dev/null || echo '')"
+  case "$perm" in 600|400) ;; *) echo "refusing: $LLM_KEY_FILE must be chmod 600 (is ${perm:-unknown})" >&2; exit 1 ;; esac
+  IFS= read -r BM_WORKLOAD_LLM_KEY < "$LLM_KEY_FILE" || true
+fi
 
 # --- 0. safety: act on the kind cluster only ---
 kubectl config use-context "$CTX" >/dev/null
@@ -104,20 +123,42 @@ fi
 # CreateContainerConfigError ("secret \"hf-secret\" not found") and the agent then crash-loops
 # unable to reach it. hf-token is EMPTY on ykt2 too (the gsm8k dataset is public) — the secret
 # only has to exist. The LLM key is real and must be supplied out-of-band: export
-# OPENAI_API_KEY, else it is left untouched (an existing empty apikey means every run 401s).
+# BM_WORKLOAD_LLM_KEY, else it is left untouched (an existing empty apikey means every run 401s).
+#
+# A fresh `--with-all` install creates NEITHER secret in team1/team2, so this has to
+# create-or-patch: `apply` alone would clobber an existing key with an empty one. The key value
+# reaches kubectl over stdin, never on argv (printf is a shell builtin, so no process ever carries
+# it) — `ps` would otherwise expose it.
+ensure_apikey() {  # $1=namespace $2=secret name
+  kubectl --context "$CTX" -n "$1" get secret "$2" >/dev/null 2>&1 || {
+    printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\ntype: Opaque\ndata: {}\n' "$2" \
+      | kubectl --context "$CTX" -n "$1" apply -f - >/dev/null
+    echo "==> created empty $2 in $1"
+  }
+  [ -n "${BM_WORKLOAD_LLM_KEY:-}" ] || return 0
+  { printf '{"data":{"apikey":"'
+    printf '%s' "$BM_WORKLOAD_LLM_KEY" | base64 | tr -d '\n'
+    printf '"}}'
+  } | kubectl --context "$CTX" -n "$1" patch secret "$2" --type merge --patch-file /dev/stdin >/dev/null \
+    && echo "==> $2 apikey set in $1" \
+    || echo "WARNING: could not patch $2 in $1" >&2
+}
 for ns in team1 team2; do
   kubectl --context "$CTX" -n "$ns" create secret generic hf-secret \
     --from-literal=hf-token="" --dry-run=client -o yaml | kubectl --context "$CTX" apply -f - >/dev/null
   echo "==> hf-secret ensured in $ns"
-  if [ -n "${OPENAI_API_KEY:-}" ]; then
-    kubectl --context "$CTX" -n "$ns" patch secret openai-secret --type merge \
-      -p "{\"data\":{\"apikey\":\"$(printf '%s' "$OPENAI_API_KEY" | base64)\"}}" >/dev/null 2>&1 \
-      && echo "==> openai-secret apikey set in $ns" \
-      || echo "WARNING: could not patch openai-secret in $ns" >&2
-  fi
+  ensure_apikey "$ns" openai-secret
 done
-if [ -z "${OPENAI_API_KEY:-}" ]; then
-  echo "NOTE: OPENAI_API_KEY unset — team1/team2 openai-secret left as-is; runs 401 if it is empty." >&2
+# The ibac judge proxy is a SECOND slot for the same key (env UPSTREAM_KEY) and was missed on the
+# first pass last time. Only patch it if the judge is installed — it is optional on KinD.
+if kubectl --context "$CTX" -n rossoctl-system get deploy ibac-judge >/dev/null 2>&1; then
+  ensure_apikey rossoctl-system ibac-judge-upstream
+  [ -n "${BM_WORKLOAD_LLM_KEY:-}" ] && kubectl --context "$CTX" -n rossoctl-system \
+    rollout restart deploy/ibac-judge >/dev/null && echo "==> restarted ibac-judge (reads the key at pod start)"
+fi
+if [ -z "${BM_WORKLOAD_LLM_KEY:-}" ]; then
+  echo "NOTE: no LLM key (env BM_WORKLOAD_LLM_KEY unset, no $LLM_KEY_FILE) — secrets exist but are empty," >&2
+  echo "      so MCP pods start and every completion 401s. Install the key, then re-run this script." >&2
 fi
 
 # --- 3. generate per-instance config + (re)create the autobench-instances secret ---

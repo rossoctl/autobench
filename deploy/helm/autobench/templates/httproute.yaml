@@ -1,0 +1,29 @@
+{{- if and (eq (include "autobench.platform" .) "kind") .Values.httpRoute.enabled }}
+# kind ONLY (dev/test). Exposes the in-cluster Service to the host client at
+# http://autobench.localtest.me:8080 via the shared istio gateway — the same client contract
+# (hostname + bearer token) as a real off-cluster deployment.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "autobench.name" . | trimSuffix "-service" }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ .Values.httpRoute.gateway.name }}
+      namespace: {{ .Values.httpRoute.gateway.namespace | default .Release.Namespace }}
+  hostnames:
+    - {{ .Values.httpRoute.hostname }}
+  rules:
+    - backendRefs:
+        - group: ""
+          kind: Service
+          name: {{ include "autobench.name" . }}
+          port: {{ .Values.service.port }}
+          weight: 1
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
+{{- end }}

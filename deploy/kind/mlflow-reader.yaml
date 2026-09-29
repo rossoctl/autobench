@@ -1,0 +1,125 @@
+# A no-auth, read-only MLflow front end for KinD — DEV/TEST ONLY.
+#
+# Why this exists: on KinD the `mlflow` Deployment that rossoctl-deps installs runs
+# mlflow-oidc-auth, so every read of /api/2.0/mlflow/traces demands an OIDC session. The AutoBench
+# Service reads traces with a bearer token, which that gate rejects, and the run then publishes a
+# report.ndjson with zero tokens on every task — the failure looks like missing telemetry rather
+# than a refused read. This Deployment serves the SAME postgres database with stock MLflow and no
+# auth at all, and the instance config points the Service at it:
+#
+#     mlflow.tracking_url = http://mlflow-reader.rossoctl-system.svc.cluster.local:5000
+#
+# It is a reader by convention, not by enforcement: nothing here is safe to expose, which is why it
+# is a KinD-only manifest and has no Route/HTTPRoute. On OpenShift the cluster's own MLflow accepts
+# a ServiceAccount token, so no reader is needed there.
+#
+#     kubectl --context kind-rossoctl apply -f deploy/kind/mlflow-reader.yaml
+#
+# Gate readiness on a 200 from /api/2.0/mlflow/traces, not on the pod going Ready: the two pip
+# installs run at container start, so the first ~60 s answer nothing.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlflow-reader
+  namespace: rossoctl-system
+  labels:
+    app: mlflow-reader
+spec:
+  selector:
+    app: mlflow-reader
+  ports:
+    - name: http
+      port: 5000
+      targetPort: 5000
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow-reader
+  namespace: rossoctl-system
+  labels:
+    app: mlflow-reader
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mlflow-reader
+  template:
+    metadata:
+      labels:
+        app: mlflow-reader
+    spec:
+      containers:
+        - name: mlflow-reader
+          image: ghcr.io/mlflow/mlflow:v3.9.0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              export HOME=/tmp
+              # Both installs are best-effort: the KinD node does not always resolve pypi, and the
+              # v3.9.0 image already ships a working postgres driver. A hard failure here would
+              # crash-loop a server that can in fact serve.
+              pip install --no-cache-dir --quiet "psycopg[binary]" || echo "WARN: psycopg install skipped"
+              # Installed for its schema expectations ONLY, never enabled: the writer's tables are
+              # migrated by mlflow-oidc-auth, and a stock mlflow of a different minor can disagree
+              # about them. Pinning the same range keeps this process reading what that one wrote.
+              pip install --no-cache-dir --quiet "mlflow-oidc-auth>=7.3.1,<8" || echo "WARN: oidc-auth install skipped"
+              # MLflow 3.x rejects a request whose Host header is not listed, and the Service dials
+              # this by several names. Cover each with and without the port — a miss is a 400 that
+              # reads like a malformed request, not like a host check.
+              HOSTS="mlflow-reader,mlflow-reader:5000"
+              HOSTS="$HOSTS,mlflow-reader.rossoctl-system,mlflow-reader.rossoctl-system:5000"
+              HOSTS="$HOSTS,mlflow-reader.rossoctl-system.svc,mlflow-reader.rossoctl-system.svc:5000"
+              HOSTS="$HOSTS,mlflow-reader.rossoctl-system.svc.cluster.local"
+              HOSTS="$HOSTS,mlflow-reader.rossoctl-system.svc.cluster.local:5000"
+              HOSTS="$HOSTS,localhost,localhost:5000,127.0.0.1,127.0.0.1:5000"
+              export MLFLOW_SERVER_ALLOWED_HOSTS="$HOSTS"
+              STORE="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/mlflow"
+              # No `mlflow db upgrade` here on purpose — the writer owns the schema. This process
+              # must never migrate a database another Deployment is mid-flight in.
+              # --workers 1 is load-bearing, not tuning. MLflow 3.x defaults to 4 uvicorn workers,
+              # and four of them OOMKill (exit 137) inside a 2Gi limit on KinD a few seconds after
+              # "Application startup complete" — so the logs show a healthy boot and the pod still
+              # CrashLoopBackOffs. One worker is ample: this serves one reader, the Service.
+              exec mlflow server \
+                --backend-store-uri "$STORE" \
+                --artifacts-destination /mlflow/artifacts \
+                --workers 1 \
+                --host 0.0.0.0 --port 5000
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: otel-db-secret
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: otel-db-secret
+                  key: password
+          ports:
+            - name: http
+              containerPort: 5000
+              protocol: TCP
+          volumeMounts:
+            - name: mlflow-artifacts
+              mountPath: /mlflow/artifacts
+          resources:
+            requests:
+              cpu: 100m
+              # Above the measured idle RSS on purpose, so the scheduler is not told a number the
+              # pod exceeds the moment it boots.
+              memory: 2Gi
+            limits:
+              cpu: "1"
+              # 4Gi, measured, not guessed: one worker idles at ~2.3 GiB RSS, so a 2Gi limit
+              # OOMKills it (137) about 30 s after boot. The symptom is deceptive — the log ends on
+              # "Application startup complete" and reports no error, so read the container's
+              # lastState, not the log, when this pod flaps.
+              memory: 4Gi
+      volumes:
+        # Traces live in postgres; this only keeps the artifact root writable so the server starts.
+        - name: mlflow-artifacts
+          emptyDir: {}

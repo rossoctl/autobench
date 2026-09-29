@@ -1,0 +1,22 @@
+{{- if and (eq (include "autobench.platform" .) "openshift") .Values.route.enabled }}
+# Edge-terminated Route, matching the one ykt3 has carried since v1.15. Clients authenticate with
+# a bearer token, so the Route itself is not access control — see docs/SERVICE_DESIGN_DECISIONS.md.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "autobench.name" . | trimSuffix "-service" }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "autobench.labels" . | nindent 4 }}
+spec:
+  {{- with .Values.route.host }}
+  host: {{ . }}
+  {{- end }}
+  to:
+    kind: Service
+    name: {{ include "autobench.name" . }}
+  port:
+    targetPort: http
+  tls:
+    termination: {{ .Values.route.tls.termination }}
+{{- end }}

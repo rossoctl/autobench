@@ -1,0 +1,77 @@
+# Values for the AutoBench Service chart.
+#
+# The chart is a faithful generalisation of deploy/deployment.yaml, deploy/service.yaml,
+# deploy/openshift/deployment-patch.yaml and deploy/kind/httproute.yaml — it renders the same
+# objects those produce. `python3 reference/helm-parity-check.py` asserts exactly that, and is the
+# chart's correctness gate — run it after any template change.
+
+# Prerequisite, either platform: the target cluster runs **Rossoctl v0.8.0 or later**. Below that,
+# the operator's deploy contract drops fields the Service sends (k8sResourceLimits among them)
+# without erroring, so the benchmark deploys and runs in a shape nobody asked for.
+# reference/ocp-service-bootstrap.sh asserts the version before it writes an instance file.
+#
+# Which platform shape to render:
+#   openshift -> let the restricted-v2 SCC inject the UID/GID, and expose via a Route
+#   kind      -> pin UID 10001, and expose via an HTTPRoute on the shared istio gateway
+#
+# NOTE ON SCOPE: only `openshift` is a supported install path today. The `kind` shape renders and
+# is byte-checked against deploy/{deployment,service,kind/httproute}.yaml by
+# reference/helm-parity-check.py, but it has not been validated by an actual install — KinD is
+# still deployed with reference/kind-post-setup.sh and the raw manifests. Promoting the kind path
+# comes after the OpenShift chart is validated on a live cluster.
+platform: openshift
+
+image:
+  repository: ghcr.io/rossoctl/autobench
+  # Defaults to .Chart.AppVersion when empty.
+  tag: ""
+  # Every tag is immutable, so IfNotPresent is correct and avoids a pull per restart.
+  pullPolicy: IfNotPresent
+
+replicas: 1
+
+service:
+  port: 8080
+
+# The per-instance config bundle: one JSON file per issuer, mounted read-only at
+# /etc/service/instances. The chart REFERENCES this Secret and never creates it — it holds ROPC
+# service credentials, so it is generated out-of-band by reference/kind-service-bootstrap.sh or
+# reference/ocp-service-bootstrap.sh and must not pass through Helm values or a values file.
+instancesSecret: autobench-instances
+
+# Pod-level security context. runAsUser/runAsGroup/fsGroup are dropped automatically when
+# platform is openshift (pinning 10001 can be REJECTED if it falls outside the project's
+# allocated UID range); the image is arbitrary-UID-safe either way.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 0
+  fsGroup: 10001
+
+# OpenShift Route. Rendered only when platform is openshift and this is enabled.
+route:
+  enabled: true
+  # Empty host lets the router generate <name>-<namespace>.apps.<cluster>.
+  host: ""
+  tls:
+    termination: edge
+
+# Gateway API HTTPRoute — kind/dev only. Rendered only when platform is kind and enabled.
+# In production the Service runs behind its own ingress and does not attach to the target
+# cluster's gateway.
+httpRoute:
+  enabled: true
+  hostname: autobench.localtest.me
+  gateway:
+    name: http
+    # Defaults to the release namespace when empty.
+    namespace: ""
+
+# Extra container env, appended after SERVICE_INSTANCES_DIR and SERVICE_PORT.
+extraEnv: []
+
+resources: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

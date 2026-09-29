@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-24T15:08:59Z
+**Last modified:** 2026-09-29T01:59:52Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -67,7 +67,13 @@ multi-turn) on the `ykt3` and `kind-rossoctl` clusters.
   - [9.2 Add a new benchmark](#92-add-a-new-benchmark)
   - [9.3 Change an existing benchmark](#93-change-an-existing-benchmark)
   - [9.4 What stays runtime-mutable (for contrast)](#94-what-stays-runtime-mutable-for-contrast)
-- [10. Regenerating the documents](#10-regenerating-the-documents)
+- [10. Installing the Service itself](#10-installing-the-service-itself)
+  - [10.1 The environment matrix: KinD and OpenShift differ](#101-the-environment-matrix-kind-and-openshift-differ)
+  - [10.2 Generating the instance config](#102-generating-the-instance-config)
+  - [10.3 The Helm chart](#103-the-helm-chart)
+  - [10.4 Two KinD-only manifests](#104-two-kind-only-manifests)
+  - [10.5 KinD in one command](#105-kind-in-one-command)
+- [11. Regenerating the documents](#11-regenerating-the-documents)
 
 <!-- /toc -->
 
@@ -259,7 +265,7 @@ Everything above is mechanism: what the pieces are and who decides what. This se
 money and the minutes — which benchmark answers your question, what a leg of it costs in tokens
 and dollars, and which of those numbers are safe to divide. Every figure here is measured from
 the v1.28 matrices, not estimated; the generators that compute them are in
-[10. Regenerating the documents](#10-regenerating-the-documents).
+[11. Regenerating the documents](#11-regenerating-the-documents).
 
 ### Picking a benchmark, and what a run costs
 
@@ -1809,7 +1815,175 @@ Per-instance state is *not* in the catalog and does not require a rebuild: insta
 overrides (MLflow read creds + S3). The benchmark catalog is intentionally the immutable,
 version-pinned part.
 
-## 10. Regenerating the documents
+## 10. Installing the Service itself
+
+Everything above assumes a Service already answering on a hostname. This section is how it gets
+there. Two paths exist and both are supported: the **raw manifests** under `deploy/` (what KinD,
+ykt3 and every run before 2026-09-28 used) and a **Helm chart** at `deploy/helm/autobench`. They
+render the same objects — that equivalence is enforced, not asserted, see §10.3.
+
+**Prerequisite on either path: the target cluster runs Rossoctl v0.8.0 or later.** Below that, the
+operator accepts the deploy request the Service sends and silently drops fields it does not know
+(`k8sResourceLimits` among them), so the benchmark comes up in a shape nobody configured and
+nothing errors. `reference/ocp-service-bootstrap.sh` asserts the version before it writes anything;
+if you check by hand, read the label on the *backend*, because the operator subchart carries its own
+lower version line and comparing that one rejects a current cluster:
+
+```bash
+oc -n rossoctl-system get deploy rossoctl-backend \
+  -o jsonpath='{.metadata.labels.app\.kubernetes\.io/version}{"\n"}'    # 0.8.0-rc.2
+```
+
+### 10.1 The environment matrix: KinD and OpenShift differ
+
+The Service's own objects are nearly identical across platforms. What differs is everything it
+points *at* — and each difference has a failure mode that does not look like a misconfiguration.
+
+| | KinD (`kind-rossoctl`) | OpenShift (ykt3 / ykt5) | if you get it wrong |
+|---|---|---|---|
+| LLM gateway | the **internal** gateway | the **external** gateway | key tables are separate, so a key moved between them does not fail closed — it 401s once per completion, mid-run |
+| `openai-secret` (`apikey`) in `team1`/`team2` | issued by the internal gateway | issued by the external one | empty or foreign key ⇒ every task errors on the first call |
+| `hf-secret` (`hf-token`) | must **exist**; value may be empty | same | missing ⇒ MCP pod `CreateContainerConfigError`, then the agent crash-loops against it |
+| MLflow read path | `mlflow-reader` (§10.4) — the stock `mlflow` runs mlflow-oidc-auth and refuses a bearer | the cluster's own MLflow on `:8443`, which accepts a ServiceAccount token | refused read ⇒ the run *passes* and every token count reads 0 |
+| MLflow experiment id | `0` | `1` on ykt5 | mismatch has the same signature: a clean run with zero tokens |
+| OTEL collector endpoint | `http://otel-collector.rossoctl-system.svc.cluster.local:8335` | identical | see below |
+| agent → collector reach | service DNS | service DNS on ykt5; ykt3 needs an **edge Route**, because its agents live on ykt2 | unreachable collector ⇒ agent `CrashLoopBackOff`, surfacing as a 424 on deploy |
+
+**On the collector port, 8335 and only 8335.** Every cluster's `otel-collector-config` declares
+receivers on 4317/4318, and reading that ConfigMap will tell you to use 4318. It is wrong: the
+Deployment moves the HTTP receiver with a command-line override, so 4318 never listens.
+
+```bash
+oc -n rossoctl-system get deploy otel-collector -o jsonpath='{.spec.template.spec.containers[0].command}'
+# ["/otelcol-contrib","--config=/etc/otelcol-config/base.yaml",
+#  "--set","receivers::otlp::protocols::http::endpoint=0.0.0.0:8335"]
+```
+
+The collector's own export block is also the right place to read the MLflow target from, rather than
+choosing one: `traces_endpoint` and the `x-mlflow-experiment-id` header are what the writer uses, so
+an instance config that disagrees with them reads an experiment nothing writes to.
+
+### 10.2 Generating the instance config
+
+The `autobench-instances` Secret is one JSON file per issuer, mounted read-only at
+`/etc/service/instances`. **No install path creates it** — it carries ROPC service credentials, so it
+is generated out-of-band and never passes through Helm values or a values file. One script per
+platform, so the file has reproducible provenance instead of being hand-assembled:
+
+```bash
+reference/kind-service-bootstrap.sh --cluster rossoctl --context kind-rossoctl \
+  --realm rossoctl --client rossoctl --keycloak-host keycloak.localtest.me:8080 --out-dir instances/
+
+reference/ocp-service-bootstrap.sh --cluster ykt5 --context <ctx> --out-dir instances/
+```
+
+The OpenShift script runs **eleven prechecks before it writes a file**, and every one of them is a
+past outage: Rossoctl ≥ 0.8.0, a working ROPC login, the `rossoctl-operator` realm role on the
+service user, `openai-secret` and `hf-secret` in both `team1` and `team2`, the gateway reachable, the
+collector's HTTP receiver really on `:8335` (asserted against the Deployment's `command`, not the
+ConfigMap), the MLflow Service present, and — the one that costs the most time when it is wrong —
+that the collector writes to the same MLflow the Service will read. Secrets it copies (S3 keys, the
+MLflow bearer) move in-process and are reported only as a truncated hash.
+
+Then, on either platform:
+
+```bash
+kubectl -n rossoctl-system create secret generic autobench-instances \
+  --from-file="<encoded-iss-host>.json=instances/<encoded-iss-host>.json" \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+The Service reads instance files at startup, so `rollout restart` after changing the Secret. Note
+`PUT /config` (§5) is in-memory only — a correction that must survive a restart goes in the Secret.
+
+### 10.3 The Helm chart
+
+```
+deploy/helm/autobench/
+  Chart.yaml            version = chart version; appVersion = the default image tag
+  values.yaml           the two platform shapes, documented inline
+  templates/            deployment, service, route, httproute, _helpers.tpl, NOTES.txt
+deploy/helm/values-ykt5.yaml    one cluster's overrides
+```
+
+`platform` selects the shape, and it is the only value most installs need to think about:
+
+| `platform` | pod security context | ingress |
+|---|---|---|
+| `openshift` | `runAsNonRoot` + seccomp only — restricted-v2 injects UID/GID/fsGroup, and **pinning 10001 can be rejected** when it falls outside the project's allocated range | `Route`, edge TLS, host generated as `autobench-<namespace>.apps.<cluster>` |
+| `kind` | UID/GID/fsGroup pinned to 10001/0/10001 | `HTTPRoute` on the shared istio gateway |
+
+```bash
+helm upgrade --install autobench deploy/helm/autobench \
+  -n rossoctl-system --kube-context <ctx> -f deploy/helm/values-ykt5.yaml
+```
+
+**Parity with the manifests is the chart's correctness gate, and it has teeth.** A Deployment's
+selector is immutable and two clusters already run objects created from `deploy/*.yaml`, so a chart
+that renders a *better* object cannot be adopted by them — it can only be installed next to them.
+Run this after any template change:
+
+```bash
+python3 reference/helm-parity-check.py     # 6 checks; "Chart and manifests agree."
+```
+
+It renders both platform shapes and diffs them against `deploy/{deployment,service,kind/httproute}.yaml`
+and against the OpenShift patched render. The standard `app.kubernetes.io/*` labels are deliberately
+**absent**: the sole label and selector is `app: autobench-service`, because that is what the live
+Deployments select on. If the check fails, the chart is wrong — not the manifests.
+
+Scope today: **`openshift` is the only validated install path** (ykt5 runs from this chart). The
+`kind` shape renders and passes the parity check but has not been installed; KinD is still brought up
+with `reference/kind-post-setup.sh` and the raw manifests, and promoting that path comes after the
+OpenShift chart has more mileage.
+
+### 10.4 Two KinD-only manifests
+
+Both live under `deploy/kind/` and neither is part of the chart, because neither has an OpenShift
+counterpart.
+
+**`mlflow-reader.yaml`** — stock MLflow, no auth, serving the *same* postgres as the writer. It
+exists because rossoctl-deps' `mlflow` runs mlflow-oidc-auth, which rejects the Service's bearer
+token; the run then publishes a report with zero tokens on every task, which reads like missing
+telemetry rather than a refused read. It is a reader by convention only, which is why it has no
+Route and no OpenShift equivalent. Two things about it are measured rather than chosen: `--workers 1`
+(MLflow 3.x defaults to four) and a **4Gi** limit — one worker idles at ~2.3 GiB, so a 2Gi limit
+OOMKills it about 30 s after boot, and the log ends on `Application startup complete` with no error.
+When it flaps, read the container's `lastState`, not its log. Gate on a 200 from
+`/api/2.0/mlflow/traces`, not on the pod going Ready: two pip installs run at container start.
+
+**`ibac-judge.yaml`** — the upstream proxy the AuthBridge `ibac` plugin calls. The plugin's ConfigMap
+is cleartext, so the key cannot live there; this holds it in a Secret and adds the `Authorization`
+header outbound, leaving the plugin pointed at a credential-free in-cluster URL. Without it the
+plugin is inert: it admits every call and the run looks like a clean pass, which is why enforcement
+is proven by *counting judge calls* and never by reading a pass rate. `UPSTREAM_BASE` in the
+committed copy is an `example.com` placeholder — substitute the real gateway at apply time, and
+`rollout restart` after the key lands, since the proxy reads it once at pod start. Note that stock
+KinD's `agentruntimes` CRD has no `pluginPreset` field, so the plugin legs of the matrix stay
+OpenShift-only even with the judge in place.
+
+### 10.5 KinD in one command
+
+`reference/kind-post-setup.sh` does the whole bring-up: build and `kind load` the image, re-seed the
+`benchmarker` user (including the `firstName`/`lastName` the realm requires for ROPC, and the
+`rossoctl-operator` role without which `/deploy` 502s on a 403), ensure `hf-secret` and
+`openai-secret` in `team1`/`team2`, generate the instance config, create the Secret, apply the three
+manifests, and check `/healthz`.
+
+Its two credentials come from `chmod 600` files that survive cluster rebuilds
+(`~/.rossoctl-kind/benchmarker.pass` and `~/.rossoctl-kind/litellm.key`), or from the environment.
+The LLM key variable is `BM_WORKLOAD_LLM_KEY` and **deliberately not** `OPENAI_API_KEY`: that name is
+commonly exported in a shell profile for an unrelated provider, and the script writes whatever it
+finds into cluster Secrets. A namespaced name cannot be inherited by accident.
+
+```bash
+IMAGE=ghcr.io/rossoctl/autobench:v1.29 reference/kind-post-setup.sh
+```
+
+`kind load docker-image` bypasses the registry, so the digest on a KinD pod will not match the
+published one even at the same tag — compare source, not digests, there.
+
+## 11. Regenerating the documents
 
 Everything under `docs/` that is not hand-written has a generator, so no step in producing the
 published artifacts is a manual browser print or a hand-edited table.
