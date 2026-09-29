@@ -50,6 +50,7 @@ KC_HOST="${KC_HOST:-keycloak.localtest.me:8080}"
 KC_SERVER="${KC_SERVER:-http://${KC_HOST}}"
 BENCH_USER="${BENCH_USER:-benchmarker}"
 BENCH_EMAIL="${BENCH_EMAIL:-benchmarker@localtest.me}"
+TEAM_NAMESPACES="${TEAM_NAMESPACES:-team1}"
 
 # --- secrets (env, else chmod-600 file; admin pw falls back to the cluster secret) ---
 KC_CRED_FILE="${KC_CRED_FILE:-$HOME/.rossoctl-kind/benchmarker.pass}"
@@ -147,7 +148,10 @@ ensure_apikey() {  # $1=namespace $2=secret name
     && echo "==> $2 apikey set in $1" \
     || echo "WARNING: could not patch $2 in $1" >&2
 }
-for ns in team1 team2; do
+# Only the namespaces deployed into: every spec in reference/run12_specs.json names team1. Override
+# with TEAM_NAMESPACES when a run targets another namespace — the secrets are per-namespace, and a
+# leg landing where they are absent crash-loops rather than failing cleanly.
+for ns in $TEAM_NAMESPACES; do
   kubectl --context "$CTX" -n "$ns" create secret generic hf-secret \
     --from-literal=hf-token="" --dry-run=client -o yaml | kubectl --context "$CTX" apply -f - >/dev/null
   echo "==> hf-secret ensured in $ns"

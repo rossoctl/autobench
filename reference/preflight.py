@@ -56,7 +56,10 @@ OK, FAIL, WARN, SKIP = "ok", "FAIL", "warn", "skip"
 _ICON = {OK: "ok   ", FAIL: "FAIL ", WARN: "warn ", SKIP: "skip "}
 
 DEFAULT_NS = "rossoctl-system"
-DEFAULT_TEAMS = ("team1", "team2")
+# Only the namespaces you actually deploy into. Every spec in reference/run12_specs.json names
+# `team1` (24 of 24), so a second namespace is opt-in via --teams rather than assumed: reporting an
+# unused `team2` as a FAILURE buries the rows that matter under noise nobody will act on.
+DEFAULT_TEAMS = ("team1",)
 COLLECTOR_DEPLOY = "otel-collector"
 MLFLOW_EXPORTER = "otlphttp/mlflow"
 INSTANCES_SECRET = "autobench-instances"
@@ -281,7 +284,7 @@ def check_workload_secrets(rep: Report, cluster: Cluster | None, teams: list[str
     rep.section("Workload secrets (per team namespace)")
     if cluster is None:
         # ykt3's shape: the Service runs on one cluster and every agent/MCP pod on another, so its
-        # own team1/team2 hold nothing and checking them there would fail on all three counts.
+        # own team namespaces hold nothing and checking them there would fail on all three counts.
         rep.skip(
             "openai-secret / hf-secret",
             "the workloads are on another cluster — re-run with --workload-context <ctx> to check them",
@@ -310,8 +313,9 @@ def check_workload_secrets(rep: Report, cluster: Cluster | None, teams: list[str
             detail = f"sha8 {sha8(data['hf-token'])}" if data["hf-token"] else "empty value (fine)"
             rep.ok(f"{ns}/hf-secret hf-token", detail)
 
-    # Cross-namespace consistency: team1 and team2 must hold the SAME gateway key, or a leg that
-    # lands in team2 fails while the identical leg in team1 passes.
+    # Cross-namespace consistency, when --teams names more than one: they must hold the SAME gateway
+    # key, or a leg that lands in the second namespace fails while the identical leg in the first
+    # passes — and nothing in the run output says which namespace it used.
     keys = {}
     for ns in teams:
         data = cluster.secret_data(ns, "openai-secret") or {}
@@ -846,7 +850,8 @@ def main() -> int:
                     help="default: kind when the context starts with kind-, else openshift")
     ap.add_argument("--namespace", default=DEFAULT_NS, help="Service namespace (default: %(default)s)")
     ap.add_argument("--teams", default=",".join(DEFAULT_TEAMS),
-                    help="comma-separated workload namespaces (default: %(default)s)")
+                    help="comma-separated workload namespaces to check — the ones you deploy into "
+                         "(default: %(default)s; every run12 spec names team1)")
     ap.add_argument("--gateway", default="http", help="kind only: Gateway name (default: %(default)s)")
     ap.add_argument("--image", help="expected Service image, to compare against what is deployed")
     ap.add_argument("--chart", default=CHART_DIR, help="chart directory (default: %(default)s)")

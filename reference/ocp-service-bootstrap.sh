@@ -265,12 +265,17 @@ fi
 
 # The workload LLM key: present, non-empty, and NOT the internal gateway's key. Only the hash is
 # shown. An empty apikey is the common post-reinstall state and 401s every completion.
-for ns in team1 team2; do
+#
+# Only the namespaces actually deployed into, which is why TEAM_NAMESPACES is `team1` and not
+# `team1 team2`: all 24 specs in reference/run12_specs.json name team1, and failing the precheck on
+# an unused namespace stops a correct install for nothing. Override when you deploy elsewhere.
+TEAM_NAMESPACES="${TEAM_NAMESPACES:-team1}"
+for ns in $TEAM_NAMESPACES; do
     K="$(kc -n "$ns" get secret openai-secret -o jsonpath='{.data.apikey}' 2>/dev/null | base64 -d 2>/dev/null || true)"
     if [ -z "$K" ]; then check "openai-secret apikey in ${ns}" 1 "absent or empty — every completion will 401"
     else check "openai-secret apikey in ${ns} (sha8 $(sha8 "$K"))" 0; fi
 done
-for ns in team1 team2; do
+for ns in $TEAM_NAMESPACES; do
     kc -n "$ns" get secret hf-secret >/dev/null 2>&1 \
         && check "hf-secret in ${ns}" 0 \
         || check "hf-secret in ${ns}" 1 "absent — the MCP pod stays in CreateContainerConfigError"

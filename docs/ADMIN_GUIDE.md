@@ -41,6 +41,7 @@ install, §6 is the only verification that means anything.
   - [3.2 The Service pod](#32-the-service-pod)
   - [3.3 The workload pods — injected, not configured](#33-the-workload-pods--injected-not-configured)
   - [3.4 KinD and OpenShift differ — and the differences fail silently](#34-kind-and-openshift-differ--and-the-differences-fail-silently)
+  - [3.5 The LiteLLM gateway: two profiles](#35-the-litellm-gateway-two-profiles)
 - [4. The instance-config Secret](#4-the-instance-config-secret)
 - [5. Installing with Helm](#5-installing-with-helm)
   - [5.1 OpenShift](#51-openshift)
@@ -71,8 +72,9 @@ Everything else the Service depends on belongs to the platform and must exist **
 install is useful:
 
 - a Keycloak user (`benchmarker` by convention) with the **`rossoctl-operator` realm role**;
-- `openai-secret` (`apikey`) and `hf-secret` (`hf-token`) in each workload namespace (`team1`,
-  `team2`);
+- `openai-secret` (`apikey`) and `hf-secret` (`hf-token`) in **every namespace you deploy
+  benchmarks into** — `team1` unless you have changed the specs, since all 24 entries in
+  `reference/run12_specs.json` name it;
 - an OTEL collector that writes to an MLflow the Service can read (§3.4).
 
 ### The two cluster shapes
@@ -127,8 +129,8 @@ find it by reading logs at the layer where it hurts.
 | `agentruntimes` + `agentcards` CRDs | cluster | `/deploy` fails at the operator |
 | `benchmarker` user, **ROPC enabled** on the client | realm | token request 400s; on this realm a missing `firstName`/`lastName` yields `Account is not fully set up` |
 | `rossoctl-operator` realm role on that user | realm | `/deploy` surfaces the operator's 403 as a **502** |
-| `openai-secret` / `apikey` | `team1`, `team2` | empty or foreign key ⇒ a 401 **per completion, mid-run**; the leg finishes with zeroes rather than failing |
-| `hf-secret` / `hf-token` (may be empty) | `team1`, `team2` | MCP pod `CreateContainerConfigError`, the agent then crash-loops against it, and the *run* reports 424 |
+| `openai-secret` / `apikey` | `team1` | empty or foreign key ⇒ a 401 **per completion, mid-run**; the leg finishes with zeroes rather than failing |
+| `hf-secret` / `hf-token` (may be empty) | `team1` | MCP pod `CreateContainerConfigError`, the agent then crash-loops against it, and the *run* reports 424 |
 | OTEL collector, HTTP receiver on **:8335** | `rossoctl-system` | an agent pointed at 4318 hard-fails into `CrashLoopBackOff` |
 | an MLflow the collector **writes to** and the Service can **read** | varies (§3.4) | the run **passes** with `model: "unknown"` and every token count 0 |
 
@@ -170,7 +172,6 @@ install, and the local chart.
 ```
 Workload secrets (per team namespace)
   ok    team1/openai-secret apikey — sha8 0239f193
-  ok    team2/openai-secret apikey — sha8 0239f193
   ok    team1/hf-secret hf-token — empty value (fine)
 
 OTEL collector (the write half of the telemetry chain)
@@ -314,6 +315,47 @@ pinned to `:latest`, and it has flipped between `direct` and `service` across re
 With the current image, `service` is what emits agent spans; `direct` yields a clean run with
 **zero-token rows**, which is exactly what a broken MLflow looks like. Do not infer it — detect it,
 by looking for a non-zero token row in `report.ndjson` (§6).
+
+### 3.5 The LiteLLM gateway: two profiles
+
+The gateway is the one piece of configuration that is neither discoverable from the cluster nor
+shared between platforms, so it gets its own section. There are two profiles, and the deciding
+question is not KinD-versus-OpenShift — it is **whether the cluster's pods sit inside the
+organisation's network**.
+
+| | intranet cluster (a personal KinD on the VPN) | cluster outside the intranet |
+|---|---|---|
+| which gateway | the **internal** LiteLLM (`…vpc-int…`) | the **external** LiteLLM (`…vpc…`) |
+| why not the other one | the external host is not routed on a split-tunnel VPN — connect times out | the internal host is in a routed private range reachable only from inside |
+| `workload_llm.api_base` | the internal base | the external base |
+| `workload_llm.default_model` | an id from *that* gateway's catalogue | likewise — the catalogues are **not** identical |
+| key in `team1/openai-secret` (`apikey`) | issued by the internal gateway | issued by the external one |
+| supplied at install as | `BM_WORKLOAD_LLM_KEY`, or `~/.rossoctl-kind/litellm.key` (`600`) | `TEAM_NAMESPACES`-scoped Secret already on the cluster, or the same env var |
+| set in the instance file by | `kind-service-bootstrap.sh --llm-base` / `--llm-model` (env `WORKLOAD_LLM_BASE`, `WORKLOAD_LLM_MODEL`) | `ocp-service-bootstrap.sh --llm-api-base` / `--llm-model` (env **`WORKLOAD_LLM_API_BASE`**, `WORKLOAD_LLM_MODEL`) |
+| egress proxy | bypass required if the pods inherit an `HTTP_PROXY` | same |
+
+Four things to know before you configure either:
+
+- **The two env var names differ by one word.** The KinD script reads `WORKLOAD_LLM_BASE`; the
+  OpenShift script reads `WORKLOAD_LLM_API_BASE`. Exporting the other one is not an error — the
+  value is simply not picked up, and `ocp-service-bootstrap.sh` then refuses with
+  `--llm-api-base is required` while `kind-service-bootstrap.sh` warns and writes no `workload_llm`
+  at all, leaving the agent on the benchmark's built-in default.
+- **The key never travels in the instance file.** It lives only in the cluster Secret
+  `openai-secret`, key `apikey`, and reaches the pod as `OPENAI_API_KEY` through a `secretKeyRef`.
+  Moving a key between the two gateways is the single most common failure here: the tables are
+  separate, so it does not fail closed — it 401s per completion, mid-run.
+- **The proxy-bypass list is part of the gateway configuration, not a separate concern.** Where the
+  cluster injects an egress proxy, an in-network gateway base must be excluded from it or every
+  completion leaves through a proxy that cannot reach it. `workload_llm.no_proxy` (and
+  `disable_proxy: true`, which injects an empty `HTTP_PROXY`/`http_proxy`) are rendered onto the
+  **agent** pod only. `ocp-service-bootstrap.sh` builds the list for you — `127.0.0.1`, `localhost`,
+  the gateway host, the collector, and Keycloak's in-cluster service. `kind-service-bootstrap.sh`
+  does **not** build it: it carries `workload_llm` over wholesale from `--copy-from`, so a KinD
+  bootstrap run without that flag silently loses the bypass list along with the base and the model.
+- **Do not verify a gateway with `curl`.** LiteLLM strips the `openai/` prefix, so the configured
+  model name 403s by hand, and reasoning models reject `max_tokens` with a 400 (`max_completion_tokens`
+  is the accepted field). The only trustworthy probe is a 1-task `gsm8k` leg (§6).
 
 ## 4. The instance-config Secret
 
