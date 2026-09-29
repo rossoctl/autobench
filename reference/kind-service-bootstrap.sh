@@ -40,12 +40,30 @@ Flags (each also has an env fallback):
   --rossoctl-url URL   ROSSOCTL_BASE_URL  in-cluster Rossoctl API base URL
                                           (default: http://rossoctl-backend.rossoctl-system:8000)
   --mlflow-namespace N MLFLOW_NAMESPACE   MLflow namespace          (default: rossoctl-system)
-  --mlflow-url URL     MLFLOW_URL         MLflow tracking URL (default: in-cluster svc URL,
-                                          reachable by the in-cluster Service)
+  --mlflow-url URL     MLFLOW_URL         MLflow tracking URL (default: the no-auth mlflow-reader
+                                          in-cluster svc URL — see the note below)
+  --experiment-id N    MLFLOW_EXPERIMENT_ID  (default: READ from the collector's own exporter
+                                          header, because guessing it yields a zero-token report)
+  --copy-from FILE     COPY_FROM          existing instance JSON to carry `s3` and `workload_llm`
+                                          over from. Those two are environment facts this script
+                                          cannot discover, and a cluster rebuild should reproduce
+                                          them rather than lose them.
+  --llm-base URL       WORKLOAD_LLM_BASE  LLM gateway base (kind needs the INTERNAL one)
+  --llm-model M        WORKLOAD_LLM_MODEL default model, e.g. openai/<gateway model id>
+  --otel-endpoint URL  WORKLOAD_OTEL_ENDPOINT  (default: the in-cluster collector on :8335)
+  --agent-runner R     WORKLOAD_AGENT_RUNNER   (default: service — `direct` emits no agent spans,
+                                          so every token count reads 0)
+  --s3-prefix P        S3_PREFIX          (default: kind/)
   --out-dir DIR        OUT_DIR            where to write the config (default: ./instances)
   --kubectl BIN        KUBECTL_BIN        kubectl binary            (default: kubectl)
   --client ID          KC_SERVICE_CLIENT_ID  client the Service logs in through (default: rossoctl)
   -h, --help
+
+MLflow on kind: the `mlflow` Deployment rossoctl-deps installs runs mlflow-oidc-auth, which
+refuses both the Service's read and the collector's write. deploy/kind/mlflow-reader.yaml serves
+the same postgres with no auth, and this script points the Service at it by default. Wire the
+collector to it too, or spans are dropped with a 401 and the run publishes zeros:
+  python3 reference/kind-collector-mlflow.py
 
 The Service authenticates to Rossoctl with ITS OWN per-instance credential
 (ROPC / password grant). In kind the login/JWKS URLs are taken from the Keycloak
@@ -79,6 +97,13 @@ KC_BACKCHANNEL_URL="${KC_BACKCHANNEL_URL:-http://keycloak-service.keycloak:8080}
 ROSSOCTL_BASE_URL="${ROSSOCTL_BASE_URL:-http://rossoctl-backend.rossoctl-system:8000}"
 MLFLOW_NAMESPACE="${MLFLOW_NAMESPACE:-rossoctl-system}"
 MLFLOW_URL="${MLFLOW_URL:-}"
+MLFLOW_EXPERIMENT_ID="${MLFLOW_EXPERIMENT_ID:-}"
+COPY_FROM="${COPY_FROM:-}"
+WORKLOAD_LLM_BASE="${WORKLOAD_LLM_BASE:-}"
+WORKLOAD_LLM_MODEL="${WORKLOAD_LLM_MODEL:-}"
+WORKLOAD_OTEL_ENDPOINT="${WORKLOAD_OTEL_ENDPOINT:-http://otel-collector.rossoctl-system.svc.cluster.local:8335}"
+WORKLOAD_AGENT_RUNNER="${WORKLOAD_AGENT_RUNNER:-service}"
+S3_PREFIX="${S3_PREFIX:-kind/}"
 OUT_DIR="${OUT_DIR:-./instances}"
 KUBECTL_BIN="${KUBECTL_BIN:-kubectl}"
 KC_SERVICE_CLIENT_ID="${KC_SERVICE_CLIENT_ID:-rossoctl}"
@@ -97,6 +122,13 @@ while [ $# -gt 0 ]; do
         --rossoctl-url)     ROSSOCTL_BASE_URL="$2"; shift 2 ;;
         --mlflow-namespace) MLFLOW_NAMESPACE="$2"; shift 2 ;;
         --mlflow-url)       MLFLOW_URL="$2"; shift 2 ;;
+        --experiment-id)    MLFLOW_EXPERIMENT_ID="$2"; shift 2 ;;
+        --copy-from)        COPY_FROM="$2"; shift 2 ;;
+        --llm-base)         WORKLOAD_LLM_BASE="$2"; shift 2 ;;
+        --llm-model)        WORKLOAD_LLM_MODEL="$2"; shift 2 ;;
+        --otel-endpoint)    WORKLOAD_OTEL_ENDPOINT="$2"; shift 2 ;;
+        --agent-runner)     WORKLOAD_AGENT_RUNNER="$2"; shift 2 ;;
+        --s3-prefix)        S3_PREFIX="$2"; shift 2 ;;
         --out-dir)          OUT_DIR="$2"; shift 2 ;;
         --kubectl)          KUBECTL_BIN="$2"; shift 2 ;;
         --client)           KC_SERVICE_CLIENT_ID="$2"; shift 2 ;;
@@ -153,9 +185,54 @@ fi
 # in-cluster svc URL is directly reachable (no port-forward / ingress needed —
 # this closes inventory item #7 for kind). Override with --mlflow-url only if
 # MLflow lives elsewhere.
+#
+# It defaults to mlflow-READER, not to `mlflow`. The Deployment rossoctl-deps installs runs
+# mlflow-oidc-auth and rejects the Service's bearer, and the failure is silent: every run
+# succeeds and every token count reads 0. deploy/kind/mlflow-reader.yaml serves the same
+# postgres with no auth.
 if [ -z "$MLFLOW_URL" ]; then
-    MLFLOW_URL="http://mlflow.${MLFLOW_NAMESPACE}.svc.cluster.local:5000"
-    log "    MLflow tracking URL defaulted to in-cluster svc ${MLFLOW_URL} (reachable by the in-cluster Service)"
+    MLFLOW_URL="http://mlflow-reader.${MLFLOW_NAMESPACE}.svc.cluster.local:5000"
+    log "    MLflow tracking URL defaulted to the no-auth reader ${MLFLOW_URL}"
+    if ! kc -n "$MLFLOW_NAMESPACE" get deploy mlflow-reader >/dev/null 2>&1; then
+        warn "mlflow-reader is NOT deployed in ${MLFLOW_NAMESPACE} — apply deploy/kind/mlflow-reader.yaml,"
+        warn "  or token reports will be empty. (Pass --mlflow-url to use a different MLflow.)"
+    fi
+fi
+
+# The experiment id is READ from the collector's own exporter header, never chosen: an instance
+# config that names an experiment nothing writes to produces exactly the same zero-token report
+# as a refused write, so a guess here is indistinguishable from a broken telemetry chain.
+if [ -z "$MLFLOW_EXPERIMENT_ID" ]; then
+    MLFLOW_EXPERIMENT_ID="$(python3 "$(dirname "${BASH_SOURCE[0]}")/kind-collector-mlflow.py" \
+        --context "$KUBE_CONTEXT" --print-experiment-id 2>/dev/null || true)"
+    if [ -n "$MLFLOW_EXPERIMENT_ID" ]; then
+        log "    experiment id ${MLFLOW_EXPERIMENT_ID} read from the collector's MLflow exporter"
+    else
+        MLFLOW_EXPERIMENT_ID="0"
+        warn "could not read the collector's x-mlflow-experiment-id; defaulting to 0"
+    fi
+fi
+
+# `s3` and `workload_llm` are environment facts this script cannot discover — which gateway issued
+# the key in openai-secret, and which bucket credentials to publish with. Carry them over from an
+# existing instance file so a cluster rebuild reproduces them instead of silently dropping them.
+S3_JSON="null"; LLM_JSON="null"
+if [ -n "$COPY_FROM" ]; then
+    [ -f "$COPY_FROM" ] || { echo "--copy-from: no such file: $COPY_FROM" >&2; exit 1; }
+    # Values move through jq only; nothing is echoed.
+    S3_JSON="$(jq -c --arg p "$S3_PREFIX" '(.s3 // null) | if . then .prefix = $p else . end' "$COPY_FROM")"
+    LLM_JSON="$(jq -c '.workload_llm // null' "$COPY_FROM")"
+    [ "$S3_JSON"  = null ] && warn "--copy-from has no .s3 — artifacts will not be published"
+    [ "$LLM_JSON" = null ] && warn "--copy-from has no .workload_llm — runs will use the benchmark default model"
+fi
+if [ -n "$WORKLOAD_LLM_BASE" ] || [ -n "$WORKLOAD_LLM_MODEL" ]; then
+    LLM_JSON="$(jq -cn --argjson cur "$LLM_JSON" --arg b "$WORKLOAD_LLM_BASE" --arg m "$WORKLOAD_LLM_MODEL" \
+        '($cur // {}) | (if $b != "" then .api_base = $b else . end)
+                      | (if $m != "" then .default_model = $m else . end)')"
+fi
+if [ "$LLM_JSON" = null ]; then
+    warn "no workload_llm (pass --copy-from, or --llm-base/--llm-model): the agent will use the"
+    warn "  benchmark's baked-in default model, which the cluster's key may not be able to reach"
 fi
 
 # --- 3. write instances/<encoded-iss-host>.json ---
@@ -172,25 +249,60 @@ OUT_FILE="${OUT_DIR%/}/${ENCODED_HOST}.json"
 # identity matching only; the login/JWKS URLs are taken from the Keycloak
 # BACKCHANNEL URL (keycloak_backchannel_url), NOT composed from iss — in kind the
 # iss host resolves to pod loopback in-cluster and is unreachable.
-jq -n \
-    --arg iss "$ISS" \
-    --arg kcbackchannel "$KC_BACKCHANNEL_URL" \
-    --arg rossoctl "$ROSSOCTL_BASE_URL" \
-    --arg scid "$KC_SERVICE_CLIENT_ID" \
-    --arg scsec "$KC_SERVICE_CLIENT_SECRET" \
-    --arg suser "$KC_SERVICE_USERNAME" \
-    --arg spass "$KC_SERVICE_PASSWORD" \
-    --arg murl "$MLFLOW_URL" \
-    --arg mcid "$MLFLOW_CLIENT_ID" \
-    --arg mcsec "$MLFLOW_CLIENT_SECRET" \
-    --arg mturl "$MLFLOW_TOKEN_URL" \
-    '{
-        iss: $iss,
-        keycloak_backchannel_url: $kcbackchannel,
-        rossoctl_base_url: $rossoctl,
-        service_credential: { client_id: $scid, client_secret: $scsec, username: $suser, password: $spass },
-        mlflow: { tracking_url: $murl, client_id: $mcid, client_secret: $mcsec, token_url: $mturl }
-    }' > "$OUT_FILE"
+# The no-auth reader still needs a bearer_token in the config, and that is not a contradiction:
+# the Service mints a token BEFORE it reads, and with no bearer and no client-credentials
+# `mlflow_token()` raises, which routes/runs.py catches and fails soft — an empty token report,
+# identical in appearance to a broken collector. So a placeholder is emitted, which the reader
+# ignores. When --mlflow-url points at an authenticating MLflow instead, the mlflow-oauth-secret
+# client-credentials are emitted and no bearer, so the grant runs.
+case "$MLFLOW_URL" in
+    *mlflow-reader*) MLFLOW_NO_AUTH=1 ;;
+    *)               MLFLOW_NO_AUTH=0 ;;
+esac
+
+# Every value reaches jq through the ENVIRONMENT, not through --arg: argv is world-readable
+# (`ps`, /proc/<pid>/cmdline) and this file carries the ROPC password and the bucket keys. The
+# environment of a process is readable by its own user only. Nothing here is ever echoed.
+# The file is created 600 by umask, not chmod'd after the fact — there is no window in which the
+# credentials sit world-readable on disk.
+export ISS KC_BACKCHANNEL_URL ROSSOCTL_BASE_URL \
+       KC_SERVICE_CLIENT_ID KC_SERVICE_CLIENT_SECRET KC_SERVICE_USERNAME KC_SERVICE_PASSWORD \
+       MLFLOW_URL MLFLOW_CLIENT_ID MLFLOW_CLIENT_SECRET MLFLOW_TOKEN_URL MLFLOW_EXPERIMENT_ID \
+       MLFLOW_NO_AUTH S3_JSON LLM_JSON WORKLOAD_OTEL_ENDPOINT WORKLOAD_AGENT_RUNNER
+(
+umask 077
+jq -n '
+    (env.S3_JSON  // "null" | fromjson) as $s3  |
+    (env.LLM_JSON // "null" | fromjson) as $llm |
+    {
+        iss: env.ISS,
+        keycloak_backchannel_url: env.KC_BACKCHANNEL_URL,
+        rossoctl_base_url: env.ROSSOCTL_BASE_URL,
+        service_credential: {
+            client_id: env.KC_SERVICE_CLIENT_ID,
+            client_secret: env.KC_SERVICE_CLIENT_SECRET,
+            username: env.KC_SERVICE_USERNAME,
+            password: env.KC_SERVICE_PASSWORD
+        },
+        mlflow: (
+            { tracking_url: env.MLFLOW_URL, experiment_id: env.MLFLOW_EXPERIMENT_ID }
+            + (if env.MLFLOW_NO_AUTH == "1"
+               then { bearer_token: "unused-no-auth-reader" }
+               else { client_id: env.MLFLOW_CLIENT_ID,
+                      client_secret: env.MLFLOW_CLIENT_SECRET,
+                      token_url: env.MLFLOW_TOKEN_URL } end)
+        ),
+        workload_otel: {
+            enabled: true,
+            endpoint: env.WORKLOAD_OTEL_ENDPOINT,
+            protocol: "http/protobuf",
+            insecure: true
+        },
+        workload_agent_runner: env.WORKLOAD_AGENT_RUNNER
+    }
+    + (if $s3  then { s3: $s3 }            else {} end)
+    + (if $llm then { workload_llm: $llm } else {} end)' > "$OUT_FILE"
+)
 chmod 600 "$OUT_FILE"
 log "==> Wrote ${OUT_FILE}"
 

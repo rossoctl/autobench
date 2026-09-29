@@ -1,10 +1,5 @@
 AutoBench Service {{ .Values.image.tag | default .Chart.AppVersion }} installed as {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
 
-{{ if ne (include "autobench.platform" .) "openshift" }}
-WARNING: platform={{ .Values.platform }} is not a validated install path yet — only `openshift` is.
-KinD is deployed with reference/kind-post-setup.sh and deploy/*.yaml until the OpenShift chart is
-validated on a live cluster.
-{{ end }}
 Requires Rossoctl v0.8.0 or later on this cluster. An older operator accepts the Service's deploy
 request and silently drops fields from it, so the benchmark runs in a shape you did not configure.
 
@@ -25,7 +20,8 @@ Verify the rollout, then the API:
     curl -fsS "https://$HOST/healthz"
 {{- else if and (eq (include "autobench.platform" .) "kind") .Values.httpRoute.enabled }}
 
-    curl -fsS http://{{ .Values.httpRoute.hostname }}:{{ .Values.service.port }}/healthz
+    # 8080 is the HOST port kind publishes the istio gateway on — not this Service's port.
+    curl -fsS http://{{ .Values.httpRoute.hostname }}:8080/healthz
 {{- else }}
 
     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "autobench.name" . }} 18080:{{ .Values.service.port }}

@@ -14,11 +14,11 @@
 #   openshift -> let the restricted-v2 SCC inject the UID/GID, and expose via a Route
 #   kind      -> pin UID 10001, and expose via an HTTPRoute on the shared istio gateway
 #
-# NOTE ON SCOPE: only `openshift` is a supported install path today. The `kind` shape renders and
-# is byte-checked against deploy/{deployment,service,kind/httproute}.yaml by
-# reference/helm-parity-check.py, but it has not been validated by an actual install — KinD is
-# still deployed with reference/kind-post-setup.sh and the raw manifests. Promoting the kind path
-# comes after the OpenShift chart is validated on a live cluster.
+# Both shapes are installed and validated on a live cluster: `openshift` on ykt5, `kind` on
+# kind-rossoctl (2026-09-29). The two clusters that predate the chart were ADOPTED into releases
+# rather than reinstalled — a Deployment's selector is immutable, so a chart cannot replace an
+# existing object, only take ownership of it. See docs/ADMIN_GUIDE.md ("Adopting an existing
+# raw-manifest install").
 platform: openshift
 
 image:

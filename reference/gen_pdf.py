@@ -51,6 +51,7 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 # by a bare `python3 reference/gen_pdf.py`.
 PAIRS = [
     ("docs/DEVELOPER_GUIDE.md", "docs/DEVELOPER_GUIDE.pdf"),
+    ("docs/ADMIN_GUIDE.md", "docs/ADMIN_GUIDE.pdf"),
     ("docs/12_RUNS_CROSS_CLUSTER.md", "docs/12_RUNS_CROSS_CLUSTER.pdf"),
     ("docs/AutoBench.pptx", "docs/AutoBench.pdf"),
 ]

@@ -1,0 +1,21 @@
+# kind: DEV/TEST only, single cluster — Service and workloads together. Install with:
+#
+#   helm upgrade --install autobench deploy/helm/autobench \
+#     -n rossoctl-system --kube-context kind-rossoctl -f deploy/helm/values-kind.yaml
+#
+# The instance-config Secret must exist first — see the chart's values.yaml. On a rebuilt cluster
+# run reference/kind-post-setup.sh instead: it does the image build, the `benchmarker` user, the
+# team secrets and the instance config, and the chart is only the last step of that.
+platform: kind
+
+# There is no Route CRD on kind; ingress is the shared istio gateway.
+route:
+  enabled: false
+
+httpRoute:
+  enabled: true
+  # Resolves to the pod's own loopback in-cluster (there is NO CoreDNS rewrite for *.localtest.me),
+  # so this hostname is for host-side callers only. kind publishes the gateway on host :8080.
+  hostname: autobench.localtest.me
+  gateway:
+    name: http

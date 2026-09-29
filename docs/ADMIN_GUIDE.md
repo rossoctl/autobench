@@ -1,0 +1,568 @@
+# AutoBench Service — Admin Guide
+
+**Last modified:** 2026-09-29T04:14:57Z
+
+> Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
+> line above when you edit this guide.
+
+How the AutoBench Service gets onto a cluster and stays trustworthy there: prerequisites, the
+environment that differs between platforms, the Helm chart, and the verification that actually
+proves the install. *Driving* the Service once it answers is a different document —
+[`DEVELOPER_GUIDE.md`](./DEVELOPER_GUIDE.md).
+
+- **Every host below is a placeholder on `example.com`** — this repo is public, so it names
+  platforms rather than endpoints. Route *shapes* are real
+  (`<service>-<namespace>.apps.<cluster>.example.com`), so substitute your own domain and the
+  recipes work unchanged.
+- **No secret value appears in this guide, and none should appear in your terminal.** Every script
+  here reads credentials from the environment or from a `chmod 600` file and reports them only as a
+  truncated SHA-256. If you find yourself about to `echo` one, don't.
+- Two install paths exist and both are supported: the **Helm chart** at `deploy/helm/autobench`
+  (§5) and the **raw manifests** under `deploy/` (§8). They render the same objects, and that
+  equivalence is enforced by a check, not asserted.
+
+**In a hurry?** §2.4 is the one command that tells you whether the cluster is ready, §5 is the
+install, §6 is the only verification that means anything.
+
+<!-- Regenerate this list: python3 reference/gen_toc.py docs/ADMIN_GUIDE.md -->
+<!-- toc -->
+
+**Contents**
+
+- [1. What you install, and what you don't](#1-what-you-install-and-what-you-dont)
+  - [The two cluster shapes](#the-two-cluster-shapes)
+- [2. Prerequisites](#2-prerequisites)
+  - [2.1 Rossoctl v0.8.0 or later](#21-rossoctl-v080-or-later)
+  - [2.2 Workstation tooling](#22-workstation-tooling)
+  - [2.3 Cluster-side checklist](#23-cluster-side-checklist)
+  - [2.4 The preflight script](#24-the-preflight-script)
+- [3. Environment variables](#3-environment-variables)
+  - [3.1 Install-time — your shell only, never a values file](#31-install-time--your-shell-only-never-a-values-file)
+  - [3.2 The Service pod](#32-the-service-pod)
+  - [3.3 The workload pods — injected, not configured](#33-the-workload-pods--injected-not-configured)
+  - [3.4 KinD and OpenShift differ — and the differences fail silently](#34-kind-and-openshift-differ--and-the-differences-fail-silently)
+- [4. The instance-config Secret](#4-the-instance-config-secret)
+- [5. Installing with Helm](#5-installing-with-helm)
+  - [5.1 OpenShift](#51-openshift)
+  - [5.2 KinD](#52-kind)
+  - [5.3 Adopting an install made from the raw manifests](#53-adopting-an-install-made-from-the-raw-manifests)
+  - [5.4 Upgrade, rollback, uninstall](#54-upgrade-rollback-uninstall)
+- [6. Verifying the install](#6-verifying-the-install)
+- [7. Symptoms that lie](#7-symptoms-that-lie)
+- [8. Appendix: the raw-manifest path, and two KinD-only objects](#8-appendix-the-raw-manifest-path-and-two-kind-only-objects)
+
+<!-- /toc -->
+
+## 1. What you install, and what you don't
+
+The Service is a single stateless pod. It holds no benchmark data and no cluster credential: it
+authenticates to Rossoctl per request with its own ROPC identity, and Rossoctl performs every
+cluster operation server-side. Nothing here shells out to `kubectl` or `oc`.
+
+| object | name | created by | notes |
+|---|---|---|---|
+| Deployment | `autobench-service` | chart / `deploy/deployment.yaml` | 1 replica, read-only root filesystem, arbitrary-UID safe |
+| Service | `autobench-service` | chart / `deploy/service.yaml` | ClusterIP `:8080`, port named `http` |
+| Route | `autobench` | chart (`platform: openshift`) | edge TLS; host generated as `autobench-<namespace>.apps.<cluster>` |
+| HTTPRoute | `autobench` | chart (`platform: kind`) | attaches to the shared istio gateway |
+| Secret | `autobench-instances` | **you, out-of-band** (§4) | ROPC credentials — never passes through Helm values |
+
+Everything else the Service depends on belongs to the platform and must exist **before** the
+install is useful:
+
+- a Keycloak user (`benchmarker` by convention) with the **`rossoctl-operator` realm role**;
+- `openai-secret` (`apikey`) and `hf-secret` (`hf-token`) in each workload namespace (`team1`,
+  `team2`);
+- an OTEL collector that writes to an MLflow the Service can read (§3.4).
+
+### The two cluster shapes
+
+| shape | example | consequence |
+|---|---|---|
+| **single-cluster** — Service and agents together | KinD, ykt5 | agents reach the collector over service DNS; no extra ingress |
+| **split** — Service here, agents there | ykt3 hosts the Service, agents run on ykt2 | the instance config carries `agent_endpoint_template`/`mcp_endpoint_template`, and the agents export telemetry back through an **edge Route** on `:443` whose target port resolves to the collector's 8335 |
+
+The shape is not a chart value. It lives entirely in the instance config, so one chart installs
+both.
+
+## 2. Prerequisites
+
+### 2.1 Rossoctl v0.8.0 or later
+
+This is the hard one, because falling short of it does not error. An older operator accepts the
+deploy request the Service sends and **silently drops fields it does not know** —
+`k8sResourceLimits` among them — so the benchmark comes up in a shape nobody configured and every
+subsequent measurement is quietly off.
+
+Read the version off the **backend**. The operator subchart carries its own, lower, version line,
+and comparing that one rejects a perfectly current cluster:
+
+```bash
+oc -n rossoctl-system get deploy rossoctl-backend \
+  -o jsonpath='{.metadata.labels.app\.kubernetes\.io/version}{"\n"}'    # 0.8.0-rc.2
+```
+
+A release-candidate suffix counts: `0.8.0-rc.2` satisfies "≥ 0.8.0". Both
+`reference/preflight.py` and `reference/ocp-service-bootstrap.sh` assert this before doing
+anything else.
+
+### 2.2 Workstation tooling
+
+| tool | needed for | note |
+|---|---|---|
+| `kubectl` (or `oc`) | everything | `oc` only for `Route` conveniences; `kubectl` can do it all |
+| `helm` ≥ 3.8 | §5 | 3.8 is the floor for the OCI/`--kube-context` behaviour used here |
+| `jq`, `curl` | the bootstrap scripts | secrets move through `jq` via the *environment*, never argv |
+| `python3` | `preflight.py`, `helm-parity-check.py`, `gen_toc.py` | `kind-collector-mlflow.py` also needs `pyyaml` |
+| `kind` + a container engine | the KinD path only | the image is built locally and `kind load`ed |
+
+### 2.3 Cluster-side checklist
+
+Each row is a failure that has actually been shipped, and the right-hand column is why you cannot
+find it by reading logs at the layer where it hurts.
+
+| prerequisite | where | if missing |
+|---|---|---|
+| Rossoctl ≥ v0.8.0 | `rossoctl-system` | fields dropped from the deploy request, silently (§2.1) |
+| `agentruntimes` + `agentcards` CRDs | cluster | `/deploy` fails at the operator |
+| `benchmarker` user, **ROPC enabled** on the client | realm | token request 400s; on this realm a missing `firstName`/`lastName` yields `Account is not fully set up` |
+| `rossoctl-operator` realm role on that user | realm | `/deploy` surfaces the operator's 403 as a **502** |
+| `openai-secret` / `apikey` | `team1`, `team2` | empty or foreign key ⇒ a 401 **per completion, mid-run**; the leg finishes with zeroes rather than failing |
+| `hf-secret` / `hf-token` (may be empty) | `team1`, `team2` | MCP pod `CreateContainerConfigError`, the agent then crash-loops against it, and the *run* reports 424 |
+| OTEL collector, HTTP receiver on **:8335** | `rossoctl-system` | an agent pointed at 4318 hard-fails into `CrashLoopBackOff` |
+| an MLflow the collector **writes to** and the Service can **read** | varies (§3.4) | the run **passes** with `model: "unknown"` and every token count 0 |
+
+**On the collector port: 8335 and only 8335.** Every cluster's `otel-collector-config` declares
+receivers on 4317/4318, and reading that ConfigMap will tell you to use 4318. It is wrong — the
+Deployment moves the HTTP receiver with a command-line override, so 4318 never listens:
+
+```bash
+oc -n rossoctl-system get deploy otel-collector \
+  -o jsonpath='{.spec.template.spec.containers[0].command}'
+# ["/otelcol-contrib","--config=/etc/otelcol-config/base.yaml",
+#  "--set","receivers::otlp::protocols::http::endpoint=0.0.0.0:8335"]
+```
+
+The same principle applies to MLflow: read the target and the experiment id from the collector's
+own exporter block rather than choosing them. `traces_endpoint` and the `x-mlflow-experiment-id`
+header are what the *writer* uses, and an instance config that disagrees points the Service at an
+experiment nothing writes to.
+
+### 2.4 The preflight script
+
+`reference/preflight.py` checks every row of §2.3 against the live cluster. It is **read-only** —
+no writes, no deploys — and prints every credential as an 8-char SHA-256 prefix unconditionally,
+with no attempt to decide which values are sensitive.
+
+```bash
+python3 reference/preflight.py --platform kind      --context kind-rossoctl
+python3 reference/preflight.py --platform openshift --context <ykt5-ctx>
+python3 reference/preflight.py --platform openshift --context <ykt3-ctx> \
+                              --workload-context <ykt2-ctx>          # split shape
+python3 reference/preflight.py --json                                # machine-readable
+```
+
+Exit status is 0 when nothing FAILed; warnings do not fail the run. Twelve sections, in the order
+a request travels: tooling, cluster reachability, Rossoctl version and CRDs, namespaces, workload
+secrets, the collector, MLflow, ingress, the instance config, identity, an audit of any existing
+install, and the local chart.
+
+```
+Workload secrets (per team namespace)
+  ok    team1/openai-secret apikey — sha8 0239f193
+  ok    team2/openai-secret apikey — sha8 0239f193
+  ok    team1/hf-secret hf-token — empty value (fine)
+
+OTEL collector (the write half of the telemetry chain)
+  ok    collector HTTP receiver on :8335 — read from the Deployment's command
+  ok    collector traces_endpoint — http://mlflow-reader.rossoctl-system.svc.cluster.local:5000/v1/traces
+  ok    collector x-mlflow-experiment-id — 0
+
+MLflow (the read half — this is what turns a run into a token report)
+  ok    MLflow traces API answers 200 — experiment 0, 1 trace(s) visible
+  ok    collector exports to mlflow-reader
+...
+47 ok, 0 warning(s), 0 failure(s) — ready to install
+A clean preflight is necessary, not sufficient: only a 1-task leg with a non-zero token row proves the whole chain.
+```
+
+Three things about how it reads the cluster are worth knowing, because each was a false alarm
+first:
+
+- **Ports and targets come from live objects**, never from a manifest or a ConfigMap — the
+  collector's port from the Deployment's `command`, MLflow's identity from the exporter.
+- **`Route` has no CRD.** It is served by the aggregated openshift-apiserver, so
+  `get crd routes.route.openshift.io` reports it missing on a cluster that plainly serves Routes.
+  The script asks `api-resources --api-group=route.openshift.io` instead.
+- **A split shape is not a broken one.** With `agent_endpoint_template` in the instance config and
+  no `--workload-context`, the workload checks are *skipped* rather than run against the wrong
+  cluster — and a `workload_otel` endpoint on `:443` is resolved through the Route to the
+  collector's port instead of being rejected.
+
+Setting `KC_SERVICE_USERNAME` and `KC_SERVICE_PASSWORD` in the environment enables the two
+identity checks (an actual ROPC login, and the `rossoctl-operator` role). Without them those two
+are skipped, not failed.
+
+## 3. Environment variables
+
+There are three populations, and conflating them is how a key ends up in the wrong cluster. They
+are, in order: what you export **to run the installer**, what the **Service pod** reads, and what
+the operator injects into the **workload pods**.
+
+### 3.1 Install-time — your shell only, never a values file
+
+Nothing in this table is a Helm value, a ConfigMap, or a committed file. Each is read by a script,
+used once, and hashed if it is reported at all.
+
+| variable | used by | notes |
+|---|---|---|
+| `KC_SERVICE_USERNAME` | both bootstrap scripts, `preflight.py` | the ROPC login the Service uses against Rossoctl (`benchmarker`) |
+| `KC_SERVICE_PASSWORD` | both bootstrap scripts, `preflight.py` | **required**; written into the instance file, never echoed |
+| `KC_SERVICE_CLIENT_SECRET` | both bootstrap scripts | only if the Keycloak client is confidential |
+| `KC_USER_PASSWORD` | `kind-post-setup.sh` | the password to *seed*; falls back to `~/.rossoctl-kind/benchmarker.pass` (`KC_CRED_FILE`) |
+| `KC_ADMIN_PASSWORD` | `kind-post-setup.sh` | optional — read from the in-cluster `keycloak-initial-admin` Secret when unset |
+| `BM_WORKLOAD_LLM_KEY` | `kind-post-setup.sh` | the workload LLM key; falls back to `~/.rossoctl-kind/litellm.key` (`LLM_KEY_FILE`) |
+| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | `ocp-service-bootstrap.sh` | override `--s3-from`, which otherwise copies them in-process from an existing instance file |
+| `WORKLOAD_LLM_API_BASE`, `WORKLOAD_LLM_MODEL` | `ocp-service-bootstrap.sh` | the gateway has **no default** on purpose: this repo is public |
+| `MLFLOW_URL`, `MLFLOW_EXPERIMENT_ID`, `MLFLOW_WORKSPACE`, `MLFLOW_TOKEN_SECRET` | `ocp-service-bootstrap.sh` | the id and workspace default to what the collector exports |
+| `WORKLOAD_OTEL_ENDPOINT`, `WORKLOAD_OTEL_INSECURE`, `WORKLOAD_AGENT_RUNNER` | both bootstrap scripts | see §3.4 on the runner |
+| `IMAGE`, `CLUSTER`, `KUBE_CONTEXT`, `REALM`, `CLIENT`, `KC_HOST` | `kind-post-setup.sh` | plain overrides, no secrets |
+
+Two conventions here are deliberate and both cost real time when broken:
+
+**The LLM key is `BM_WORKLOAD_LLM_KEY`, not `OPENAI_API_KEY`.** That name is commonly exported in
+a developer's shell profile for an unrelated provider, and the script writes whatever it finds into
+cluster Secrets. A namespaced name cannot be inherited by accident. (Inside the pod the value
+still arrives as `OPENAI_API_KEY` — the registry maps it from the Secret's `apikey`.)
+
+**Credential files are refused unless they are `600` or `400`,** and they are meant to outlive the
+cluster: neither the `benchmarker` password nor the LLM key changes across a rebuild.
+
+```bash
+umask 077; mkdir -p ~/.rossoctl-kind
+printf '%s' '<benchmarker password>' > ~/.rossoctl-kind/benchmarker.pass
+printf '%s' '<llm key>'              > ~/.rossoctl-kind/litellm.key
+```
+
+### 3.2 The Service pod
+
+The container reads exactly two environment variables from the Deployment, and both are set by the
+chart:
+
+| variable | value | why |
+|---|---|---|
+| `SERVICE_INSTANCES_DIR` | `/etc/service/instances` | where the `autobench-instances` Secret is mounted read-only |
+| `SERVICE_PORT` | `8080` | read by the entrypoint (`uvicorn`), not by the settings model |
+
+Everything else is a `SERVICE_`-prefixed setting with a working default, overridable through
+`extraEnv` in the values file. These are the ones worth knowing:
+
+| setting | default | when you would change it |
+|---|---|---|
+| `SERVICE_LOG_LEVEL` | `INFO` | `DEBUG` while diagnosing an auth or deploy failure |
+| `SERVICE_HTTP_TIMEOUT_SECONDS` | `30` | a slow Rossoctl API |
+| `SERVICE_JWKS_CACHE_SECONDS` | `300` | rarely |
+| `SERVICE_EXPORT_SETTLE_MAX_SECONDS` | `20` | a fast run can be exported *before* its child spans land, yielding `model: "unknown"` and zero tokens; the Service re-reads until the record set stops growing, and this is that budget |
+| `SERVICE_EXPORT_SETTLE_INTERVAL_SECONDS` | `2` | with the above |
+| `SERVICE_SPAN_REPORT_MAX_ROWS` | `200000` | only to cap a pathological trace — the export is built in memory |
+
+```yaml
+# values fragment
+extraEnv:
+  - name: SERVICE_LOG_LEVEL
+    value: DEBUG
+```
+
+The settings model uses Pydantic's `extra="ignore"`, so a **misspelled `SERVICE_*` name is
+accepted and discarded without a word**. If a setting seems not to take effect, suspect the
+spelling before the code.
+
+### 3.3 The workload pods — injected, not configured
+
+You do not set these. The Service derives them per deploy from the benchmark definition
+(`src/autobench/benchmarks/registry.py`) and the instance config, which is why an agent's
+environment cannot drift from the run that measured it. They are listed so you can recognise them
+in a pod spec:
+
+| variable | source | note |
+|---|---|---|
+| `OPENAI_API_KEY` | `secretKeyRef` → `openai-secret` / `apikey` | never a literal value in the pod spec |
+| `HF_TOKEN` | `secretKeyRef` → `hf-secret` / `hf-token` | gsm8k only; presence is the requirement, not content |
+| `OPENAI_API_BASE`, `LLM_API_BASE` | instance `workload_llm.api_base` | any inherited values are **dropped** and re-injected |
+| `EXGENTIC_DEFAULT_RUNNER` | instance `workload_agent_runner` | §3.4 |
+| `EXGENTIC_OTEL_ENABLED` | `true` when `workload_otel.enabled` | |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` / `_PROTOCOL` / `_INSECURE` | instance `workload_otel` | the endpoint is the `:8335` one |
+
+### 3.4 KinD and OpenShift differ — and the differences fail silently
+
+The Service's own objects are nearly identical across platforms. What differs is everything it
+points *at*.
+
+| | KinD | OpenShift | if you get it wrong |
+|---|---|---|---|
+| LLM gateway | the **internal** gateway | the **external** gateway | the two keep separate key tables, so a key moved across does not fail closed — it 401s per completion, mid-run |
+| `openai-secret` | a key from the internal gateway | a key from the external one | same |
+| MLflow read path | `mlflow-reader` (§8), no auth | the cluster's own MLflow on `:8443` with a ServiceAccount bearer and `insecure_tls` | a refused read is invisible: the run passes, every token count is 0 |
+| MLflow experiment | `0` | `1`, workspace `team1` on ykt5 | identical signature to the above |
+| Keycloak dial | the **backchannel** service DNS — `iss` is unreachable in-cluster, since `*.localtest.me` resolves to pod loopback and there is no CoreDNS rewrite | the `iss` Route itself | JWKS and ROPC both fail at startup |
+| collector endpoint | `http://otel-collector.rossoctl-system.svc.cluster.local:8335` | the same on a single-cluster install; an edge Route on `:443` when the agents live elsewhere | unreachable collector ⇒ agent `CrashLoopBackOff`, surfacing as a 424 on the run |
+| pod security context | UID/GID/fsGroup pinned to 10001/0/10001 | `runAsNonRoot` + seccomp only | pinning 10001 can be **rejected** when it falls outside the project's allocated UID range |
+| ingress | `HTTPRoute` on the shared gateway | `Route`, edge TLS | — |
+
+**`workload_agent_runner` deserves its own warning.** The correct value tracks an agent image
+pinned to `:latest`, and it has flipped between `direct` and `service` across rebuilds of that tag.
+With the current image, `service` is what emits agent spans; `direct` yields a clean run with
+**zero-token rows**, which is exactly what a broken MLflow looks like. Do not infer it — detect it,
+by looking for a non-zero token row in `report.ndjson` (§6).
+
+## 4. The instance-config Secret
+
+One JSON file per issuer, keyed by `iss`, mounted read-only at `/etc/service/instances`. **No
+install path creates it**: it carries the ROPC service credential and the S3 keys, so it is
+generated out-of-band and must never pass through Helm values or a values file.
+
+One script per platform, so the file has reproducible provenance instead of being hand-assembled:
+
+```bash
+# OpenShift — runs eleven prechecks before it writes anything
+KC_SERVICE_USERNAME=benchmarker KC_SERVICE_PASSWORD=… \
+reference/ocp-service-bootstrap.sh --cluster ykt5 --context <ctx> \
+  --apps-domain apps.ykt5.example.com \
+  --llm-api-base https://<external-gateway>/v1 \
+  --out-dir instances/
+
+# KinD
+KC_SERVICE_USERNAME=benchmarker KC_SERVICE_PASSWORD=… \
+reference/kind-service-bootstrap.sh --context kind-rossoctl \
+  --copy-from instances/keycloak.localtest.me_8080.json \
+  --out-dir instances/
+```
+
+Then, on either platform:
+
+```bash
+kubectl -n rossoctl-system create secret generic autobench-instances \
+  --from-file="<encoded-iss-host>.json=instances/<encoded-iss-host>.json" \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n rossoctl-system rollout restart deploy/autobench-service
+```
+
+The filename encodes the `iss` **host** with `:` rewritten to `_`; the exact `iss` inside the file
+is the source of truth. The Service reads instance files at startup, hence the restart. Note that
+`PUT /config` is in-memory only — a correction that must survive a restart goes in the Secret.
+
+Four properties of these scripts are load-bearing:
+
+- **Values reach `jq` through the environment, not `--arg`.** argv is world-readable (`ps`,
+  `/proc/<pid>/cmdline`); a process's environment is not.
+- **The file is created `600` by `umask`,** not `chmod`ed afterwards, so there is no window in
+  which credentials sit world-readable on disk.
+- **`--copy-from` / `--s3-from` carry `s3` and `workload_llm` over** from an existing file. Those
+  two are environment facts a script cannot discover, and a cluster rebuild should reproduce them
+  rather than lose them — losing them is silent, and costs a run's artifacts.
+- **A no-auth MLflow still needs a `bearer_token`,** which is not a contradiction: the Service
+  mints a token *before* it reads, and with neither a bearer nor client-credentials the token
+  helper raises, the route catches it, and the run fails soft into an empty token report. For the
+  KinD reader the scripts emit an ignored placeholder.
+
+## 5. Installing with Helm
+
+```
+deploy/helm/autobench/
+  Chart.yaml            version = chart version; appVersion = the default image tag
+  values.yaml           the two platform shapes, documented inline
+  templates/            deployment, service, route, httproute, _helpers.tpl, NOTES.txt
+deploy/helm/values-ykt5.yaml    an OpenShift cluster's overrides
+deploy/helm/values-kind.yaml    KinD's overrides
+```
+
+`platform` selects the shape and is the only value most installs need to think about. It drives
+the pod security context and which ingress object is rendered (§3.4). The chart **references but
+never creates** `autobench-instances`.
+
+**Parity with the raw manifests is the chart's correctness gate, and it has teeth.** Run this after
+any template change:
+
+```bash
+helm lint deploy/helm/autobench
+python3 reference/helm-parity-check.py     # 6 checks; "Chart and manifests agree."
+```
+
+It renders both platform shapes and diffs them against
+`deploy/{deployment,service,kind/httproute}.yaml` and against the OpenShift patched render. The
+standard `app.kubernetes.io/*` labels are deliberately **absent**: the sole label and selector is
+`app: autobench-service`, because that is what the live Deployments select on, and a Deployment's
+selector is immutable. If the check fails, the chart is wrong — not the manifests.
+
+### 5.1 OpenShift
+
+```bash
+python3 reference/preflight.py --platform openshift --context <ctx>        # 0 failures first
+helm upgrade --install autobench deploy/helm/autobench \
+  -n rossoctl-system --kube-context <ctx> -f deploy/helm/values-ykt5.yaml
+oc -n rossoctl-system rollout status deploy/autobench-service
+HOST=$(oc -n rossoctl-system get route autobench -o jsonpath='{.spec.host}')
+curl -fsS "https://$HOST/healthz"                                          # {"status":"ok"}
+```
+
+Leave `route.host` empty unless you need a specific name — the router generates
+`autobench-<namespace>.apps.<cluster>`, which is the shape every recipe in the developer guide
+assumes.
+
+### 5.2 KinD
+
+DEV/TEST only. On a **freshly rebuilt** cluster do not start here: `reference/kind-post-setup.sh`
+builds and `kind load`s the image, re-seeds the `benchmarker` user, ensures the team secrets,
+generates the instance config and creates the Secret. The chart is the last step of that, and
+alone it installs a pod with nothing to authenticate as.
+
+```bash
+IMAGE=ghcr.io/rossoctl/autobench:v1.29 reference/kind-post-setup.sh    # first time / after a rebuild
+
+python3 reference/preflight.py --platform kind --context kind-rossoctl
+helm upgrade --install autobench deploy/helm/autobench \
+  -n rossoctl-system --kube-context kind-rossoctl -f deploy/helm/values-kind.yaml
+curl -fsS http://autobench.localtest.me:8080/healthz                  # {"status":"ok"}
+```
+
+`8080` there is the **host** port KinD publishes the istio gateway on; it is not this Service's
+port, and the two matching is a coincidence. Note also that `kind load docker-image` bypasses the
+registry, so a KinD pod's digest will not match the published one even at the same tag — compare
+source, not digests, there.
+
+### 5.3 Adopting an install made from the raw manifests
+
+A chart cannot replace an existing Deployment — the selector is immutable — but it can take
+ownership of one. Both clusters that predate the chart were adopted this way rather than
+reinstalled, which is why neither had an outage: **the running pod is not recreated.**
+
+```bash
+for obj in deploy/autobench-service svc/autobench-service httproute/autobench; do   # or route/autobench
+  kubectl -n rossoctl-system annotate "$obj" \
+    meta.helm.sh/release-name=autobench meta.helm.sh/release-namespace=rossoctl-system --overwrite
+  kubectl -n rossoctl-system label "$obj" app.kubernetes.io/managed-by=Helm --overwrite
+done
+helm upgrade --install autobench deploy/helm/autobench -n rossoctl-system -f <values>
+```
+
+Without the annotations Helm refuses the install with "invalid ownership metadata". Afterwards,
+confirm the pod's `restartCount` and `creationTimestamp` are unchanged — adoption should be a
+metadata-only operation.
+
+**Read release ownership from the Secrets, not from `helm list`.** A `helm list --kube-context`
+comparison across two clusters has returned identical output for different clusters here; the
+release objects cannot lie about where they live:
+
+```bash
+kubectl -n rossoctl-system get secret -l owner=helm,name=autobench --context <ctx>
+# sh.helm.release.v1.autobench.v1
+```
+
+### 5.4 Upgrade, rollback, uninstall
+
+```bash
+helm upgrade autobench deploy/helm/autobench -n rossoctl-system -f <values> \
+  --set image.tag=v1.30
+helm history  autobench -n rossoctl-system
+helm rollback autobench 1 -n rossoctl-system
+helm uninstall autobench -n rossoctl-system          # leaves autobench-instances behind
+```
+
+`helm uninstall` deletes only what the chart owns, so the instance Secret survives — which is what
+you want, since regenerating it means re-reading credentials. The image tag is immutable, so
+`imagePullPolicy: IfNotPresent` is correct and an upgrade means changing `image.tag`, never
+restarting to pick up a rebuild.
+
+## 6. Verifying the install
+
+`/healthz` proves the pod runs. It proves nothing about the chain the pod exists to drive, and
+every link in that chain has a failure mode that still returns 200. Work outward:
+
+```bash
+TOKEN=…   # ROPC; see DEVELOPER_GUIDE.md §3
+
+curl -fsS "$BASE/healthz"
+curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE/benchmarks" | jq '.items[].name'
+curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE/benchmarks/gsm8k" | jq '.agents[0].container_image'
+```
+
+`GET /benchmarks` returns **`items`**, not `benchmarks` — that has broken scripts twice — and it
+only summarises each benchmark (`name`, `mcp_image`, `agents`, `default_model`). An agent's
+`container_image`, `extra_env` or `model_override` is visible only through
+`GET /benchmarks/<name>`, so confirming a catalog change against the list endpoint alone can pass
+while the thing you changed is still the old value.
+
+Then the only check that means anything: **a 1-task gsm8k leg whose report carries a non-zero
+token row.**
+
+```bash
+uv run autobench-cli --base "$BASE" run gsm8k --max-tasks 1     # see DEVELOPER_GUIDE.md §7.1
+```
+
+| what you look at | expected | what it proves |
+|---|---|---|
+| run status | `completed`, pass rate 1.0 | Service → Rossoctl → operator → agent → MCP → evaluator |
+| tokens on the task row | non-zero (~320 in / 87 out) | agent → collector → MLflow → Service, the whole telemetry chain |
+| `model` on the row | the gateway's model id, not `"unknown"` | the Service read the experiment the collector wrote to |
+| pod `imageID` digest | matches the tag you installed (OpenShift) | the pod is not serving a stale `:latest` |
+
+A zero-token row is the single most informative failure in this system, because it is the shared
+signature of four unrelated causes: a refused MLflow read, an experiment-id mismatch, a collector
+that cannot be reached, and `workload_agent_runner` set to the value the current agent image does
+not emit spans for. Preflight separates the first three; only a run separates the fourth.
+
+## 7. Symptoms that lie
+
+| symptom | actual cause | how to confirm |
+|---|---|---|
+| run passes, every token count 0, `model: "unknown"` | refused MLflow read, wrong experiment id, unreachable collector, or the wrong `workload_agent_runner` | §2.4, then §6 |
+| `/deploy` returns **502** | the operator returned 403 — the service user lacks the `rossoctl-operator` realm role | the role mapping in the realm |
+| `/deploy` returns **424**, agent `CrashLoopBackOff` | collector endpoint on 4318, or `hf-secret` missing so the MCP pod never started | the collector's `command`; `get secret hf-secret` |
+| token request 400 `Account is not fully set up` | the realm requires `firstName`/`lastName` for ROPC | the user's profile |
+| tasks error on the first completion, run finishes with zeroes | `openai-secret` empty, or holding the *other* gateway's key | `preflight.py` prints both namespaces' `sha8`; compare them |
+| `Model endpoint … is unreachable` on every task | the agent pod is running **dev145**, whatever `:latest` points at | the wording: dev146 says `did not respond … after N attempt(s)`. Compare the pod's `imageID` digest, never the tag |
+| a config change appears to do nothing | `InstanceConfig` and the `SERVICE_*` settings both use `extra="ignore"` — an unknown field is dropped **silently** | read the value back; adding one is never self-verifying |
+| the new `api_base` is ignored | a stale Deployment from an earlier bring-up is still serving the old one | list Deployments in the team namespaces by age |
+| a pod serves old code at the right tag | `:latest` agent/MCP images: a *running* pod never re-pulls | tear down before deploying; compare `.status.containerStatuses[].imageID` |
+| `mlflow-reader` restarts ~30 s after boot with no error in the log | OOMKilled — one MLflow 3.x worker idles at ~2.3 GiB, so a 2Gi limit is below the floor | the container's `lastState`, not its log |
+| `get crd routes.route.openshift.io` says Routes are missing | Routes come from the aggregated apiserver and have no CRD | `kubectl api-resources --api-group=route.openshift.io` |
+| `/healthz` 503, deploy 500 `httpx.ReadError`, agent CrashLoop — all at once, on KinD | a ztunnel restart un-enrolled older pods from the ambient mesh | recycle every pod older than ztunnel's Ready condition, in **all** namespaces |
+
+## 8. Appendix: the raw-manifest path, and two KinD-only objects
+
+The manifests under `deploy/` remain supported and are what the chart is checked against:
+
+```bash
+kubectl apply -f deploy/service.yaml -f deploy/deployment.yaml
+oc patch deploy autobench-service --patch-file deploy/openshift/deployment-patch.yaml   # OpenShift
+kubectl apply -f deploy/kind/httproute.yaml                                             # KinD
+```
+
+On OpenShift the patch must go on **before** the rollout, not after: it is what removes the pinned
+UID that restricted-v2 would otherwise reject.
+
+Two objects live under `deploy/kind/` and are in neither the chart nor the OpenShift path, because
+neither has an OpenShift counterpart.
+
+**`mlflow-reader.yaml`** — stock MLflow, no auth, serving the *same* postgres as the writer. It
+exists because the MLflow `rossoctl-deps` installs runs mlflow-oidc-auth, which rejects both the
+Service's read and the collector's write; the run then publishes zeros on every task, which reads
+like missing telemetry rather than a refused read. It is a "reader" by convention only. Two of its
+settings are measured rather than chosen: `--workers 1` (MLflow 3.x defaults to four) and a **4Gi**
+limit. Gate on a 200 from `/api/2.0/mlflow/traces` rather than on the pod going Ready — two pip
+installs run at container start — and pass `experiment_ids`, since that endpoint answers 400
+without it. Point the collector at it with:
+
+```bash
+python3 reference/kind-collector-mlflow.py            # patch + restart; idempotent
+python3 reference/kind-collector-mlflow.py --check    # report only, exit 1 if unpatched
+```
+
+**`ibac-judge.yaml`** — the upstream proxy the AuthBridge `ibac` plugin calls. The plugin's
+ConfigMap is cleartext, so the key cannot live there; this holds it in a Secret and adds the
+`Authorization` header outbound, leaving the plugin pointed at a credential-free in-cluster URL.
+Without it the plugin is **inert**: it admits every call and the run looks like a clean pass, which
+is why enforcement is proven by *counting judge calls* and never by reading a pass rate.
+`UPSTREAM_BASE` in the committed copy is an `example.com` placeholder — substitute the real gateway
+at apply time, and `rollout restart` after the key lands, since the proxy reads it once at pod
+start.
