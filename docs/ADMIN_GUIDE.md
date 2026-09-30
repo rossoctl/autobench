@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-09-30T15:23:42Z
+**Last modified:** 2026-09-30T15:37:05Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -787,7 +787,7 @@ generates the instance config and creates the Secret. The chart is the last step
 alone it installs a pod with nothing to authenticate as.
 
 ```bash
-IMAGE=ghcr.io/rossoctl/autobench:v1.29 reference/kind-post-setup.sh    # first time / after a rebuild
+IMAGE=ghcr.io/rossoctl/autobench:v1.30 reference/kind-post-setup.sh    # first time / after a rebuild
 
 python3 reference/preflight.py --platform kind --context kind-rossoctl \
         --password-file ~/.rossoctl-kind/benchmarker.pass
