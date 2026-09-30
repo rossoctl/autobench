@@ -50,8 +50,8 @@ Flags (each also has an env fallback):
                         INTERNET_LLM_* variable set (see llm-profiles.sh). An OpenShift cluster on
                         the organisation's intranet uses `intranet`, same as a local kind cluster:
                         the gateway follows the NETWORK, not the platform.
-  --llm-api-base URL    WORKLOAD_LLM_API_BASE   gateway origin; overrides the profile's. No default
-                        and not baked in: this repo is public)
+  --llm-api-base URL    WORKLOAD_LLM_API_BASE   gateway origin; overrides the profile's. There is no
+                        default and none is baked in (this repo is public)
   --llm-model M         WORKLOAD_LLM_MODEL      (default: openai/Azure/gpt-5-mini-2025-08-07)
   --otel-endpoint URL   WORKLOAD_OTEL_ENDPOINT  (default: the in-cluster collector on :8335)
   --otel-insecure B     WORKLOAD_OTEL_INSECURE  true|false (default: true for an in-cluster http URL)
@@ -349,7 +349,7 @@ if [ -n "${LLM_PROFILE:-}" ]; then
         check "LLM gateway matches the ${LLM_PROFILE} profile" 0
     else
         check "LLM gateway matches the ${LLM_PROFILE} profile" 1 \
-            "--llm-api-base is not the ${LLM_PROFILE} profile's base; the two gateways keep separate key tables, so this 401s per completion mid-run"
+            "--llm-api-base is not the ${LLM_PROFILE} profile's base; no two LLM services share a key table, so this 401s per completion mid-run"
     fi
 else
     warn "no --llm-profile: the base cannot be checked against the gateway that issued the key"
@@ -441,7 +441,7 @@ oc${KUBE_CONTEXT:+ --context $KUBE_CONTEXT} -n rossoctl-system create secret gen
   --from-file=$(basename "$OUT_FILE")=${OUT_FILE} --dry-run=client -o yaml | oc apply -f -
 
 helm upgrade --install autobench deploy/helm/autobench -n rossoctl-system \\
-  -f deploy/helm/values-${CLUSTER}.yaml
+  -f deploy/helm/values-openshift.yaml
 EOF
 log ""
 log "Done."
