@@ -604,15 +604,16 @@ def dash(sp):
 
 
 # Shared LLM gateway across the top: the agent, the tau2 user simulator and the IBAC judge all
-# call it, so drawing it once as a bar keeps three flows short and non-crossing. Which gateway is
-# per-instance config (workload_llm.api_base) with no default. Which one a cluster needs follows the
-# NETWORK its pods sit on, not the platform it runs: anything on the intranet — a laptop KinD on the
-# VPN and an intranet OpenShift cluster alike — needs the internal (vpc-int) gateway, and only an
-# Internet-facing OpenShift cluster uses the external (vpc) one. Separate API-key tables, so a key
-# copied between them always 401s.
+# call it, so drawing it once as a bar keeps three flows short and non-crossing. Which service is
+# per-instance config (workload_llm.api_base) with no default -- any OpenAI-compatible LLM or
+# LiteLLM service will do, and it need not be one this project has ever seen. The rule is about the
+# NETWORK, not the platform, and it is asymmetric: an Internet cluster (KinD or OpenShift alike)
+# must be given credentials for a service ON the Internet, because an intranet service is not
+# routable from it; an intranet cluster may use either. Two services never share a key table, so a
+# key copied between them 401s per completion rather than failing at deploy.
 gw = box(s, inch(0.45), inch(1.20), inch(12.4), inch(0.6),
-         "LLM gateway (per instance)   ·   ete-litellm   ·   "
-         "external (vpc) for Internet OCP / internal (vpc-int) for intranet KinD and OCP",
+         "LLM gateway (per instance)   ·   any LLM or LiteLLM service   ·   "
+         "Internet cluster → an Internet service;   intranet cluster → either",
          STORE, STORE,
          font=12.5, font_color=WHITE, shape=MSO_SHAPE.ROUNDED_RECTANGLE)
 

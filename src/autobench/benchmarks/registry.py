@@ -22,12 +22,13 @@ from ..models import (
 )
 
 
-# There is deliberately NO built-in default LLM gateway. Every deployment target reaches a different
-# one and they are not interchangeable: ykt2/ykt3 use external endpoints, while KinD must use ETE's
-# *internal* VPC endpoint (`…vpc-int…`), which the external clusters cannot reach and vice versa. A
-# baked-in default is therefore wrong for every instance while still looking plausible — and a
-# wrong-but-syntactically-valid default is worse than none, because the workload then fails deep
-# inside the agent with an opaque model-health timeout instead of at deploy time. So
+# There is deliberately NO built-in default LLM gateway. Any OpenAI-compatible LLM or LiteLLM
+# service can serve a deployment, each target reaches a different one, and they are not
+# interchangeable: a cluster on the Internet cannot route to a service on an organisation's
+# intranet, and no two services share a key table or a model catalogue. A baked-in default is
+# therefore wrong for every instance while still looking plausible — and a syntactically valid
+# but wrong default is worse than none, because the workload then fails deep inside the agent
+# with an opaque model-health timeout instead of at deploy time. So
 # `workload_llm.api_base` is REQUIRED per instance, and its absence is rejected up front.
 #
 # Env names carrying the LLM base. They are dropped then re-injected from the instance config so an
@@ -49,9 +50,10 @@ def require_llm_base(llm: WorkloadLLMConfig | None) -> None:
     if llm is None or not llm.api_base:
         raise LLMConfigError(
             "instance config is missing workload_llm.api_base: the LLM gateway must be set per "
-            "instance because no default is correct for every cluster (ykt2/ykt3 use external "
-            "endpoints, KinD needs ETE's internal vpc-int endpoint, and neither can reach the "
-            "other). Set workload_llm.api_base in the instance file, then restart the Service."
+            "instance because no default is correct for every cluster — each reaches its own "
+            "OpenAI-compatible LLM or LiteLLM service, and a cluster on the Internet cannot "
+            "route to one on an intranet. Set workload_llm.api_base in the instance file, then "
+            "restart the Service."
         )
 
 

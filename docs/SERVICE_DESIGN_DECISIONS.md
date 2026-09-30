@@ -418,15 +418,15 @@ this is *agent-side* config living in the instance file, distinct from `PUT /con
 manages the Service's own MLflow/S3.
 
 **Targeting the LLM endpoint (required `workload_llm.api_base`).** There is deliberately **no built-in
-default LLM gateway**. There are two separate LiteLLM deployments — an **internal** one and an
-**external** one, with separate key tables and separate completion caches — and which one a cluster
-must use follows where its pods sit on the **network**, not what platform it runs: an intranet
-OpenShift cluster needs the internal gateway, exactly as a laptop KinD on the VPN does, while a
-cluster off the intranet needs the external one. The internal host is only routable where the VPN
-carries the intranet's own address range; the external host resolves into public cloud
-load-balancer ranges that a split tunnel does not route, so *it* is the one that fails from inside.
-The choice is therefore declared, never inferred — `LLM_PROFILE=intranet|internet`, see
-`docs/ADMIN_GUIDE.md` §3.5.
+default LLM gateway**. Any OpenAI-compatible **LLM or LiteLLM service** can serve a deployment, and
+no two of them share a key table, a model catalogue or a completion cache. Which one a cluster may
+be pointed at follows the **network** that service sits on, not what platform the cluster runs, and
+the rule is asymmetric: an **Internet** cluster — KinD or OpenShift alike — must be configured with
+the credentials for a service **on the Internet**, because an intranet service is not routable from
+it, while an **intranet** cluster of either platform may use a service on the intranet *or* on the
+Internet. Both platforms occur on both networks, so nothing can be derived from the platform: the
+choice is declared, never inferred — `LLM_PROFILE=intranet|internet`, see `docs/ADMIN_GUIDE.md`
+§3.5.
 
 A baked-in default was removed because it is wrong for every instance while still looking plausible,
 and a wrong-but-syntactically-valid base is *worse* than none: the workload deploys happily and then

@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-29T04:14:57Z
+**Last modified:** 2026-09-30T01:17:56Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -1778,8 +1778,9 @@ and an `agents` map of `BenchmarkAgentSpec` (per-agent `container_image` + `extr
 1. **Add a `BenchmarkDefinition` entry** to `BENCHMARKS` in `registry.py`:
    - `mcp_image` (+ tag/port/path) — the MCP tool image.
    - `tool_env` — `BENCHMARK_NAME` and any secret refs via `_secret_env`. The LLM base is **not**
-     baked in: it comes from the instance's required `workload_llm.api_base` (KinD must use ETE's
-     internal `…vpc-int…` endpoint; a deploy with no gateway configured is rejected with 422).
+     baked in: it comes from the instance's required `workload_llm.api_base` — whichever LLM or
+     LiteLLM service that cluster is configured to reach; a deploy with no gateway configured is
+     rejected with 422).
    - `agents={...}` — one `BenchmarkAgentSpec` per flavor. The `tool_calling` A2A image is shared
      across all current benchmarks; usually you reuse it and only the name gets a `-<benchmark>`
      suffix.

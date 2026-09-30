@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-09-29T22:12:31Z
+**Last modified:** 2026-09-30T01:17:56Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -41,7 +41,7 @@ install, §6 is the only verification that means anything.
   - [3.2 The Service pod](#32-the-service-pod)
   - [3.3 The workload pods — injected, not configured](#33-the-workload-pods--injected-not-configured)
   - [3.4 KinD and OpenShift differ — and the differences fail silently](#34-kind-and-openshift-differ--and-the-differences-fail-silently)
-  - [3.5 The LiteLLM gateway: two named profiles](#35-the-litellm-gateway-two-named-profiles)
+  - [3.5 The LLM gateway: two named profiles](#35-the-llm-gateway-two-named-profiles)
   - [3.6 The `benchmarker` password: how it gets in, and how it is checked](#36-the-benchmarker-password-how-it-gets-in-and-how-it-is-checked)
 - [4. The instance-config Secret](#4-the-instance-config-secret)
 - [5. Installing with Helm](#5-installing-with-helm)
@@ -331,23 +331,37 @@ With the current image, `service` is what emits agent spans; `direct` yields a c
 **zero-token rows**, which is exactly what a broken MLflow looks like. Do not infer it — detect it,
 by looking for a non-zero token row in `report.ndjson` (§6).
 
-### 3.5 The LiteLLM gateway: two named profiles
+### 3.5 The LLM gateway: two named profiles
 
 The gateway is the one piece of configuration that is neither discoverable from the cluster nor
 shared between clusters, so it gets its own section — and it is configured as a **named profile**
 rather than as a set of per-cluster values, because the failure it causes is silent.
 
-The deciding question is **where the cluster's pods sit on the network**, not which Kubernetes it
-runs. An OpenShift cluster deployed on the organisation's intranet uses the same internal gateway a
-local KinD cluster on the VPN does; a KinD cluster on a laptop off the VPN uses the external one.
-`platform` and `llmProfile` are therefore independent, and nothing derives one from the other.
+Any OpenAI-compatible **LLM or LiteLLM service** can serve a deployment; nothing in AutoBench
+requires a particular one, and the endpoints this project happens to use are examples, not part of
+the product. Your organisation's will be different services with different hosts, model catalogues
+and keys.
+
+What decides which one a deployment may be pointed at is **the network the service sits on relative
+to the cluster**, not which Kubernetes the cluster runs. Both platforms occur in both places: an
+OpenShift cluster is often deployed on the organisation's intranet, and a KinD cluster runs on an
+Internet server as readily as on a laptop on the VPN. `platform` and `llmProfile` are therefore
+independent, and nothing derives one from the other.
+
+The rule is **asymmetric**:
+
+- An **Internet** cluster — KinD or OpenShift — must be configured with the access credentials for
+  an LLM or LiteLLM service **on the Internet**. An intranet service is not routable from it.
+- An **intranet** cluster — KinD or OpenShift — can be configured with the access credentials for an
+  LLM or LiteLLM service **on the intranet or on the Internet**, whichever it is permitted to reach.
+  So an intranet cluster has a genuine choice, and the profile records which way it went.
 
 | | `intranet` | `internet` |
 |---|---|---|
-| which gateway | the **internal** LiteLLM (`…vpc-int…`) | the **external** LiteLLM (`…vpc…`) |
-| who uses it | any cluster whose pods are inside the org network — a personal KinD on the VPN, *or* an intranet OpenShift cluster | a cluster reached from outside it |
-| why not the other | the external host is not routed on a split-tunnel VPN — connect times out | the internal host is in a routed private range, reachable only from inside |
-| model catalogue | ids from *that* gateway | **not** the same ids |
+| what it points at | an LLM or LiteLLM service on the organisation's **intranet** | one on the **Internet** |
+| which clusters may declare it | intranet clusters only — KinD or OpenShift | any cluster, on either network |
+| why not the other | an Internet cluster cannot route to an intranet service — connect times out | an intranet cluster *may* use this; it is only barred where egress to the Internet is |
+| model catalogue | ids from *that* service | **not** the same ids |
 | key table | its own | its own — this is the whole problem |
 
 #### The two variable sets
@@ -372,18 +386,18 @@ Bases and model ids are not secrets, so keep them in a file instead of re-export
 ```bash
 mkdir -p ~/.rossoctl-llm
 cat > ~/.rossoctl-llm/profiles.env <<'EOF'
-INTRANET_LLM_API_BASE=https://<internal gateway host>
+INTRANET_LLM_API_BASE=https://<intranet LLM service host>
 INTRANET_LLM_MODEL=openai/aws/claude-haiku-4-5
-INTERNET_LLM_API_BASE=https://<external gateway host>
+INTERNET_LLM_API_BASE=https://<Internet LLM service host>
 INTERNET_LLM_MODEL=openai/Azure/gpt-5-mini-2025-08-07
 EOF
 umask 077
-printf '%s' '<internal gateway key>' > ~/.rossoctl-llm/intranet.key
-printf '%s' '<external gateway key>' > ~/.rossoctl-llm/internet.key
+printf '%s' '<intranet service key>' > ~/.rossoctl-llm/intranet.key
+printf '%s' '<Internet service key>' > ~/.rossoctl-llm/internet.key
 ```
 
-Per-profile key files are the point: the two tables are separate, so one file holding "the" key is
-exactly how a key gets used against the gateway that never issued it.
+Per-profile key files are the point: no two services share a key table, so one file holding "the"
+key is exactly how a key gets used against the service that never issued it.
 
 #### Selecting a profile for a deployment
 

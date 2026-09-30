@@ -35,8 +35,9 @@
 #                      when LLM_PROFILE is set, else ~/.rossoctl-kind/litellm.key (chmod 600,
 #                      override with LLM_KEY_FILE). Also does not change across upgrades, so create
 #                      that file once the same way.
-#   LLM_PROFILE        intranet|internet — which gateway pair to use (see llm-profiles.sh). A kind
-#                      cluster on the org VPN is `intranet`; one on a laptop off it is `internet`.
+#   LLM_PROFILE        intranet|internet — where the LLM/LiteLLM service this cluster calls sits
+#                      (see llm-profiles.sh). A kind cluster on the org intranet may use either and
+#                      usually declares `intranet`; one on an Internet server must use `internet`.
 #                      NOT named OPENAI_API_KEY on purpose: that name is commonly exported in a
 #                      developer's shell profile for an unrelated provider, and this script writes
 #                      whatever it finds into cluster Secrets. A namespaced name cannot be
@@ -122,8 +123,8 @@ if [ -z "${KC_ADMIN_PASSWORD:-}" ]; then
 fi
 : "${KC_ADMIN_PASSWORD:?could not read Keycloak admin password from keycloak-initial-admin; export KC_ADMIN_PASSWORD}"
 export KC_ADMIN_PASSWORD KC_USER_PASSWORD
-# The workload LLM key. KinD must use the INTERNAL gateway (`vpc-int`), which has its own key
-# table — the key ykt2/ykt5 hold is issued by the external one and 401s here. Like the
+# The workload LLM key, issued by the LLM/LiteLLM service this cluster is configured to call. Every
+# service has its own key table, so a key issued by another one 401s here. Like the
 # benchmarker password it does not change across rebuilds, so keep it in a chmod-600 file:
 #   umask 077; printf '%s' '<key>' > ~/.rossoctl-kind/litellm.key
 # Set LLM_PROFILE=intranet|internet and the key comes from that profile's own file

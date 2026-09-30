@@ -199,10 +199,10 @@ def test_agent_authbridge_enabled_flows_to_wire():
 def test_no_builtin_llm_base_default():
     """With no instance `workload_llm` the base env is OMITTED, never defaulted.
 
-    There is deliberately no built-in gateway: ykt2/ykt3 reach external endpoints while KinD needs
-    ETE's internal `vpc-int` endpoint, and neither can reach the other, so any baked-in value is
-    wrong somewhere. A plausible-looking default is worse than none — it surfaces as an opaque
-    model-health timeout deep inside the agent instead of a deploy-time rejection.
+    There is deliberately no built-in gateway: each cluster reaches its own OpenAI-compatible LLM
+    or LiteLLM service, and one on the Internet cannot route to one on an intranet, so any baked-in
+    value is wrong somewhere. A plausible-looking default is worse than none — it surfaces as an
+    opaque model-health timeout deep inside the agent instead of a deploy-time rejection.
     """
     defn = registry.BENCHMARKS["gsm8k"]
     agent = registry.build_agent_request(defn, "tool_calling", "team1", None, "default")

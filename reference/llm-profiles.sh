@@ -6,13 +6,17 @@
 #
 # WHY A PROFILE AND NOT A PLATFORM FLAG
 #
-# There are two LiteLLM gateways, and which one a cluster must use depends on where the cluster's
-# pods sit on the network — NOT on whether it runs kind or OpenShift. An OpenShift cluster can be
-# deployed on the organisation's intranet, in which case it needs the same internal gateway a local
-# kind cluster does; a kind cluster on a laptop off the VPN needs the external one. Deriving the
-# gateway from the platform is therefore wrong, and it was wrong here until this file existed.
+# The gateway is any OpenAI-compatible LLM or LiteLLM service — no particular one is required, and
+# every organisation's is its own. What a cluster may be pointed at depends on the NETWORK that
+# service sits on, NOT on whether the cluster runs kind or OpenShift, and the rule is asymmetric:
+# an Internet cluster of either platform must use a service on the Internet, because an intranet
+# service is not routable from it, while an intranet cluster of either platform may use one on the
+# intranet or on the Internet. Both platforms occur on both networks — OpenShift is commonly
+# deployed on the intranet, and kind runs on an Internet server as readily as on a laptop on the
+# VPN — so deriving the gateway from the platform is wrong, and it was wrong here until this file
+# existed.
 #
-# The two gateways keep SEPARATE key tables. A key from the wrong one does not fail at deploy — it
+# No two services share a key table. A key from the wrong one does not fail at deploy — it
 # 401s per completion, mid-run, and the leg finishes with zeroes that look like a measurement. That
 # is the failure this indirection exists to prevent: one named profile carries the base, the model
 # and the key file together, so they cannot be mixed by hand.
@@ -35,9 +39,9 @@
 #
 #   mkdir -p ~/.rossoctl-llm
 #   cat > ~/.rossoctl-llm/profiles.env <<'EOF'
-#   INTRANET_LLM_API_BASE=https://<internal gateway host>
+#   INTRANET_LLM_API_BASE=https://<intranet LLM service host>
 #   INTRANET_LLM_MODEL=openai/aws/claude-haiku-4-5
-#   INTERNET_LLM_API_BASE=https://<external gateway host>
+#   INTERNET_LLM_API_BASE=https://<Internet LLM service host>
 #   INTERNET_LLM_MODEL=openai/Azure/gpt-5-mini-2025-08-07
 #   EOF
 #

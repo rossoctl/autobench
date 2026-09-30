@@ -21,12 +21,16 @@
 # raw-manifest install").
 platform: openshift
 
-# Which LLM gateway this cluster's workloads must use: intranet | internet (empty = undeclared).
+# Where the LLM or LiteLLM service this cluster's workloads call sits: intranet | internet
+# (empty = undeclared). Any OpenAI-compatible service will do; the profile records which network
+# yours is on, because that is what decides whether this cluster can reach it at all.
 #
-# ORTHOGONAL TO `platform`, deliberately. The gateway follows where the cluster sits on the NETWORK,
-# not which Kubernetes it runs: an OpenShift cluster deployed on the organisation's intranet uses
-# `intranet`, exactly like a local kind cluster on the VPN, while a kind cluster on a laptop off the
-# VPN uses `internet`. Nothing derives one value from the other.
+# ORTHOGONAL TO `platform`, deliberately, and the rule is asymmetric. An Internet cluster — kind or
+# OpenShift alike — must be given credentials for a service ON the Internet, because an intranet
+# service is not routable from it. An intranet cluster may use either, so it has a real choice and
+# this value is the record of it. Both platforms occur on both networks: OpenShift is commonly
+# deployed on the organisation's intranet, and a kind cluster runs on an Internet server as readily
+# as on a laptop on the VPN. Nothing derives one value from the other.
 #
 # The chart does NOT render this into the Service pod, because the Service does not read the gateway
 # from its environment — the gateway is `workload_llm.api_base` in the instance-config Secret, which

@@ -6,13 +6,13 @@
 #
 #   setting          kind                                    OpenShift (ykt2/ykt3/ykt5)
 #   ---------------- --------------------------------------- ------------------------------------
-#   LLM api_base     the INTERNAL gateway (vpc-int)           the EXTERNAL gateway (vpc)
-#   openai-secret    a key from the internal gateway's table  a key from the external one's
+#   LLM api_base     whatever LLM_PROFILE declares            whatever LLM_PROFILE declares
+#   openai-secret    a key from THAT service's own table      a key from THAT service's own table
 #   MLflow read      mlflow-reader:5000, no auth              mlflow…:8443 + SA bearer, insecure_tls
 #   MLflow experiment 0                                       1, workspace team1
 #   keycloak dial    backchannel svc DNS (iss unreachable)    the iss route itself
 #
-# The two gateways keep SEPARATE key tables, so a key moved between platforms does not fail
+# No two LLM services share a key table, so a key moved between clusters does not fail
 # closed at deploy — it 401s per completion, mid-run, and the leg finishes with zeroes. Neither
 # does an experiment-id mismatch: the run passes and every token count reads 0, because the
 # Service reads an experiment nothing was written to. Hence the precheck below, which asserts

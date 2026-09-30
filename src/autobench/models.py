@@ -58,10 +58,10 @@ class WorkloadLLMConfig(BaseModel):
 
     The benchmark registry ships a default LiteLLM base URL + default model baked into every
     tool/agent env. This config lifts those into per-instance settings so an instance whose
-    workloads must reach a *different* gateway (e.g. an internal VPC LiteLLM) reproduces that
-    endpoint on every deploy, surviving teardown→redeploy. Set out-of-band in the instance file,
-    like `workload_otel` and the endpoint templates. The API *key* is unaffected — it stays in the
-    cluster `openai-secret` and is never carried here.
+    workloads must reach a *different* gateway (e.g. an LLM or LiteLLM service on an organisation's
+    own intranet) reproduces that endpoint on every deploy, surviving teardown→redeploy. Set
+    out-of-band in the instance file, like `workload_otel` and the endpoint templates. The API
+    *key* is unaffected — it stays in the cluster `openai-secret` and is never carried here.
 
     `api_base` overrides `OPENAI_API_BASE` (tool + agent) and `LLM_API_BASE` (agent). `default_model`
     is the instance default when a deploy/run passes no explicit model (takes precedence over the
