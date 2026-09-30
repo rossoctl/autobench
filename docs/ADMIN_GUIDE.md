@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-09-30T16:02:26Z
+**Last modified:** 2026-09-30T17:02:49Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -372,6 +372,29 @@ different one. `mlflowTraceWriter.namespaces` lists MLflow **workspaces** on the
 cluster, not the namespaces agents run in — the same string on a single-cluster install, but in the
 split shape the agents are elsewhere while the MLflow being written to is here. A workspace missing
 from the list reproduces the empty report for that workspace only.
+
+**`insecure_tls` is a read-side lever, and turning it off hardens nothing while breaking the read.**
+The two halves above cover the **write**: with `insecure_tls: false` the OTLP exporter picks up
+`OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE` and verifies the service-CA chain successfully. The **read**
+client has no equivalent. It is one of exactly two things — a throwaway `httpx.AsyncClient(verify=
+False)` when `insecure_tls: true`, or the shared client on the **default system trust store** when
+false — and nothing anywhere hands it the service CA. So against an in-cluster MLflow the read path
+has two states, unverified or broken, and `insecure_tls: true` is what keeps it working.
+
+Measured on ykt5, one probe, `experiment_id` pinned so it could not confound the result:
+
+| stage | `insecure_tls: true` | `insecure_tls: false` |
+|---|---|---|
+| `write` (OTLP, has the CA anchor) | ok | **ok** — the anchor genuinely verifies |
+| `read` / `round_trip` (httpx, has none) | ok | **FAIL** `CERTIFICATE_VERIFY_FAILED … self-signed certificate in certificate chain` |
+
+Two consequences. `insecure_tls: false` is not the hardened setting it looks like — it converts a
+working install into an empty-report install, which is §7's most over-subscribed symptom. And the
+verification it skips is on a **cluster-local `.svc` connection**, so what is actually exposed is the
+MLflow bearer token to an attacker who can already intercept in-cluster service traffic. That is a
+real gap and a small one; it stays open deliberately, and the trigger to close it is any MLflow read
+that starts crossing a cluster boundary or an edge Route, where the same `verify=False` would stop
+being an in-cluster concern.
 
 **`workload_agent_runner` deserves its own warning.** The correct value tracks an agent image
 pinned to `:latest`, and it has flipped between `direct` and `service` across rebuilds of that tag.
@@ -789,7 +812,7 @@ generates the instance config and creates the Secret. The chart is the last step
 alone it installs a pod with nothing to authenticate as.
 
 ```bash
-IMAGE=ghcr.io/rossoctl/autobench:v1.30 reference/kind-post-setup.sh    # first time / after a rebuild
+IMAGE=ghcr.io/rossoctl/autobench:v1.31 reference/kind-post-setup.sh    # first time / after a rebuild
 
 python3 reference/preflight.py --platform kind --context kind-rossoctl \
         --password-file ~/.rossoctl-kind/benchmarker.pass
@@ -906,7 +929,7 @@ a working one produce the same pass rate. See `docs/PLUGIN_OVERHEAD.md`.
 
 ```bash
 helm upgrade autobench deploy/helm/autobench -n rossoctl-system -f <values> \
-  --set image.tag=v1.30
+  --set image.tag=v1.31
 helm history  autobench -n rossoctl-system
 helm rollback autobench 1 -n rossoctl-system
 helm uninstall autobench -n rossoctl-system          # leaves autobench-instances behind
@@ -973,7 +996,8 @@ not emit spans for. Preflight separates the first three; only a run separates th
 |---|---|---|
 | run passes, every token count 0, `model: "unknown"` | refused MLflow read, wrong experiment id, unreachable collector, or the wrong `workload_agent_runner` | §2.4, then §6 |
 | run passes `pass_rate 1.0`, and `report.ndjson`/`token_report.ndjson` are **zero bytes** — only 4 of the 8 artifacts carry anything | the Service's *own* span export failed, so MLflow never got the root `Agent.Session` span and the trace was dropped. On OpenShift, one of the two halves in §3.4: no service-CA trust anchor (TLS) or no trace-writer RoleBinding (403) | `autobench-cli mlflow-health` (§3.7) — its `write` stage names the cause where the run named nothing, and it is the only check that reproduces this without a run. `preflight.py` reports both halves separately as well |
-| the same zero-byte report, but **only after you used `PUT /config`**, and the TLS anchor and RoleBinding both check out | on `v1.30` and earlier the merge rewrote every field with a non-`null` default, so a `PUT` of *one* field also reset `mlflow.experiment_id` to `"0"` — the Service then wrote spans to one experiment and read the report from another. `s3.public_read` was reset to `true` the same way, which re-enables public ACLs on a bucket someone made private | `GET /config` right after the `PUT` and compare every field, not just the one you sent — the response body is the effective config. Fixed after `v1.30`; §5 of the developer guide |
+| reports empty, or every token count 0, **right after someone set `insecure_tls: false` to harden the install** | the MLflow **read** client has no trust anchor — only the OTLP write path does. `false` leaves it on the system trust store, which lacks the service CA | `autobench-cli mlflow-health`: `write` stays ok while `read`/`round_trip` FAIL with `CERTIFICATE_VERIFY_FAILED`. That split is the signature. §3.4 |
+| the same zero-byte report, but **only after you used `PUT /config`**, and the TLS anchor and RoleBinding both check out | on `v1.30` and earlier the merge rewrote every field with a non-`null` default, so a `PUT` of *one* field also reset `mlflow.experiment_id` to `"0"` — the Service then wrote spans to one experiment and read the report from another. `s3.public_read` was reset to `true` the same way, which re-enables public ACLs on a bucket someone made private | `GET /config` right after the `PUT` and compare every field, not just the one you sent — the response body is the effective config. Fixed in `v1.31`; §5 of the developer guide |
 | the run publishes **no artifacts at all**, `botocore … SSLError: unable to get local issuer certificate` | `REQUESTS_CA_BUNDLE` was used for the service CA instead of `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`; botocore honours it too and the S3 client can no longer validate AWS's cert | §3.4 |
 | one task errors `A2A task ended in state 'failed': Error: timed out` at ~30 s, with `llm_count: 0` | the LLM gateway accepted the connection and never answered. The agent's `service` runner caps a single `react` at a hard-coded **30 s** with no retry (`docker` and `venv` allow 600 s), so a stalled completion becomes a failed task | probe the gateway from inside the agent pod: a stall is a *read* timeout after TLS succeeds, and it also hits the unauthenticated `GET /public/litellm_model_cost_map`, which proves it is not the model |
 | `/deploy` returns **502** | Keycloak or the operator returned 403 — the service credential no longer logs in, or the user lacks the `rossoctl-operator` realm role. The install itself looks healthy: the password is only used per deploy | `preflight.py --password-file …` (§3.6); then the role mapping in the realm |

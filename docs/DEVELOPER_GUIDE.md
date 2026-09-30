@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-30T16:02:26Z
+**Last modified:** 2026-09-30T17:02:49Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -779,10 +779,9 @@ instance file or from an earlier `PUT`. Whole sections behave the same way — a
 > **zero-byte report on a run that reports `pass_rate 1.0`** (§5.1 is how you would now catch it).
 > The third silently re-enabled public-read ACLs on a bucket someone had deliberately made private.
 >
-> `v1.30` is the tag `deploy/` currently pins, so **on a cluster this fix is not live yet** — it
-> lands in the next published image. Until then, send every field you care about on every `PUT`, and
-> read the result back: the response body is the effective config, so a reset is visible immediately
-> if you look for it.
+> Fixed in `v1.31`, which is what `deploy/` now pins — so a cluster still serving `v1.30` still has
+> it. When driving one, send every field you care about on every `PUT` and read the result back: the
+> response body is the effective config, so a reset is visible immediately if you look for it.
 
 Because unmentioned and `null` now mean different things, an explicit `null` **clears** a field —
 the only way to unset one at runtime:
