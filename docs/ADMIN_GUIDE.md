@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-09-30T01:17:56Z
+**Last modified:** 2026-09-30T01:28:23Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -14,6 +14,11 @@ proves the install. *Driving* the Service once it answers is a different documen
   platforms rather than endpoints. Route *shapes* are real
   (`<service>-<namespace>.apps.<cluster>.example.com`), so substitute your own domain and the
   recipes work unchanged.
+- **The cluster names are samples, and so is every endpoint they stand for.** `ykt2`/`ykt3`/`ykt5`
+  are the OpenShift clusters this project happens to run on, reached from the Internet; the KinD
+  cluster is a laptop on an organisation intranet. Nothing here requires any of them, or a
+  particular LLM service (§3.5) — they are the worked examples, and the chart is deliberately
+  generic.
 - **No secret value appears in this guide, and none should appear in your terminal.** Every script
   here reads credentials from the environment or from a `chmod 600` file and reports them only as a
   truncated SHA-256. If you find yourself about to `echo` one, don't.
@@ -316,8 +321,8 @@ points *at*.
 
 | | KinD | OpenShift | if you get it wrong |
 |---|---|---|---|
-| LLM gateway | usually the **internal** gateway | usually the **external** one — but this follows the *network*, not the platform (§3.5) | the two keep separate key tables, so a key moved across does not fail closed — it 401s per completion, mid-run |
-| `openai-secret` | a key from the internal gateway | a key from the external one | same |
+| LLM gateway | **not a platform difference** — either platform may use a service on the intranet or on the Internet, subject to the asymmetric rule in §3.5 | ditto | no two services share a key table, so a key moved across does not fail closed — it 401s per completion, mid-run |
+| `openai-secret` | a key issued by **that cluster's own** service | ditto | same |
 | MLflow read path | `mlflow-reader` (§8), no auth | the cluster's own MLflow on `:8443` with a ServiceAccount bearer and `insecure_tls` | a refused read is invisible: the run passes, every token count is 0 |
 | MLflow experiment | `0` | `1`, workspace `team1` on ykt5 | identical signature to the above |
 | Keycloak dial | the **backchannel** service DNS — `iss` is unreachable in-cluster, since `*.localtest.me` resolves to pod loopback and there is no CoreDNS rewrite | the `iss` Route itself | JWKS and ROPC both fail at startup |

@@ -319,8 +319,9 @@ if [ -n "$TOK" ]; then
         *) check "realm role rossoctl-operator" 1 "not in the token's realm_access.roles" ;; esac
 fi
 
-# The workload LLM key: present, non-empty, and NOT the internal gateway's key. Only the hash is
-# shown. An empty apikey is the common post-reinstall state and 401s every completion.
+# The workload LLM key: present and non-empty. Only the hash is shown. WHICH service issued it is
+# not assertable from here — that is what the profile check below is for — and an empty apikey is
+# the common post-reinstall state, which 401s every completion.
 #
 # Only the namespaces actually deployed into, which is why TEAM_NAMESPACES is `team1` and not
 # `team1 team2`: all 24 specs in reference/run12_specs.json name team1, and failing the precheck on

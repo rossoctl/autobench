@@ -1,5 +1,7 @@
-# ykt5: OpenShift, Service and workloads on the SAME cluster (unlike ykt3, which hosts only the
-# Service and drives ykt2). Install with:
+# An OpenShift cluster with the Service and workloads on the SAME cluster (unlike the split shape,
+# where one cluster hosts only the Service and drives workloads on another). `ykt5`, `ykt3` and
+# `ykt2` below are the clusters this project happens to run on — sample names, not requirements;
+# copy this file and substitute your own. Install with:
 #
 #   helm upgrade --install autobench deploy/helm/autobench \
 #     -n rossoctl-system --kube-context <ykt5> -f deploy/helm/values-ykt5.yaml
@@ -7,9 +9,10 @@
 # The instance-config Secret must exist first — see the chart's values.yaml.
 platform: openshift
 
-# ykt5 is reached from outside the organisation's network, so it uses the EXTERNAL gateway. This is
-# a property of the cluster's placement, not of OpenShift: an OpenShift cluster on the intranet
-# would declare `intranet` here and use the same gateway a local kind cluster does.
+# This cluster sits on the Internet, so it must be given credentials for an LLM or LiteLLM service
+# on the Internet — an intranet service is not routable from it. That is a property of the
+# cluster's placement, not of OpenShift: an OpenShift cluster on the intranet would declare
+# `intranet` here, exactly as a kind cluster on the intranet may.
 llmProfile: internet
 
 route:

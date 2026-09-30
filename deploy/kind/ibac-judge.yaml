@@ -11,11 +11,11 @@
 # to prove enforcement is to COUNT judge calls, not to read the pass rate.
 #
 # UPSTREAM_BASE below is a PLACEHOLDER: this repo is public, so no live gateway host is committed.
-# The shape is what matters. On KinD it must be the INTERNAL gateway (the external one is not
-# routable over the VPN split tunnel, and the two keep separate key tables), so substitute at
-# apply time:
+# The shape is what matters. It must be the SAME LLM or LiteLLM service the workloads on this
+# cluster call — the judge is one more caller of it, and no two services share a key table — so
+# substitute at apply time:
 #
-#     LLM_BASE=https://<internal gateway host>
+#     LLM_BASE=https://<that cluster's LLM service host>
 #     sed "s|https://llm-gateway.example.com|$LLM_BASE|" deploy/kind/ibac-judge.yaml \
 #       | kubectl --context kind-rossoctl apply -f -
 #
@@ -127,7 +127,7 @@ spec:
           image: mirror.gcr.io/library/python:3.12-slim
           command: ["python", "/app/proxy.py"]
           env:
-            # PLACEHOLDER — substitute the internal gateway before applying (see the header).
+            # PLACEHOLDER — substitute this cluster's own LLM service before applying (header).
             - name: UPSTREAM_BASE
               value: https://llm-gateway.example.com
             - name: UPSTREAM_KEY

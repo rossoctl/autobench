@@ -14,11 +14,11 @@
 #   openshift -> let the restricted-v2 SCC inject the UID/GID, and expose via a Route
 #   kind      -> pin UID 10001, and expose via an HTTPRoute on the shared istio gateway
 #
-# Both shapes are installed and validated on a live cluster: `openshift` on ykt5, `kind` on
-# kind-rossoctl (2026-09-29). The two clusters that predate the chart were ADOPTED into releases
-# rather than reinstalled — a Deployment's selector is immutable, so a chart cannot replace an
-# existing object, only take ownership of it. See docs/ADMIN_GUIDE.md ("Adopting an existing
-# raw-manifest install").
+# Both shapes are installed and validated on a live cluster: `openshift` on a sample OpenShift
+# cluster (ykt5), `kind` on kind-rossoctl (2026-09-29). The two clusters that predate the chart
+# were ADOPTED into releases rather than reinstalled — a Deployment's selector is immutable, so
+# a chart cannot replace an existing object, only take ownership of it. See docs/ADMIN_GUIDE.md
+# ("Adopting an existing raw-manifest install").
 platform: openshift
 
 # Where the LLM or LiteLLM service this cluster's workloads call sits: intranet | internet
