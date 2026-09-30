@@ -161,6 +161,48 @@ class ConfigResponse(BaseModel):
     s3: S3Config
 
 
+class MLflowHealthStage(BaseModel):
+    """One stage of the MLflow probe. `error` is a message, never a credential."""
+
+    ok: bool
+    detail: str | None = None
+    error: str | None = None
+
+
+class MLflowHealthResponse(BaseModel):
+    """Whether this instance's MLflow is reachable, authenticated and WRITABLE.
+
+    Deliberately a whitelist of fields, the same discipline `span_report.*` follows: the probe
+    handles a bearer token and possibly a password, and neither may ever appear in a response.
+    `credential_mode` names which of `auth.mlflow.mlflow_token`'s three modes the config selects
+    without disclosing the material.
+
+    Four stages, because they fail independently and a run only needs the last one to be wrong to
+    publish an empty report while reporting `pass_rate 1.0`:
+
+      * `auth`       — a bearer could be minted at all
+      * `read`       — the traces API answers (this is what a report reads)
+      * `write`      — the OTLP exporter posted the probe's spans without logging an error
+      * `round_trip` — those spans came back out again
+
+    `read.ok` with `write.ok` false is the exact shape of the two failures that shipped zero-byte
+    reports on 2026-09-30: reads go through httpx honouring `insecure_tls`, while the span exporter
+    is a separate library needing a real trust anchor and a `mlflow-operator-mlflow-integration`
+    grant. So a 200 on the read path proves nothing about the export path.
+    """
+
+    ok: bool
+    tracking_url: str | None = None
+    credential_mode: str  # bearer_token | openshift_oauth | client_credentials | none
+    experiment_id: str
+    workspace: str | None = None
+    insecure_tls: bool = False
+    auth: MLflowHealthStage
+    read: MLflowHealthStage
+    write: MLflowHealthStage | None = None
+    round_trip: MLflowHealthStage | None = None
+
+
 class HelloResponse(BaseModel):
     iss: str
     preferred_username: str | None

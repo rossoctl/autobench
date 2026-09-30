@@ -8,7 +8,7 @@ from fastapi.openapi.utils import get_openapi
 from .auth.jwks import JWKSCache
 from .config import settings
 from .instances import InstanceRegistry
-from .routes import agents, benchmark, benchmarks, config, hello, runs, tools
+from .routes import agents, benchmark, benchmarks, config, hello, mlflow, runs, tools
 from .runner.registry import RunRegistry
 from .runtime_config import RuntimeConfigStore
 
@@ -43,6 +43,7 @@ def create_app() -> FastAPI:
     app.include_router(benchmarks.router)
     app.include_router(runs.router)
     app.include_router(config.router, tags=["config"])
+    app.include_router(mlflow.router, tags=["mlflow"])
 
     @app.get("/healthz", include_in_schema=False)
     async def healthz() -> dict:

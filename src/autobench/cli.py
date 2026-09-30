@@ -318,7 +318,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("command",
                    choices=["all", "whoami", "list", "deploy", "wait", "run", "poll",
-                            "report", "artifacts", "teardown"])
+                            "report", "artifacts", "teardown", "mlflow-health"])
     p.add_argument("--benchmark", default="gsm8k", help="gsm8k | tau2 | appworld")
     p.add_argument("--namespace", default="team1")
     p.add_argument("--agent", default="tool_calling")
@@ -345,7 +345,33 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--client", default=os.environ.get("BM_CLIENT", "rossoctl"))
     p.add_argument("--insecure", action="store_true",
                    default=os.environ.get("BM_INSECURE") == "1")
+    p.add_argument("--no-round-trip", action="store_true",
+                   help="`mlflow-health`: read only, do not emit a probe trace")
     return p
+
+
+def do_mlflow_health(c: Client, a) -> int:
+    """Probe the instance's MLflow and return a shell exit status.
+
+    Exists as a CLI command so the install-time gate has ONE implementation: an operator checking by
+    hand and a bring-up script gating on `$?` run the same probe. Costs no LLM gateway call.
+
+    Exit 0 only when every stage passed. 8 is reserved for "MLflow is not healthy" so it is
+    distinguishable from the client's own failures (`die` uses 1/2, a run uses 7).
+    """
+    body = c.json_api("/mlflow/health", timeout=180,
+                      query={"round_trip": "false" if a.no_round_trip else "true"})
+    print(json.dumps(body, indent=2))
+    for stage in ("auth", "read", "write", "round_trip"):
+        st = body.get(stage)
+        if st is None:
+            continue  # not attempted: --no-round-trip, or an earlier stage stopped the probe
+        log(f"{stage:<11} {'ok' if st.get('ok') else 'FAIL'}"
+            f"  {st.get('detail') or st.get('error') or ''}")
+    if body.get("ok"):
+        return 0
+    log("MLflow is NOT healthy for this instance — a run would pass and publish an EMPTY report")
+    return 8
 
 
 def read_password() -> str:
@@ -373,6 +399,8 @@ def main(argv=None) -> int:
     if a.command == "list":
         print(json.dumps(c.json_api("/benchmarks"), indent=2))
         return 0
+    if a.command == "mlflow-health":
+        return do_mlflow_health(c, a)
     if a.command == "deploy":
         print(json.dumps(do_deploy(c, a), indent=2))
         return 0
