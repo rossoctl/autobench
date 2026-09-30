@@ -10,9 +10,10 @@ Run from the repo root:  python3 reference/helm-parity-check.py
 Exits non-zero on any difference. Requires `helm` on PATH.
 
 Expected differences, and the only ones tolerated: the openshift render adds a Route (nothing in
-deploy/ declares one — ykt3's was created by hand), and the openshift Deployment drops
-runAsUser/runAsGroup/fsGroup, which is precisely what deploy/openshift/deployment-patch.yaml's
-nulls do.
+deploy/ declares one — ykt3's was created by hand), and the openshift Deployment differs from the
+base by exactly what deploy/openshift/deployment-patch.yaml says. That patch is READ and applied
+here rather than described in code, so a value added to one install path and not the other fails the
+gate instead of slipping through.
 
 The IBAC judge is off by default and so changes neither render. The last four checks cover it when
 enabled: its objects are additive, it leaves the Service's alone, its two lifecycle hooks are the
@@ -75,6 +76,37 @@ def diff(manifest, rendered, path="") -> list[str]:
     return out
 
 
+def strategic_merge(base, patch):
+    """Apply a strategic-merge patch the way `kubectl patch` would, for the shapes we use.
+
+    Read the patch FILE rather than hard-coding what it does, so a new key in it cannot pass this
+    gate unnoticed — that is how REQUESTS_CA_BUNDLE could have been added to one install path and
+    not the other. Two rules cover deploy/openshift/deployment-patch.yaml: a null value deletes the
+    key, and a list of objects with `name` merges by name (`env`, `containers`, `volumeMounts` all
+    use `name` as their patch merge key).
+    """
+    if isinstance(patch, dict):
+        out = dict(base) if isinstance(base, dict) else {}
+        for key, value in patch.items():
+            if value is None:
+                out.pop(key, None)
+            elif key in out:
+                out[key] = strategic_merge(out[key], value)
+            else:
+                out[key] = value
+        return out
+    if isinstance(patch, list) and all(isinstance(i, dict) and "name" in i for i in patch):
+        out = [dict(i) for i in base] if isinstance(base, list) else []
+        by_name = {i.get("name"): n for n, i in enumerate(out)}
+        for item in patch:
+            if item["name"] in by_name:
+                out[by_name[item["name"]]] = strategic_merge(out[by_name[item["name"]]], item)
+            else:
+                out.append(item)
+        return out
+    return patch
+
+
 def check(label: str, manifest: dict, rendered: dict, failures: list[str]) -> None:
     deltas = diff(manifest, rendered)
     print(f"{'ok  ' if not deltas else 'FAIL'}  {label}")
@@ -101,15 +133,17 @@ def main() -> int:
     check("kind HTTPRoute   == deploy/kind/httproute.yaml", load("deploy/kind/httproute.yaml"), kind["HTTPRoute/autobench"], failures)
 
     ocp = render("-f", str(REPO / "deploy/helm/values-openshift.yaml"))
-    patched = copy.deepcopy(load("deploy/deployment.yaml"))
-    sc = patched["spec"]["template"]["spec"]["securityContext"]
-    for key in ("runAsUser", "runAsGroup", "fsGroup"):  # the patch nulls these
-        sc.pop(key, None)
+    patched = strategic_merge(copy.deepcopy(load("deploy/deployment.yaml")),
+                              load("deploy/openshift/deployment-patch.yaml"))
     check("ocp  Deployment  == deployment.yaml + openshift patch", patched, ocp["Deployment/autobench-service"], failures)
     check("ocp  Service     == deploy/service.yaml", load("deploy/service.yaml"), ocp["Service/autobench-service"], failures)
 
+    # Two objects the raw manifests never had. The Route was created by hand on ykt3; the RoleBinding
+    # was too, which is exactly why it is here — the cluster that never got a hand-made copy published
+    # empty token reports on passing runs until the 403 behind it was found.
     expect(sorted(k for k in ocp if not k.endswith("/autobench-service")),
-           ["Route/autobench"], "ocp  extra objects == the Route", failures)
+           ["RoleBinding/autobench-service-mlflow-trace-writer", "Route/autobench"],
+           "ocp  extra objects == the Route + the MLflow write grant", failures)
 
     # The judge is off by default, so the two renders above are unaffected by it. Enabled, it must add
     # exactly its own objects and nothing else — and in particular must not disturb the Service's.

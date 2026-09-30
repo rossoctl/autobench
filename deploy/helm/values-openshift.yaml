@@ -17,6 +17,27 @@ platform: openshift
 # installing; a wrong profile is a pre-install FAILURE, which is the cheap way to find out.
 llmProfile: internet
 
+# The Service exports its own spans to MLflow's OTLP endpoint, and an in-cluster MLflow serves a cert
+# signed by the OpenShift service CA — absent from the default trust store. With no trust anchor the
+# export fails verification, MLflow never receives the root `Agent.Session` span, and the Service
+# drops the trace when building the report: the run SUCCEEDS and the token report comes back empty.
+# So this is a correctness setting, not a convenience one.
+#
+# Use the OTLP-specific variable, never `REQUESTS_CA_BUNDLE`: botocore reads that one as well, so it
+# would point the S3 client at the service CA too and every artifact upload would fail to validate
+# AWS's public cert. deploy/openshift/deployment-patch.yaml carries the same note for the
+# raw-manifest install path, and reference/helm-parity-check.py holds the two together.
+extraEnv:
+  - name: OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE
+    value: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+
+# The second half of the same requirement: reaching MLflow is TLS, being allowed to write to it is
+# RBAC, and each fails in the same silent way — an empty token report on a passing run. RHOAI MLflow
+# authorizes writes against its operator's ClusterRole in the workload namespace. See the chart's
+# values.yaml for why this is a value rather than something derived from `platform`.
+mlflowTraceWriter:
+  enabled: true
+
 route:
   enabled: true
   # Empty: the router generates autobench-<namespace>.apps.<cluster>, matching the Route the raw

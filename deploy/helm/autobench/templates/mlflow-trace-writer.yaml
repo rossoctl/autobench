@@ -1,0 +1,48 @@
+{{- if .Values.mlflowTraceWriter.enabled }}
+{{- /*
+Let the Service WRITE its own spans to MLflow.
+
+Reads and writes need different permissions, and only the read half is obvious. The Service reads
+MLflow over REST to build report.ndjson, and it also EMITS four spans of its own — `Agent.Session`
+and its three children — straight to MLflow's OTLP endpoint. The read works with no grant at all.
+The write is checked against `mlflow-operator-mlflow-integration` in the WORKLOAD namespace, and
+without this binding it fails with 403 PERMISSION_DENIED.
+
+Why that is worth a template rather than a line in a runbook: the failure is silent and it does not
+look like a permissions problem. A trace with no `Agent.Session` span is discarded when the report is
+assembled, so the run still SUCCEEDS, still reports pass_rate 1.0, and publishes a zero-byte
+report.ndjson and token_report.ndjson. Nothing fails; the measurement simply is not there. This
+binding existed on the cluster where the matrix was first run because someone made it by hand, and
+the next cluster silently produced empty reports until the 403 was chased down.
+
+The platform's own collector has an equivalent binding already (`otel-collector-mlflow`), so this one
+names only the identity the SERVICE authenticates as — the account whose token the instance-config
+Secret carries. It does not re-grant what the platform granted.
+
+Referenced, never created: the ClusterRole belongs to the MLflow operator and the ServiceAccount is
+made out-of-band by reference/ocp-service-bootstrap.sh alongside the token the instance file holds.
+RBAC subjects need not exist, so ordering does not matter.
+*/}}
+{{- $sa := .Values.mlflowTraceWriter.serviceAccount }}
+{{- if not $sa }}
+{{- fail "mlflowTraceWriter.serviceAccount is required when mlflowTraceWriter.enabled — it is the account whose token mlflow.bearer_token in the instance-config Secret carries" }}
+{{- end }}
+{{- range $ns := .Values.mlflowTraceWriter.namespaces }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "autobench.name" $ }}-mlflow-trace-writer
+  namespace: {{ $ns }}
+  labels:
+    {{- include "autobench.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $.Values.mlflowTraceWriter.clusterRole }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ $.Release.Namespace }}
+---
+{{- end }}
+{{- end }}

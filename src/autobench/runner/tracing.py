@@ -28,6 +28,36 @@ from ..models import MLflowConfig
 logger = logging.getLogger(__name__)
 
 
+def _no_verify_session():
+    """A `requests` Session that forces `verify=False` on every request.
+
+    Setting `session.verify = False` is not enough, and fails SILENTLY. `OTLPSpanExporter` passes
+    `verify=self._certificate_file` on every `post`, and requests gives a per-request setting
+    precedence over the session's (`merge_setting` returns the request's value when both are set).
+    `_certificate_file` defaults to `True`, so the session's flag was overridden and every export
+    failed TLS verification. The run still succeeded — only the root `Agent.Session` span never
+    reached MLflow, and a trace without it is dropped when the report is built, so the symptom was an
+    empty token report on a passing run, not an error.
+
+    Passing `certificate_file=False` to the exporter does not work either: it is read as
+    `certificate_file or environ.get(..., True)`, and `False or True` is `True`.
+
+    Preferring a real trust anchor over this is better where one exists — on OpenShift the service CA
+    is mounted into the pod and both install paths point the exporter at it with
+    `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`. That variable, never `REQUESTS_CA_BUNDLE`: botocore reads
+    the latter too, so it would redirect the S3 client's trust store at the same time and every
+    artifact upload would fail to validate AWS's public cert.
+    """
+    import requests
+
+    class NoVerifySession(requests.Session):
+        def request(self, *args, **kwargs):
+            kwargs["verify"] = False
+            return super().request(*args, **kwargs)
+
+    return NoVerifySession()
+
+
 def build_tracer(cfg: MLflowConfig, token: str):
     """Build an isolated tracer exporting to MLflow's OTLP endpoint.
 
@@ -53,10 +83,7 @@ def build_tracer(cfg: MLflowConfig, token: str):
 
     session = None
     if cfg.insecure_tls:  # port-forwarded reencrypt endpoints present a self-signed cert.
-        import requests
-
-        session = requests.Session()
-        session.verify = False
+        session = _no_verify_session()
 
     exporter = OTLPSpanExporter(
         endpoint=f"{cfg.tracking_url.rstrip('/')}/v1/traces",

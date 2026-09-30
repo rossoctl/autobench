@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-09-30T03:02:07Z
+**Last modified:** 2026-09-30T04:11:01Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -74,6 +74,7 @@ cluster operation server-side. Nothing here shells out to `kubectl` or `oc`.
 | Route | `autobench` | chart (`platform: openshift`) | edge TLS; host generated as `autobench-<namespace>.apps.<cluster>` |
 | HTTPRoute | `autobench` | chart (`platform: kind`) | attaches to the shared istio gateway |
 | Secret | `autobench-instances` | **you, out-of-band** (§4) | ROPC credentials — never passes through Helm values |
+| RoleBinding | `autobench-service-mlflow-trace-writer` | chart (`mlflowTraceWriter.enabled`) | one per workload namespace; lets the Service **write** its own spans. On by default in `values-openshift.yaml` — see the warning below |
 | Deployment + Service | `ibac-judge` | chart (`ibacJudge.enabled`, off by default) | needed only by the plugin legs #5–#8 (§5.4) |
 
 The judge is in that table, rather than in the platform list below, on purpose: **Rossoctl ships
@@ -336,6 +337,27 @@ points *at*.
 | collector endpoint | `http://otel-collector.rossoctl-system.svc.cluster.local:8335` | the same on a single-cluster install; an edge Route on `:443` when the agents live elsewhere | unreachable collector ⇒ agent `CrashLoopBackOff`, surfacing as a 424 on the run |
 | pod security context | UID/GID/fsGroup pinned to 10001/0/10001 | `runAsNonRoot` + seccomp only | pinning 10001 can be **rejected** when it falls outside the project's allocated UID range |
 | ingress | `HTTPRoute` on the shared gateway | `Route`, edge TLS | — |
+
+**On OpenShift the Service's own span export needs two more things, and each fails silently.**
+Reaching MLflow is TLS; being allowed to write to it is RBAC. The Service reads MLflow to build
+`report.ndjson`, but it also *emits* four spans of its own — `Agent.Session` and its three children
+— straight to the OTLP endpoint. If either half is missing, the export fails, MLflow never receives
+`Agent.Session`, and a trace without that root span is **dropped** when the report is assembled: the
+run succeeds, reports `pass_rate 1.0`, and publishes a **zero-byte** `report.ndjson` and
+`token_report.ndjson`. Nothing errors. The measurement is simply not there.
+
+| half | what it needs | rendered by |
+|---|---|---|
+| **TLS** — an in-cluster MLflow serves a cert signed by the OpenShift service CA, absent from the default trust store | `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt` | `extraEnv` in `values-openshift.yaml`; `deploy/openshift/deployment-patch.yaml` for the raw path |
+| **RBAC** — writes are authorized against the MLflow operator's ClusterRole *in the workload namespace* | a RoleBinding per namespace, granting `mlflow-reader` `mlflow-operator-mlflow-integration` | `mlflowTraceWriter.enabled: true` |
+
+It must be the OTLP-specific variable. `REQUESTS_CA_BUNDLE` looks like the obvious choice and is a
+trap: botocore reads it too, so it redirects the S3 client's trust store at the same time and every
+artifact upload then fails to validate AWS's public cert — turning an empty report into no artifacts
+at all. `preflight.py` checks both halves, and matches the RoleBinding on the **grant** rather than
+its name, because a cluster set up before the chart existed has an equivalent binding under a
+different one. Add a namespace to `mlflowTraceWriter.namespaces` for every namespace you deploy into:
+a missing one reproduces the empty report for that namespace only.
 
 **`workload_agent_runner` deserves its own warning.** The correct value tracks an agent image
 pinned to `:latest`, and it has flipped between `direct` and `service` across rebuilds of that tag.
@@ -853,6 +875,9 @@ not emit spans for. Preflight separates the first three; only a run separates th
 | symptom | actual cause | how to confirm |
 |---|---|---|
 | run passes, every token count 0, `model: "unknown"` | refused MLflow read, wrong experiment id, unreachable collector, or the wrong `workload_agent_runner` | §2.4, then §6 |
+| run passes `pass_rate 1.0`, and `report.ndjson`/`token_report.ndjson` are **zero bytes** — only 4 of the 8 artifacts carry anything | the Service's *own* span export failed, so MLflow never got the root `Agent.Session` span and the trace was dropped. On OpenShift, one of the two halves in §3.4: no service-CA trust anchor (TLS) or no trace-writer RoleBinding (403) | `preflight.py` reports both halves; in the Service log, `CERTIFICATE_VERIFY_FAILED` vs `403 PERMISSION_DENIED` distinguishes them |
+| the run publishes **no artifacts at all**, `botocore … SSLError: unable to get local issuer certificate` | `REQUESTS_CA_BUNDLE` was used for the service CA instead of `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`; botocore honours it too and the S3 client can no longer validate AWS's cert | §3.4 |
+| one task errors `A2A task ended in state 'failed': Error: timed out` at ~30 s, with `llm_count: 0` | the LLM gateway accepted the connection and never answered. The agent's `service` runner caps a single `react` at a hard-coded **30 s** with no retry (`docker` and `venv` allow 600 s), so a stalled completion becomes a failed task | probe the gateway from inside the agent pod: a stall is a *read* timeout after TLS succeeds, and it also hits the unauthenticated `GET /public/litellm_model_cost_map`, which proves it is not the model |
 | `/deploy` returns **502** | Keycloak or the operator returned 403 — the service credential no longer logs in, or the user lacks the `rossoctl-operator` realm role. The install itself looks healthy: the password is only used per deploy | `preflight.py --password-file …` (§3.6); then the role mapping in the realm |
 | `/deploy` returns **424**, agent `CrashLoopBackOff` | collector endpoint on 4318, or `hf-secret` missing so the MCP pod never started | the collector's `command`; `get secret hf-secret` |
 | token request 400 `Account is not fully set up` | the realm requires `firstName`/`lastName` for ROPC | the user's profile |

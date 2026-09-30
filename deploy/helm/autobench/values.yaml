@@ -155,6 +155,29 @@ ibacJudge:
       cpu: 200m
       memory: 256Mi
 
+# Permission for the Service to WRITE its own spans to MLflow, in each namespace benchmarks deploy
+# into. Reading MLflow needs no grant; writing is authorized against the MLflow operator's ClusterRole
+# in the WORKLOAD namespace, and without it every export is a 403 — silently, because a trace missing
+# the Service's root span is dropped when the report is built, so the run passes and publishes empty
+# report.ndjson / token_report.ndjson. See templates/mlflow-trace-writer.yaml.
+#
+# Off here and ON in deploy/helm/values-openshift.yaml, rather than derived from `platform`: the
+# ClusterRole below is RHOAI MLflow's, and kind installs use a plain no-auth mlflow-reader that
+# authorizes nothing. Explicit beats inferred — but note that leaving it off on an OpenShift cluster
+# buys empty token reports and no error, so `reference/preflight.py` checks for the binding too.
+mlflowTraceWriter:
+  enabled: false
+  # The identity the SERVICE authenticates to MLflow as — the account whose token is
+  # `mlflow.bearer_token` in the instance-config Secret. Created out-of-band with that token by
+  # reference/ocp-service-bootstrap.sh; referenced here, never created.
+  serviceAccount: mlflow-reader
+  # MLflow operator's ClusterRole. Platform-owned: referenced, never created.
+  clusterRole: mlflow-operator-mlflow-integration
+  # Every namespace the benchmark deploys agents into. Add team2 if runs target it — a namespace
+  # missing here produces exactly the empty-report symptom described above, for that namespace only.
+  namespaces:
+    - team1
+
 # Extra container env, appended after SERVICE_INSTANCES_DIR and SERVICE_PORT.
 extraEnv: []
 

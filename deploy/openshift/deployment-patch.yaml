@@ -8,6 +8,20 @@
 # granted the nonroot-v2 SCC). So here we drop the pinned UID/GID and let the SCC
 # assign them; the image is arbitrary-UID-safe, so it runs regardless. runAsNonRoot
 # and the hardening flags are kept.
+#
+# The CA bundle below is the other OpenShift-only need. The Service emits its own
+# spans to MLflow's OTLP endpoint, and an in-cluster MLflow presents a cert signed
+# by the OpenShift service CA, which is not in the default trust store. Without a
+# trust anchor every export fails TLS verification, the root `Agent.Session` span
+# never reaches MLflow, and the Service drops the whole trace when building the
+# report — so the run still SUCCEEDS and publishes an EMPTY token report.
+#
+# It must be the OTLP-specific variable. `REQUESTS_CA_BUNDLE` looks like the
+# obvious choice and is a trap: botocore reads it too (botocore/endpoint.py, next
+# to a comment about honouring it), so it redirects the S3 client's trust store at
+# the same time and every artifact upload then fails to validate AWS's public cert.
+# OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE is read only by the span exporter.
+# Not set on kind: the file does not exist there and its mlflow-reader is plain HTTP.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,6 +30,11 @@ metadata:
 spec:
   template:
     spec:
+      containers:
+        - name: autobench-service
+          env:
+            - name: OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE
+              value: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
       securityContext:
         runAsNonRoot: true
         runAsUser: null

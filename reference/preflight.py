@@ -610,6 +610,68 @@ def check_mlflow(rep: Report, cluster: Cluster, platform: str, namespace: str, c
         )
 
 
+# The identity the SERVICE authenticates to MLflow as, and the ClusterRole RHOAI MLflow authorizes
+# writes against. Both are chart values (mlflowTraceWriter.*); repeated here rather than parsed out of
+# a values file because preflight reads the LIVE cluster — a rossoctl `helm upgrade` can revert a
+# patched grant without touching any file in this repo.
+TRACE_WRITER_SA = "mlflow-reader"
+TRACE_WRITER_CLUSTERROLE = "mlflow-operator-mlflow-integration"
+
+
+def check_mlflow_write_grant(
+    rep: Report, cluster: Cluster | None, platform: str, namespace: str, teams: list[str]
+) -> None:
+    """The write half of MLflow: can the Service's identity POST its own spans?
+
+    Reading MLflow needs no grant, so check_mlflow above can pass while this fails. Writing is
+    authorized against a ClusterRole bound in the WORKLOAD namespace, and without the binding every
+    span export is 403 PERMISSION_DENIED — silently. A trace missing the Service's root
+    `Agent.Session` span is dropped when the report is assembled, so the run SUCCEEDS, reports
+    pass_rate 1.0, and publishes a zero-byte report.ndjson and token_report.ndjson. Nothing errors;
+    the measurement is simply absent.
+
+    Matched on the GRANT, never on an object name: the first cluster to run the matrix got its binding
+    by hand as `mlflow-trace-writers`, the chart renders `autobench-service-mlflow-trace-writer`, and
+    both satisfy the requirement. Checking for a name would fail the working cluster.
+    """
+    rep.section("MLflow (the write half — without this a passing run publishes an EMPTY report)")
+    if platform == "kind":
+        rep.skip(
+            "MLflow write grant",
+            "kind runs a no-auth mlflow-reader, which authorizes nothing and needs no binding",
+        )
+        return
+    if cluster is None:
+        rep.skip("MLflow write grant", "the team namespaces live on the workload cluster — pass --workload-context")
+        return
+
+    for ns in teams:
+        bindings = (cluster.get_json("-n", ns, "get", "rolebindings") or {}).get("items", [])
+        holders = [
+            rb["metadata"]["name"]
+            for rb in bindings
+            if (rb.get("roleRef") or {}).get("kind") == "ClusterRole"
+            and (rb.get("roleRef") or {}).get("name") == TRACE_WRITER_CLUSTERROLE
+            and any(
+                s.get("kind") == "ServiceAccount" and s.get("name") == TRACE_WRITER_SA
+                for s in rb.get("subjects") or []
+            )
+        ]
+        if holders:
+            rep.ok(
+                f"{ns}: {TRACE_WRITER_SA} may write traces",
+                f"via RoleBinding/{holders[0]}" + (f" (+{len(holders) - 1} more)" if len(holders) > 1 else ""),
+            )
+        else:
+            rep.fail(
+                f"{ns}: {TRACE_WRITER_SA} may write traces",
+                f"no RoleBinding in {ns} grants ClusterRole/{TRACE_WRITER_CLUSTERROLE} to "
+                f"ServiceAccount {namespace}/{TRACE_WRITER_SA} — every span export 403s and the run "
+                "still passes with an empty token report. Install with "
+                "mlflowTraceWriter.enabled=true (deploy/helm/values-openshift.yaml sets it)",
+            )
+
+
 def _probe_mlflow_traces(rep: Report, cluster: Cluster, namespace: str, experiment_id: str) -> None:
     """Query the traces API from inside the MLflow pod.
 
@@ -1388,6 +1450,7 @@ def main() -> int:
         check_ibac_judge(rep, cluster, args.namespace, required=args.plugin_legs)
         collector = check_collector(rep, cluster, args.namespace)
         check_mlflow(rep, cluster, platform, args.namespace, collector)
+        check_mlflow_write_grant(rep, workload, platform, args.namespace, teams)
         check_ingress(rep, cluster, platform, args.namespace, args.gateway)
         check_instance_config(rep, cluster, args.namespace, platform, collector, instances,
                               llm_profile=llm_profile)

@@ -101,3 +101,27 @@ def test_inject_trace_context_noop_without_active_span():
     headers: dict = {}
     inject_trace_context(headers)
     assert "traceparent" not in headers
+
+
+def test_insecure_tls_session_forces_verify_off(monkeypatch):
+    """`insecure_tls` must survive the exporter passing its own `verify` on every post.
+
+    The exporter calls `session.post(..., verify=self._certificate_file)`, and requests gives a
+    per-request `verify` precedence over `session.verify` — so the obvious `session.verify = False`
+    was a silent no-op. The regression it caused was invisible: exports failed TLS, the root
+    `Agent.Session` span never reached MLflow, and the run still passed with an empty token report.
+    """
+    import requests
+
+    from autobench.runner.tracing import _no_verify_session
+
+    captured = {}
+
+    def fake_request(self, method, url, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+
+    session = _no_verify_session()
+    session.post("https://mlflow.example.com/v1/traces", data=b"", verify=True)
+    assert captured["verify"] is False
