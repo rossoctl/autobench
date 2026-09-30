@@ -208,8 +208,17 @@ def test_export_error_is_logged_not_raised_and_still_reaches_the_response(
 ):
     """The exporter swallows failures. This is the mechanism that surfaces them anyway.
 
-    Simulates the real 2026-09-30 failure: the collector/exporter logs
-    CERTIFICATE_VERIFY_FAILED on the `opentelemetry` logger and the flush returns normally.
+    Reproduces the real 2026-09-30 ykt5/ykt3 failure at the level the exporter actually reports it.
+    A missing TLS anchor is a *retryable* error, so otel-sdk 1.44 splits it in two — the cause lands
+    on WARNING, once per attempt, and the terminal ERROR is generic:
+
+        WARNING  Transient error <cause> encountered while exporting span batch, retrying in 0.96s.
+        ERROR    Failed to export span batch due to timeout, max retries or shutdown.
+
+    Both strings below are verbatim from a live run against a self-signed endpoint. An earlier
+    version of this test invented a single ERROR record that carried the cause itself, which is the
+    shape a *non-retryable* 403 produces — so the test passed while the endpoint, listening on ERROR
+    only, reported "timeout, max retries or shutdown" and never once said CERTIFICATE_VERIFY_FAILED.
     """
     _mock_jwks(jwks_doc)
     instance_dict["mlflow"] = {"tracking_url": MLFLOW_BASE, "bearer_token": "sa-token"}
@@ -218,10 +227,16 @@ def test_export_error_is_logged_not_raised_and_still_reaches_the_response(
     )
 
     def _fail_on_flush():
-        logging.getLogger("opentelemetry.exporter.otlp").error(
-            "Failed to export span batch code: 0, reason: "
-            "[SSL: CERTIFICATE_VERIFY_FAILED] self-signed certificate in certificate chain"
-        )
+        log = logging.getLogger("opentelemetry.exporter.otlp")
+        for delay in ("0.96s", "2.11s", "4.46s"):
+            log.warning(
+                "Transient error HTTPSConnectionPool(host='mlflow.example.com', port=443): "
+                "Max retries exceeded with url: /v1/traces (Caused by SSLError("
+                "SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify "
+                "failed: self-signed certificate (_ssl.c:1010)'))) encountered while exporting span "
+                f"batch, retrying in {delay}."
+            )
+        log.error("Failed to export span batch due to timeout, max retries or shutdown.")
 
     _install_fake_tracer(monkeypatch, on_flush=_fail_on_flush)
     with _client(tmp_path, instance_dict, monkeypatch) as c:
@@ -231,9 +246,71 @@ def test_export_error_is_logged_not_raised_and_still_reaches_the_response(
     assert body["read"]["ok"] is True  # the read path answers — this is the trap
     assert body["write"]["ok"] is False
     assert "CERTIFICATE_VERIFY_FAILED" in body["write"]["error"]
+    # The terminal verdict is kept too — "it gave up" and "why" are different facts, and an
+    # operator needs the first to know the retries are already exhausted.
+    assert "timeout, max retries or shutdown" in body["write"]["error"]
     # Reading back a trace known not to have been posted would only add a misleading failure.
     assert body["round_trip"]["ok"] is False
     assert body["round_trip"]["error"] == "not attempted: the probe spans were not exported"
+
+
+@respx.mock
+def test_non_retryable_export_error_names_its_status(
+    tmp_path, instance_dict, monkeypatch, make_token, jwks_doc
+):
+    """The other real shape: a 403 is not retried, so one ERROR carries the cause and there are
+    no warnings to splice. This is the RBAC half of the 2026-09-30 pair (verified live against an
+    MLflow that 403s only `POST /v1/traces` while every read answers 200)."""
+    _mock_jwks(jwks_doc)
+    instance_dict["mlflow"] = {"tracking_url": MLFLOW_BASE, "bearer_token": "sa-token"}
+    respx.get(url__startswith=f"{MLFLOW_BASE}{LIST_PATH}").mock(
+        return_value=httpx.Response(200, json={"traces": []})
+    )
+
+    def _fail_on_flush():
+        logging.getLogger("opentelemetry.exporter.otlp").error(
+            "Failed to export span batch code: 403, reason: Forbidden"
+        )
+
+    _install_fake_tracer(monkeypatch, on_flush=_fail_on_flush)
+    with _client(tmp_path, instance_dict, monkeypatch) as c:
+        body = c.get("/mlflow/health", headers=_auth(make_token)).json()
+
+    assert body["write"]["ok"] is False
+    assert body["write"]["error"] == "Failed to export span batch code: 403, reason: Forbidden"
+    assert "cause:" not in body["write"]["error"]  # nothing to splice, so nothing appended
+
+
+@respx.mock
+def test_retried_but_successful_export_is_not_a_failure(
+    tmp_path, instance_dict, monkeypatch, make_token, jwks_doc
+):
+    """A warning with no terminal error means an attempt failed and the retry WORKED.
+
+    Guards the regression that watching WARNING could have introduced: failing here would reject a
+    healthy cluster and block an install, which is worse than the bug this endpoint exists to catch.
+    The retry cause is still reported — as `detail`, not `error`.
+    """
+    _mock_jwks(jwks_doc)
+    instance_dict["mlflow"] = {"tracking_url": MLFLOW_BASE, "bearer_token": "sa-token"}
+    respx.get(url__startswith=f"{MLFLOW_BASE}{LIST_PATH}").mock(
+        return_value=httpx.Response(200, json={"traces": []})
+    )
+
+    def _warn_once_on_flush():
+        logging.getLogger("opentelemetry.exporter.otlp").warning(
+            "Transient error 503 Service Unavailable encountered while exporting span batch, "
+            "retrying in 0.96s."
+        )
+
+    _install_fake_tracer(monkeypatch, on_flush=_warn_once_on_flush)
+    with _client(tmp_path, instance_dict, monkeypatch) as c:
+        body = c.get("/mlflow/health", headers=_auth(make_token)).json()
+
+    assert body["write"]["ok"] is True
+    assert body["write"]["error"] is None
+    assert "after a retried failure" in body["write"]["detail"]
+    assert "503" in body["write"]["detail"]
 
 
 @respx.mock

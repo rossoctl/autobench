@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-30T14:39:30Z
+**Last modified:** 2026-09-30T15:23:42Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -801,10 +801,18 @@ beside a zero-byte `report.ndjson`, with no error anywhere. The read path answer
 that, since reads go through `httpx` honouring `insecure_tls` while the span exporter is a separate
 library needing a real trust anchor and an RBAC grant. `write` therefore emits one synthetic trace
 through the real exporter and captures the `opentelemetry` logger for its duration, because
-`BatchSpanProcessor` exports on a worker thread and **logs** failures rather than raising —
-`CERTIFICATE_VERIFY_FAILED` or `403 PERMISSION_DENIED` comes back in `write.error` instead of sitting
-in a pod log. `round_trip` then reads that trace back, which is the only way to catch an MLflow that
-accepts the POST and drops it.
+`BatchSpanProcessor` exports on a worker thread and **logs** failures rather than raising — so the
+cause comes back in `write.error` instead of sitting in a pod log. The capture watches `WARNING` as
+well as `ERROR`, which is load-bearing rather than defensive: the exporter splits a *retryable*
+failure across both levels, putting the cause in a per-attempt `Transient error … retrying in 0.96s.`
+warning and leaving the terminal `ERROR` generic (`Failed to export span batch due to timeout, max
+retries or shutdown.`), while a *non-retryable* one logs a single self-describing `ERROR`
+(`Failed to export span batch code: 403, reason: Forbidden`). An ERROR-only handler therefore names
+the cause for the 403 and never names it for the missing TLS anchor — the ykt5 failure exactly. Both
+levels are read and spliced, and because a warning alone means an attempt failed and the *retry
+succeeded*, only an `ERROR` marks the stage failed; a recovered retry is reported in `detail`.
+`round_trip` then reads that trace back, which is the only way to catch an MLflow that accepts the
+POST and drops it.
 
 The response is a **whitelist** of fields, the same discipline `span_report.*` follows: the probe
 holds a bearer and possibly a password, and `credential_mode` names the shape without disclosing the

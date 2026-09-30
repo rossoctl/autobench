@@ -63,29 +63,78 @@ def credential_mode(cfg: MLflowConfig) -> str:
 
 
 class _ExportErrorCapture(logging.Handler):
-    """Capture the OTLP exporter's own error records for the probe's duration.
+    """Capture the OTLP exporter's own failure records for the probe's duration.
 
     Necessary because the exporter never raises: `BatchSpanProcessor` runs it on a worker thread
     and an export failure is *logged* and swallowed, which is precisely why a broken write path is
-    invisible during a run. Without this, the cause (`CERTIFICATE_VERIFY_FAILED`,
-    `PERMISSION_DENIED`, a connect timeout) stays in the pod log and the response could only say
+    invisible during a run. Without this, the cause (`CERTIFICATE_VERIFY_FAILED`, a `403` from a
+    missing RBAC grant, a connect timeout) stays in the pod log and the response could only say
     "the span did not come back".
+
+    **Captures WARNING, not just ERROR, and that is the whole point.** The exporter splits a failure
+    across two levels depending on whether it is retryable, and only one of the two names a cause
+    (measured against otel-sdk 1.44):
+
+    - retryable (TLS, connect, 429, 5xx) — WARNING `Transient error <cause> … retrying in 0.96s.`
+      per attempt, then a single causeless ERROR `Failed to export span batch due to timeout, max
+      retries or shutdown.`
+    - non-retryable (403, 400) — one ERROR `Failed to export span batch code: 403, reason: Forbidden`
+
+    So an ERROR-only handler reports the real ykt3 regression (a missing TLS anchor, which *is*
+    retryable) as "timeout, max retries or shutdown" and never says `CERTIFICATE_VERIFY_FAILED` —
+    true, useless, and indistinguishable from a dozen other causes. The 403 half of the same class of
+    bug looked fine only because a 403 is not retried. Hence: capture both levels, and report the
+    FIRST record, which is the one carrying the cause in either shape.
+
+    `record.getMessage()` deliberately, not `format()`: the cause is interpolated into the message in
+    both shapes above, and neither record carries `exc_info` (verified), so a traceback would add
+    nothing but bulk to a JSON field.
 
     Attached to the `opentelemetry` logger only, and detached again in a `finally` — a handler left
     on a root logger would accumulate every run's export noise.
     """
 
     def __init__(self) -> None:
-        super().__init__(level=logging.ERROR)
-        self.messages: list[str] = []
+        super().__init__(level=logging.WARNING)
+        self.errors: list[str] = []
+        self.warnings: list[str] = []
 
     def emit(self, record: logging.LogRecord) -> None:
         with contextlib.suppress(Exception):  # a diagnostic must never break what it observes
-            self.messages.append(record.getMessage())
+            bucket = self.errors if record.levelno >= logging.ERROR else self.warnings
+            bucket.append(record.getMessage())
 
     @property
-    def last(self) -> str | None:
-        return self.messages[-1] if self.messages else None
+    def failed(self) -> bool:
+        """Only an ERROR means the export failed.
+
+        The levels are not interchangeable: a WARNING is one *attempt* failing, and the exporter
+        retries, so an export that hits a single transient 503 and then succeeds logs a warning and
+        nothing else. Treating that as a failure would make this endpoint reject a healthy cluster —
+        the opposite of the bug it exists to catch, and a worse one, because it would block installs.
+        """
+        return bool(self.errors)
+
+    @property
+    def failure(self) -> str | None:
+        """The terminal verdict, with the cause spliced in from the warnings when it lives there.
+
+        For a non-retryable failure the ERROR already names the cause and the warnings are empty.
+        For a retryable one the ERROR is generic and the first WARNING is the only place the cause
+        appears, so the two have to be read together to get `CERTIFICATE_VERIFY_FAILED` into the
+        response at all.
+        """
+        if not self.errors:
+            return None
+        terminal = self.errors[-1]
+        if not self.warnings:
+            return terminal
+        return f"{terminal} (cause: {self.warnings[0]})"
+
+    @property
+    def transient_note(self) -> str | None:
+        """Cause of a retry on an export that nonetheless succeeded — reported as detail, not error."""
+        return self.warnings[0] if self.warnings and not self.errors else None
 
 
 @contextlib.contextmanager
@@ -264,10 +313,16 @@ async def mlflow_health(
                 exported, emit_error = False, f"{type(exc).__name__}: {exc}"
             # The flush is synchronous, so any export error the exporter logged is already captured
             # by the time it returns.
+            ok = exported and not captured.failed
+            detail = None
+            if ok:
+                detail = "probe spans exported"
+                if captured.transient_note:  # succeeded, but not on the first attempt
+                    detail += f" (after a retried failure: {captured.transient_note})"
             write = MLflowHealthStage(
-                ok=exported and captured.last is None,
-                detail="probe spans exported" if exported and not captured.last else None,
-                error=emit_error or captured.last,
+                ok=ok,
+                detail=detail,
+                error=emit_error or captured.failure,
             )
 
         if not write.ok:

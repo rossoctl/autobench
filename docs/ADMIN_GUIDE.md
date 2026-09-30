@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-09-30T14:39:30Z
+**Last modified:** 2026-09-30T15:23:42Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -656,7 +656,14 @@ go through `httpx` honouring `insecure_tls`, while the span exporter is a differ
 real trust anchor and an RBAC grant. A read-only check would have passed on both clusters. Worse, the
 OTLP exporter never raises: `BatchSpanProcessor` runs it on a worker thread and logs the failure,
 which is why the endpoint captures the `opentelemetry` logger for the probe's duration and returns
-`CERTIFICATE_VERIFY_FAILED` or `403 PERMISSION_DENIED` to you instead of leaving it in a pod log.
+the cause to you instead of leaving it in a pod log. A missing RBAC grant reports
+`Failed to export span batch code: 403, reason: Forbidden`; a missing TLS anchor reports the
+exporter's terminal line with the TLS cause spliced in, naming `CERTIFICATE_VERIFY_FAILED`.
+
+The two read differently because a 403 is not retried and a TLS failure is: the exporter logs a
+retryable cause at `WARNING`, once per attempt, and leaves its terminal `ERROR` generic. The endpoint
+therefore watches both levels — without that, the ykt5 failure would come back saying only
+`Failed to export span batch due to timeout, max retries or shutdown.` and naming no cause at all.
 
 ```sh
 BM_BASE=https://autobench-rossoctl-system.apps.example.com \
