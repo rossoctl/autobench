@@ -2,19 +2,18 @@
 
 This document records design decisions for the off-cluster AutoBench Service and the
 reasoning behind them. It is a companion to `KUBECTL_DEPENDENCY_INVENTORY.md`, which
-inventories the residual `kubectl`/`oc` operations in the current `workload-harness` shell
-scripts and how each is dispositioned.
+inventories the `kubectl`/`oc` operations of the shell-script predecessor the Service replaced
+and how each was dispositioned.
 
-**The Service will live in a separate repository** (a new repo, distinct from this
-`workload-harness` one) for the pure-Python implementation. The docs and reference scripts here
-(this file, the inventory, and helpers like `kind-service-bootstrap.sh` / `keycloak-ensure-user.sh`)
-capture the design and the REST flows to port into that new repo.
+It is a **point-in-time record**, written while the Service was being designed and before it had
+a repository of its own. The design it argues for is the one that shipped — this repo *is* that
+separate repository — so the future tense below reads as history, deliberately left as written.
 
 ## Decision: pure-Python implementation, HTTPS to Rossoctl — no shelling out to scripts
 
 The Service is implemented in **pure Python**. It does **not** fork/exec shell scripts
 (curl+jq scripts, `kubectl`, `oc`) from within the service container image. All
-Kubernetes-dependent shell commands in the current `workload-harness` implementation are
+Kubernetes-dependent shell commands in the predecessor implementation are
 **reimplemented as Python code**, and all interaction with a target Rossoctl instance goes
 over **HTTPS** (using `httpx`). Rossoctl's own API implementation runs *inside* the target
 instance and may itself invoke cluster-level APIs (e.g. to deploy/delete agents and tools);
@@ -749,7 +748,7 @@ it does not run inside the Service, preserving the no-cluster-reads runtime post
 
 ### Scope of the port
 
-- **Replace all Kubernetes-dependent shell commands** in `workload-harness` with Python
+- **Replace all Kubernetes-dependent shell commands** of the predecessor with Python
   code, per the dispositions in `KUBECTL_DEPENDENCY_INVENTORY.md`.
 - **All Rossoctl interaction is HTTPS** via `httpx` against the target instance's API. Where
   the current scripts call `kubectl` directly, the equivalent operation is expected to be
