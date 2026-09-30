@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-09-30T01:28:23Z
+**Last modified:** 2026-09-30T01:38:44Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -410,7 +410,7 @@ The profile is declared **once**, as `llmProfile` in the chart values file, and 
 it from there:
 
 ```yaml
-# deploy/helm/values-kind.yaml            # deploy/helm/values-ykt5.yaml
+# deploy/helm/values-kind.yaml            # deploy/helm/values-openshift.yaml
 platform: kind                            # platform: openshift
 llmProfile: intranet                      # llmProfile: internet
 ```
@@ -615,8 +615,8 @@ deploy/helm/autobench/
   Chart.yaml            version = chart version; appVersion = the default image tag
   values.yaml           the two platform shapes, documented inline
   templates/            deployment, service, route, httproute, _helpers.tpl, NOTES.txt
-deploy/helm/values-ykt5.yaml    an OpenShift cluster's overrides
-deploy/helm/values-kind.yaml    KinD's overrides
+deploy/helm/values-openshift.yaml   the OpenShift shape's overrides
+deploy/helm/values-kind.yaml        KinD's overrides
 ```
 
 `platform` selects the shape and is the only value most installs need to think about. It drives
@@ -643,7 +643,7 @@ selector is immutable. If the check fails, the chart is wrong — not the manife
 python3 reference/preflight.py --platform openshift --context <ctx> \
         --password-file ~/.rossoctl-ykt5/benchmarker.pass                  # 0 failures first
 helm upgrade --install autobench deploy/helm/autobench \
-  -n rossoctl-system --kube-context <ctx> -f deploy/helm/values-ykt5.yaml
+  -n rossoctl-system --kube-context <ctx> -f deploy/helm/values-openshift.yaml
 oc -n rossoctl-system rollout status deploy/autobench-service
 HOST=$(oc -n rossoctl-system get route autobench -o jsonpath='{.spec.host}')
 curl -fsS "https://$HOST/healthz"                                          # {"status":"ok"}

@@ -1,0 +1,26 @@
+# An OpenShift cluster with the Service and workloads on the SAME cluster (unlike the split shape,
+# where one cluster hosts only the Service and drives workloads on another). Install with:
+#
+#   helm upgrade --install autobench deploy/helm/autobench \
+#     -n rossoctl-system --kube-context <ctx> -f deploy/helm/values-openshift.yaml
+#
+# The instance-config Secret must exist first — see the chart's values.yaml. This file carries no
+# cluster's name: it is the shape, and the only value below that a different cluster is likely to
+# change is `llmProfile`. Validated on the OpenShift clusters this project runs on (`ykt5`, and the
+# `ykt3`/`ykt2` split pair) — those are worked examples, not requirements.
+platform: openshift
+
+# The clusters this file was validated on sit on the Internet, so they must be given credentials for
+# an LLM or LiteLLM service on the Internet — an intranet service is not routable from them. That is
+# a property of the cluster's placement, not of OpenShift: an OpenShift cluster on an intranet would
+# declare `intranet` here, exactly as a kind cluster on an intranet may. Check yours before
+# installing; a wrong profile is a pre-install FAILURE, which is the cheap way to find out.
+llmProfile: internet
+
+route:
+  enabled: true
+  # Empty: the router generates autobench-<namespace>.apps.<cluster>, matching the Route the raw
+  # manifests produce.
+  host: ""
+  tls:
+    termination: edge

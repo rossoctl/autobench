@@ -79,7 +79,7 @@ def main() -> int:
     check("kind Service     == deploy/service.yaml", load("deploy/service.yaml"), kind["Service"], failures)
     check("kind HTTPRoute   == deploy/kind/httproute.yaml", load("deploy/kind/httproute.yaml"), kind["HTTPRoute"], failures)
 
-    ocp = render("-f", str(REPO / "deploy/helm/values-ykt5.yaml"))
+    ocp = render("-f", str(REPO / "deploy/helm/values-openshift.yaml"))
     patched = copy.deepcopy(load("deploy/deployment.yaml"))
     sc = patched["spec"]["template"]["spec"]["securityContext"]
     for key in ("runAsUser", "runAsGroup", "fsGroup"):  # the patch nulls these
