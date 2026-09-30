@@ -37,14 +37,35 @@ class RuntimeConfigStore:
         self._overrides: dict[str, dict] = {}
 
     def apply(self, iss: str, update: ConfigUpdateRequest) -> None:
-        """Field-level merge of the provided mlflow/s3 sub-objects into the iss override."""
+        """Field-level merge of the provided mlflow/s3 sub-objects into the iss override.
+
+        `exclude_unset`, NOT `exclude_none` — the distinction is the whole correctness of this
+        method. `exclude_none` drops only fields that are None, so every field whose *default* is
+        something else got written on every call, whether or not the caller mentioned it. Three
+        fields have non-None defaults, and each one fails silently:
+
+        - `MLflowConfig.experiment_id` (`"0"`) — so `PUT {"mlflow": {"tracking_url": ...}}` also
+          repointed the Service at experiment 0. It then emits spans under one experiment id and
+          reads the report back from another, and a run publishes an EMPTY report while reporting
+          `pass_rate 1.0`. Observed live on ykt5 2026-09-30: a PUT of `insecure_tls` alone moved
+          `experiment_id` from 1 to 0 and the next span export returned 404.
+        - `MLflowConfig.insecure_tls` (`False`) — re-enables verification against a port-forwarded
+          reencrypt endpoint that cannot satisfy it.
+        - `S3Config.public_read` (`True`) — silently re-enables public-read ACLs on a bucket an
+          operator had deliberately made private. The worst of the three, since nothing downstream
+          reports it and the effect is on published objects.
+
+        With `exclude_unset` an explicit `null` is now meaningful: `{"mlflow": {"workspace": null}}`
+        clears the workspace, where before it was indistinguishable from not mentioning it. That is
+        the useful reading of an explicit null, and there is no other way to unset a field.
+        """
         current = self._overrides.setdefault(iss, {})
         for section in ("mlflow", "s3"):
             incoming = getattr(update, section)
             if incoming is None:
                 continue
             merged = current.get(section, {})
-            merged.update(incoming.model_dump(exclude_none=True))
+            merged.update(incoming.model_dump(exclude_unset=True))
             current[section] = merged
 
     def effective(self, iss: str, base: InstanceConfig) -> InstanceConfig:

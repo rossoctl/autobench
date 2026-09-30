@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-30T15:23:42Z
+**Last modified:** 2026-09-30T16:02:26Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -765,6 +765,32 @@ Rejected example (workload cred → `422`):
 curl -s -o /dev/null -w '%{http_code}\n' -X PUT "$SVC/config" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"hf-secret": "..."}'          # -> 422
+```
+
+A `PUT` is a **field-level merge**: fields you do not mention keep the value they had, from the
+instance file or from an earlier `PUT`. Whole sections behave the same way — a body carrying only
+`mlflow` leaves `s3` untouched.
+
+> **In `v1.30` and earlier this was not true, and the failure was silent.** The merge dropped only
+> `null` fields, so the three fields with a non-`null` *default* were rewritten on every call whether
+> you mentioned them or not: `mlflow.experiment_id` back to `"0"`, `mlflow.insecure_tls` back to
+> `false`, and `s3.public_read` back to `true`. The first is the dangerous one — the Service then
+> emits spans under one experiment and reads the report back from another, which publishes a
+> **zero-byte report on a run that reports `pass_rate 1.0`** (§5.1 is how you would now catch it).
+> The third silently re-enabled public-read ACLs on a bucket someone had deliberately made private.
+>
+> `v1.30` is the tag `deploy/` currently pins, so **on a cluster this fix is not live yet** — it
+> lands in the next published image. Until then, send every field you care about on every `PUT`, and
+> read the result back: the response body is the effective config, so a reset is visible immediately
+> if you look for it.
+
+Because unmentioned and `null` now mean different things, an explicit `null` **clears** a field —
+the only way to unset one at runtime:
+
+```bash
+curl -s -X PUT "$SVC/config" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"mlflow": {"workspace": null}}'     # stop sending x-mlflow-workspace
 ```
 
 ### 5.1 `GET /mlflow/health` — is the MLflow you just configured actually usable?
