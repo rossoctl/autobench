@@ -155,11 +155,12 @@ ibacJudge:
       cpu: 200m
       memory: 256Mi
 
-# Permission for the Service to WRITE its own spans to MLflow, in each namespace benchmarks deploy
-# into. Reading MLflow needs no grant; writing is authorized against the MLflow operator's ClusterRole
-# in the WORKLOAD namespace, and without it every export is a 403 — silently, because a trace missing
-# the Service's root span is dropped when the report is built, so the run passes and publishes empty
-# report.ndjson / token_report.ndjson. See templates/mlflow-trace-writer.yaml.
+# Permission for the Service to WRITE its own spans to MLflow. Reading MLflow needs no grant; writing
+# is authorized against the MLflow operator's ClusterRole in the namespace named by the MLflow
+# WORKSPACE the Service sends (`mlflow.workspace` in the instance config), and without it every export
+# is a 403 — silently, because a trace missing the Service's root span is dropped when the report is
+# built, so the run passes and publishes empty report.ndjson / token_report.ndjson.
+# See templates/mlflow-trace-writer.yaml.
 #
 # Off here and ON in deploy/helm/values-openshift.yaml, rather than derived from `platform`: the
 # ClusterRole below is RHOAI MLflow's, and kind installs use a plain no-auth mlflow-reader that
@@ -173,8 +174,11 @@ mlflowTraceWriter:
   serviceAccount: mlflow-reader
   # MLflow operator's ClusterRole. Platform-owned: referenced, never created.
   clusterRole: mlflow-operator-mlflow-integration
-  # Every namespace the benchmark deploys agents into. Add team2 if runs target it — a namespace
-  # missing here produces exactly the empty-report symptom described above, for that namespace only.
+  # The MLflow WORKSPACE namespaces to bind, on THIS cluster — not the namespaces agents run in.
+  # On a single-cluster install the two are the same string, so the distinction only shows up in the
+  # split shape: the agents live on the other cluster, while the MLflow the Service exports to is
+  # in-cluster here, and this is where it reads the binding from. A workspace missing here produces
+  # exactly the empty-report symptom described above, for that workspace only.
   namespaces:
     - team1
 

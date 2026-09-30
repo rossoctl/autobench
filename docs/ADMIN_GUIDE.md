@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-09-30T04:11:01Z
+**Last modified:** 2026-09-30T04:15:29Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -74,7 +74,7 @@ cluster operation server-side. Nothing here shells out to `kubectl` or `oc`.
 | Route | `autobench` | chart (`platform: openshift`) | edge TLS; host generated as `autobench-<namespace>.apps.<cluster>` |
 | HTTPRoute | `autobench` | chart (`platform: kind`) | attaches to the shared istio gateway |
 | Secret | `autobench-instances` | **you, out-of-band** (§4) | ROPC credentials — never passes through Helm values |
-| RoleBinding | `autobench-service-mlflow-trace-writer` | chart (`mlflowTraceWriter.enabled`) | one per workload namespace; lets the Service **write** its own spans. On by default in `values-openshift.yaml` — see the warning below |
+| RoleBinding | `autobench-service-mlflow-trace-writer` | chart (`mlflowTraceWriter.enabled`) | one per MLflow workspace namespace; lets the Service **write** its own spans. On by default in `values-openshift.yaml` — see the warning below |
 | Deployment + Service | `ibac-judge` | chart (`ibacJudge.enabled`, off by default) | needed only by the plugin legs #5–#8 (§5.4) |
 
 The judge is in that table, rather than in the platform list below, on purpose: **Rossoctl ships
@@ -349,15 +349,17 @@ run succeeds, reports `pass_rate 1.0`, and publishes a **zero-byte** `report.ndj
 | half | what it needs | rendered by |
 |---|---|---|
 | **TLS** — an in-cluster MLflow serves a cert signed by the OpenShift service CA, absent from the default trust store | `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt` | `extraEnv` in `values-openshift.yaml`; `deploy/openshift/deployment-patch.yaml` for the raw path |
-| **RBAC** — writes are authorized against the MLflow operator's ClusterRole *in the workload namespace* | a RoleBinding per namespace, granting `mlflow-reader` `mlflow-operator-mlflow-integration` | `mlflowTraceWriter.enabled: true` |
+| **RBAC** — writes are authorized against the MLflow operator's ClusterRole *in the MLflow workspace namespace* | a RoleBinding per workspace, granting `mlflow-reader` `mlflow-operator-mlflow-integration` | `mlflowTraceWriter.enabled: true` |
 
 It must be the OTLP-specific variable. `REQUESTS_CA_BUNDLE` looks like the obvious choice and is a
 trap: botocore reads it too, so it redirects the S3 client's trust store at the same time and every
 artifact upload then fails to validate AWS's public cert — turning an empty report into no artifacts
 at all. `preflight.py` checks both halves, and matches the RoleBinding on the **grant** rather than
 its name, because a cluster set up before the chart existed has an equivalent binding under a
-different one. Add a namespace to `mlflowTraceWriter.namespaces` for every namespace you deploy into:
-a missing one reproduces the empty report for that namespace only.
+different one. `mlflowTraceWriter.namespaces` lists MLflow **workspaces** on the Service's own
+cluster, not the namespaces agents run in — the same string on a single-cluster install, but in the
+split shape the agents are elsewhere while the MLflow being written to is here. A workspace missing
+from the list reproduces the empty report for that workspace only.
 
 **`workload_agent_runner` deserves its own warning.** The correct value tracks an agent image
 pinned to `:latest`, and it has flipped between `direct` and `service` across rebuilds of that tag.

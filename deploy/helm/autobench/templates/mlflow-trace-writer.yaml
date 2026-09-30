@@ -5,8 +5,10 @@ Let the Service WRITE its own spans to MLflow.
 Reads and writes need different permissions, and only the read half is obvious. The Service reads
 MLflow over REST to build report.ndjson, and it also EMITS four spans of its own — `Agent.Session`
 and its three children — straight to MLflow's OTLP endpoint. The read works with no grant at all.
-The write is checked against `mlflow-operator-mlflow-integration` in the WORKLOAD namespace, and
-without this binding it fails with 403 PERMISSION_DENIED.
+The write is checked against `mlflow-operator-mlflow-integration` in the namespace named by the MLflow
+WORKSPACE the Service sends (`mlflow.workspace` in the instance config) — not the namespace the agents
+run in, though on a single-cluster install those are the same string. Without this binding the write
+fails with 403 PERMISSION_DENIED.
 
 Why that is worth a template rather than a line in a runbook: the failure is silent and it does not
 look like a permissions problem. A trace with no `Agent.Session` span is discarded when the report is

@@ -618,17 +618,39 @@ TRACE_WRITER_SA = "mlflow-reader"
 TRACE_WRITER_CLUSTERROLE = "mlflow-operator-mlflow-integration"
 
 
+def mlflow_workspaces(instances: dict[str, dict] | None, teams: list[str]) -> list[str]:
+    """The namespaces MLflow authorizes the Service's writes against.
+
+    Not the workload namespaces, though on a single-cluster install they are the same string and the
+    difference is invisible. MLflow SAR-checks the `x-mlflow-workspace` the Service sends, which is
+    `mlflow.workspace` in the instance config — so that is what must be bound, and `teams` is only a
+    fallback for when the instance config cannot be read.
+    """
+    found = [
+        (cfg.get("mlflow") or {}).get("workspace")
+        for cfg in (instances or {}).values()
+        if (cfg.get("mlflow") or {}).get("workspace")
+    ]
+    return sorted(set(found)) or teams
+
+
 def check_mlflow_write_grant(
-    rep: Report, cluster: Cluster | None, platform: str, namespace: str, teams: list[str]
+    rep: Report, cluster: Cluster, platform: str, namespace: str, workspaces: list[str]
 ) -> None:
     """The write half of MLflow: can the Service's identity POST its own spans?
 
     Reading MLflow needs no grant, so check_mlflow above can pass while this fails. Writing is
-    authorized against a ClusterRole bound in the WORKLOAD namespace, and without the binding every
+    authorized against a ClusterRole bound in the workspace namespace, and without the binding every
     span export is 403 PERMISSION_DENIED — silently. A trace missing the Service's root
     `Agent.Session` span is dropped when the report is assembled, so the run SUCCEEDS, reports
     pass_rate 1.0, and publishes a zero-byte report.ndjson and token_report.ndjson. Nothing errors;
     the measurement is simply absent.
+
+    Checked on the SERVICE's cluster, even in the split shape where the agents run on another one.
+    The Service exports to the MLflow its instance config names, and that is a `.svc.cluster.local`
+    address resolved from the Service pod — so the MLflow, and therefore the binding it reads, is
+    always on this side. Looking for it on the workload cluster reports a failure on a pair that
+    works.
 
     Matched on the GRANT, never on an object name: the first cluster to run the matrix got its binding
     by hand as `mlflow-trace-writers`, the chart renders `autobench-service-mlflow-trace-writer`, and
@@ -641,11 +663,8 @@ def check_mlflow_write_grant(
             "kind runs a no-auth mlflow-reader, which authorizes nothing and needs no binding",
         )
         return
-    if cluster is None:
-        rep.skip("MLflow write grant", "the team namespaces live on the workload cluster — pass --workload-context")
-        return
 
-    for ns in teams:
+    for ns in workspaces:
         bindings = (cluster.get_json("-n", ns, "get", "rolebindings") or {}).get("items", [])
         holders = [
             rb["metadata"]["name"]
@@ -668,7 +687,8 @@ def check_mlflow_write_grant(
                 f"no RoleBinding in {ns} grants ClusterRole/{TRACE_WRITER_CLUSTERROLE} to "
                 f"ServiceAccount {namespace}/{TRACE_WRITER_SA} — every span export 403s and the run "
                 "still passes with an empty token report. Install with "
-                "mlflowTraceWriter.enabled=true (deploy/helm/values-openshift.yaml sets it)",
+                "mlflowTraceWriter.enabled=true, whose namespaces must list this MLflow workspace "
+                "(deploy/helm/values-openshift.yaml sets it)",
             )
 
 
@@ -1450,7 +1470,8 @@ def main() -> int:
         check_ibac_judge(rep, cluster, args.namespace, required=args.plugin_legs)
         collector = check_collector(rep, cluster, args.namespace)
         check_mlflow(rep, cluster, platform, args.namespace, collector)
-        check_mlflow_write_grant(rep, workload, platform, args.namespace, teams)
+        check_mlflow_write_grant(rep, cluster, platform, args.namespace,
+                                 mlflow_workspaces(instances, teams))
         check_ingress(rep, cluster, platform, args.namespace, args.gateway)
         check_instance_config(rep, cluster, args.namespace, platform, collector, instances,
                               llm_profile=llm_profile)

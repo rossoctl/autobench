@@ -33,7 +33,7 @@ extraEnv:
 
 # The second half of the same requirement: reaching MLflow is TLS, being allowed to write to it is
 # RBAC, and each fails in the same silent way — an empty token report on a passing run. RHOAI MLflow
-# authorizes writes against its operator's ClusterRole in the workload namespace. See the chart's
+# authorizes writes against its operator's ClusterRole in the workspace namespace. See the chart's
 # values.yaml for why this is a value rather than something derived from `platform`.
 mlflowTraceWriter:
   enabled: true
