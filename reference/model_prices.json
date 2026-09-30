@@ -2,6 +2,7 @@
   "_what": "Rate card for the models the benchmark legs actually use. Read off the LiteLLM admin UI's per-model detail pages on 2026-09-17. Consumed by reference/gen-cost-analysis.py; no generator may hardcode a price.",
   "_unit": "USD per 1,000,000 tokens",
   "_rate_card_date": "2026-09-17",
+  "_amended": "2026-09-29: the four models above had all been WITHDRAWN from the gateway's catalogue -- `GET /v1/models` no longer lists any of them -- so they price past runs only and nothing new can be measured with them. The four `_added_2026_09_29` rows below replace them role for role and were read from the gateway's own unauthenticated `GET /public/litellm_model_cost_map`, not from the admin UI. Same basis either way: both report the upstream list rate (gpt-5-mini reads 0.25/2.00 in both), so rows from the two sources are comparable. A run priced with the new rows is NOT comparable with the v1.28 matrix -- every model differs.",
   "_keys": "Keyed by the EXACT `model` string in report.ndjson, which carries litellm's `openai/` routing prefix. That prefix is not part of the model's name -- the gateway strips it before resolving the alias in `public_name`.",
   "_caveats": [
     "Input and output only. The UI's model pages expose no cached-input tier, so a cache-read discount -- if the gateway applies one -- is not modelled and every figure computed from this file is an upper bound on input cost.",
@@ -38,6 +39,39 @@
       "input_per_1m": 1.25,
       "output_per_1m": 10.0,
       "_assumed": "Priced from the rate card's `gcp/gemini-2.5-pro` entry (vertex_ai/gemini-2.5-pro, $1.25/$10.00). Our legs send the BARE alias `gemini-2.5-pro`, which is a separate registration on the gateway and the only Gemini 2.5 Pro our key can see; `/model/info` is admin-only (403), so its backend was not read directly. If the bare alias is ever repointed, this row is the one that goes stale."
+    },
+    "openai/azure/gpt-5.6-luna": {
+      "public_name": "azure/gpt-5.6-luna",
+      "provider": "azure",
+      "input_per_1m": 0.2,
+      "output_per_1m": 1.2,
+      "_added_2026_09_29": "Replaces Azure/gpt-5-mini as the INSTANCE DEFAULT, so it prices gsm8k legs #1-#3 and #5-#8. Cheaper than the model it replaces on both directions (0.25/2.00), so a gsm8k leg's cost is not directly comparable with the v1.28 figure even at identical token counts.",
+      "_also": "Also the IBAC judge model from 2026-09-29 (rossoctl-platform-config ibac.judgeModel), taking over from Azure/gpt-4.1. Judge calls are NOT in report.ndjson -- see gen-cost-analysis.py's judge section. The judge is now an order of magnitude cheaper per call than it was, which moves the plugin-overhead cost figures on its own, independently of any change in call COUNT.",
+      "_backend_not_read": "`/model/info` is admin-only (403) for an ['llm_api_routes'] key, so which Azure deployment sits behind this alias was not read. `litellm_model` is therefore omitted rather than guessed."
+    },
+    "openai/azure/gpt-5.6-terra": {
+      "public_name": "azure/gpt-5.6-terra",
+      "provider": "azure",
+      "input_per_1m": 2.0,
+      "output_per_1m": 12.0,
+      "_added_2026_09_29": "Replaces Azure/gpt-4.1 in the gsm8k model-swap leg (#4). Input matches what it replaces exactly (2.00); output is 12.00 against 8.00. Against the new default it is 10x input and 10x output, so it still plays the 'dearer rung' role the leg exists to measure -- but the RATIO changed (gpt-4.1 was 8x/4x over gpt-5-mini), which is the figure to re-derive rather than carry over.",
+      "_backend_not_read": "As above: 403 on /model/info."
+    },
+    "openai/aws/claude-sonnet-4-6": {
+      "public_name": "aws/claude-sonnet-4-6",
+      "provider": "bedrock",
+      "input_per_1m": 3.0,
+      "output_per_1m": 15.0,
+      "_added_2026_09_29": "Replaces aws/claude-sonnet-5 on the tau2 legs (#9, #10) -- the only Sonnet the catalogue now carries, and a LOWER version number than the withdrawn one. Roughly 2x the price it replaces (1.52/7.60), so tau2 cost figures move up even where token counts hold.",
+      "_backend_not_read": "As above: 403 on /model/info."
+    },
+    "openai/gcp/gemini-3.1-pro-preview": {
+      "public_name": "gcp/gemini-3.1-pro-preview",
+      "provider": "vertex_ai",
+      "input_per_1m": 2.0,
+      "output_per_1m": 12.0,
+      "_added_2026_09_29": "Replaces gemini-2.5-pro on the appworld legs (#11, #12); same family, two minor versions on. Unlike the row it replaces this is the gateway's PREFIXED registration, not a bare alias, so it is the name the cost map actually carries and needs no assumed-pricing note. A `-preview` alias is repointed by its vendor without warning -- re-read this row before pricing a new appworld run.",
+      "_backend_not_read": "As above: 403 on /model/info."
     }
   }
 }

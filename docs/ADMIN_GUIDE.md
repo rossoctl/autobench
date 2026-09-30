@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-09-30T01:38:44Z
+**Last modified:** 2026-09-30T02:52:21Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -53,7 +53,8 @@ install, §6 is the only verification that means anything.
   - [5.1 OpenShift](#51-openshift)
   - [5.2 KinD](#52-kind)
   - [5.3 Adopting an install made from the raw manifests](#53-adopting-an-install-made-from-the-raw-manifests)
-  - [5.4 Upgrade, rollback, uninstall](#54-upgrade-rollback-uninstall)
+  - [5.4 The IBAC judge — installed and uninstalled with the release](#54-the-ibac-judge--installed-and-uninstalled-with-the-release)
+  - [5.5 Upgrade, rollback, uninstall](#55-upgrade-rollback-uninstall)
 - [6. Verifying the install](#6-verifying-the-install)
 - [7. Symptoms that lie](#7-symptoms-that-lie)
 - [8. Appendix: the raw-manifest path, and two KinD-only objects](#8-appendix-the-raw-manifest-path-and-two-kind-only-objects)
@@ -73,6 +74,12 @@ cluster operation server-side. Nothing here shells out to `kubectl` or `oc`.
 | Route | `autobench` | chart (`platform: openshift`) | edge TLS; host generated as `autobench-<namespace>.apps.<cluster>` |
 | HTTPRoute | `autobench` | chart (`platform: kind`) | attaches to the shared istio gateway |
 | Secret | `autobench-instances` | **you, out-of-band** (§4) | ROPC credentials — never passes through Helm values |
+| Deployment + Service | `ibac-judge` | chart (`ibacJudge.enabled`, off by default) | needed only by the plugin legs #5–#8 (§5.4) |
+
+The judge is in that table, rather than in the platform list below, on purpose: **Rossoctl ships
+none.** `rossoctl-platform-config` arrives with every `ibac.*` field empty, and a cluster with no
+benchmark workloads never needs one — so the judge exists for benchmarking, AutoBench installs it,
+and `helm uninstall` takes it away again (§5.4).
 
 Everything else the Service depends on belongs to the platform and must exist **before** the
 install is useful:
@@ -614,7 +621,9 @@ Four properties of these scripts are load-bearing:
 deploy/helm/autobench/
   Chart.yaml            version = chart version; appVersion = the default image tag
   values.yaml           the two platform shapes, documented inline
-  templates/            deployment, service, route, httproute, _helpers.tpl, NOTES.txt
+  templates/            deployment, service, route, httproute, ibac-judge, ibac-judge-hooks,
+                        _helpers.tpl, NOTES.txt
+  files/                proxy.py (the judge), platform-config-ibac.py (its two lifecycle hooks)
 deploy/helm/values-openshift.yaml   the OpenShift shape's overrides
 deploy/helm/values-kind.yaml        KinD's overrides
 ```
@@ -628,7 +637,7 @@ any template change:
 
 ```bash
 helm lint deploy/helm/autobench
-python3 reference/helm-parity-check.py     # 6 checks; "Chart and manifests agree."
+python3 reference/helm-parity-check.py     # 12 checks; "Chart and manifests agree."
 ```
 
 It renders both platform shapes and diffs them against
@@ -703,7 +712,73 @@ kubectl -n rossoctl-system get secret -l owner=helm,name=autobench --context <ct
 # sh.helm.release.v1.autobench.v1
 ```
 
-### 5.4 Upgrade, rollback, uninstall
+### 5.4 The IBAC judge — installed and uninstalled with the release
+
+Needed **only** by the plugin legs of the matrix (#5–#8). Skip it entirely if you are not running
+those; nothing else in AutoBench calls it.
+
+The judge is AutoBench's, not the platform's. Rossoctl ships none — `rossoctl-platform-config`
+arrives with every `ibac.*` field empty — and a cluster with no benchmark workloads never needs one.
+So the chart installs it and `helm uninstall` removes it, which is the whole point: no leftover
+Deployment for the next person to find and wonder about.
+
+```bash
+# The upstream key first. It is a credential, so the chart references it and never creates it — and
+# for the same reason does not delete it. It must be a key for the SAME LLM service the workloads
+# already call (§2): the judge is one more caller of it, and no two services share a key table.
+umask 077; kubectl -n rossoctl-system create secret generic ibac-judge-upstream \
+  --from-file=apikey=<that profile's key file>
+
+helm upgrade --install autobench deploy/helm/autobench \
+  -n rossoctl-system --kube-context <ctx> -f deploy/helm/values-openshift.yaml \
+  --set ibacJudge.enabled=true \
+  --set-string ibacJudge.upstreamBase="$INTERNET_LLM_API_BASE" \
+  --set-string ibacJudge.model="$INTERNET_LLM_MODEL" --wait
+```
+
+`upstreamBase` and `model` are required and appear in no committed values file, because one is a live
+host and this repo is public. Pass them from the selected profile (§2). `model` must be an id **that
+gateway lists in `GET /v1/models`** — a model the judge's key cannot see fails one judge call at a
+time, mid-leg, and the plugin falls back to admitting the call.
+
+**What is chart-owned and what is not.** The judge Deployment, Service and code ConfigMap are
+ordinary release objects. The two `ibac.*` fields are not objects at all: they are keys inside
+`rossoctl-platform-config`, which is templated by the **`rossoctl` release**. Helm owns whole objects,
+never fields inside another release's, so the chart handles those two keys with a pair of hooks —
+`post-install`/`post-upgrade` records what they said in `configmap/ibac-judge-prior` and patches
+them; `pre-delete` writes the recorded pair back. Do not delete that record by hand: without it the
+uninstall leaves the fields alone rather than guess, and they then name a judge that no longer exists.
+
+| object | created by | removed by `helm uninstall` |
+|---|---|---|
+| `deploy/ibac-judge`, `svc/ibac-judge`, `cm/ibac-judge-code` | the chart | yes |
+| `sa`/`role`/`rolebinding` `ibac-judge-config` | the chart | yes |
+| `secret/ibac-judge-upstream` | you, out-of-band | **no** — delete it yourself when done |
+| `ibac.judgeEndpoint` / `judgeModel` in `rossoctl-platform-config` | post-install hook | restored to their previous values by the pre-delete hook |
+
+Two failure modes to know, both silent:
+
+- **A `helm upgrade` of the `rossoctl` release reverts the patch.** That ConfigMap is re-rendered
+  from the platform chart's own values, so the judge fields go back to empty. The plugin then loads
+  and does nothing: every tool call admitted, legs #5–#8 still pass, and the only tell is a judge
+  call count of zero. Re-run `preflight.py --plugin-legs` after any platform upgrade — that is why
+  the check reads the live cluster rather than trusting install-time state.
+- **A failed `pre-delete` hook aborts the uninstall.** Deliberate: the alternative is deleting the
+  judge while the platform still points at it. Read the Job's log, fix it, retry — or
+  `helm uninstall --no-hooks` and put the fields back by hand.
+
+Verify both directions:
+
+```bash
+kubectl -n rossoctl-system get cm rossoctl-platform-config \
+  -o jsonpath='{.data.config\.yaml}' | grep -A6 '^ibac:'      # judgeEndpoint/judgeModel now set
+kubectl -n rossoctl-system logs job/ibac-judge-config-apply   # what it recorded as the prior pair
+```
+
+Enforcement itself is proven by **counting judge calls**, never by a pass rate — an inert plugin and
+a working one produce the same pass rate. See `docs/PLUGIN_OVERHEAD.md`.
+
+### 5.5 Upgrade, rollback, uninstall
 
 ```bash
 helm upgrade autobench deploy/helm/autobench -n rossoctl-system -f <values> \
@@ -717,6 +792,18 @@ helm uninstall autobench -n rossoctl-system          # leaves autobench-instance
 you want, since regenerating it means re-reading credentials. The image tag is immutable, so
 `imagePullPolicy: IfNotPresent` is correct and an upgrade means changing `image.tag`, never
 restarting to pick up a rebuild.
+
+With `ibacJudge.enabled` the uninstall does more: it runs the `pre-delete` hook that puts
+`rossoctl-platform-config`'s `ibac.judgeEndpoint`/`judgeModel` back to what they were before the
+install, then deletes the judge along with everything else (§5.4). Two consequences. A failed hook
+**aborts** the uninstall rather than leaving the platform pointed at a judge that is about to go —
+read `logs job/ibac-judge-config-restore`, or use `--no-hooks` and fix the fields by hand. And
+`secret/ibac-judge-upstream` survives, like the instance Secret and for the same reason: it is a
+credential the chart never created.
+
+`helm rollback` does **not** re-run the pre-delete hook, and a rollback across an
+`ibacJudge.enabled` boundary is the one case worth avoiding — roll forward with an explicit
+`helm upgrade` instead, so the apply hook reconciles the fields.
 
 ## 6. Verifying the install
 

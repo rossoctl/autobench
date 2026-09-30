@@ -22,6 +22,20 @@ app: {{ include "autobench.name" . }}
 {{- end -}}
 
 {{/*
+The IBAC judge's object name, and its sole label — which is also its Deployment's selector, so it is
+FIXED to what the clusters already run (`ibac-judge` / `app: ibac-judge`). A selector is immutable:
+changing this name cannot be an upgrade, and an existing hand-made judge can only be adopted into the
+release if these match it exactly.
+*/}}
+{{- define "autobench.judgeName" -}}
+{{- default "ibac-judge" .Values.ibacJudge.nameOverride -}}
+{{- end -}}
+
+{{- define "autobench.judgeLabels" -}}
+app: {{ include "autobench.judgeName" . }}
+{{- end -}}
+
+{{/*
 Fail loudly on an unknown platform rather than silently rendering the wrong security context.
 */}}
 {{- define "autobench.platform" -}}

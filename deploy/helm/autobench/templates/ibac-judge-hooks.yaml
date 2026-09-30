@@ -1,0 +1,148 @@
+{{- if and .Values.ibacJudge.enabled .Values.ibacJudge.managePlatformConfig }}
+{{- /*
+Set rossoctl-platform-config's ibac.judgeEndpoint/judgeModel on install, put them back on uninstall.
+
+The rationale for a hook rather than a template is in files/platform-config-ibac.py — short version:
+that ConfigMap belongs to the `rossoctl` release, and Helm owns objects, not fields inside another
+release's object. The judge WORKLOAD is chart-owned (ibac-judge.yaml); only these two keys need
+bookkeeping, and the bookkeeping is one ConfigMap recording what they said first.
+
+The ServiceAccount, Role and RoleBinding are ordinary release resources, NOT hook resources, for one
+specific reason: Helm deletes a release's resources AFTER its pre-delete hooks run, so the restore
+Job still has its permissions at the moment it needs them. Hook-annotated RBAC would either be
+deleted too early or survive the uninstall as orphans.
+
+The Role is scoped by resourceName to exactly two ConfigMaps. It cannot read a Secret, and it cannot
+touch any other platform object.
+*/}}
+{{- $ns := .Release.Namespace }}
+{{- $judge := include "autobench.judgeName" . }}
+{{- $hook := printf "%s-config" $judge }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $hook }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "autobench.judgeLabels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $hook }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "autobench.judgeLabels" . | nindent 4 }}
+rules:
+  # The platform's ConfigMap: read and patch the two fields. No create, no delete.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: [{{ .Values.ibacJudge.platformConfigMap | quote }}]
+    verbs: ["get", "patch"]
+  # Our own record of the prior values: created by the apply hook, removed by the restore hook.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: [{{ printf "%s-prior" $judge | quote }}]
+    verbs: ["get", "create", "patch", "delete"]
+  # create is namespace-wide because a resourceName cannot gate it — the object does not exist yet.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $hook }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "autobench.judgeLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $hook }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $hook }}
+    namespace: {{ $ns }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $hook }}-code
+  namespace: {{ $ns }}
+  labels:
+    {{- include "autobench.judgeLabels" . | nindent 4 }}
+data:
+  platform-config-ibac.py: |
+{{ .Files.Get "files/platform-config-ibac.py" | indent 4 }}
+{{- range $mode, $spec := dict "apply" (dict "hook" "post-install,post-upgrade" "weight" "5") "restore" (dict "hook" "pre-delete" "weight" "-5") }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $hook }}-{{ $mode }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "autobench.judgeLabels" $ | nindent 4 }}
+  annotations:
+    "helm.sh/hook": {{ $spec.hook }}
+    "helm.sh/hook-weight": {{ $spec.weight | quote }}
+    # A FAILED Job is left behind on purpose — its log is the only record of why, and a failed
+    # pre-delete hook blocks the uninstall rather than silently orphaning the platform's fields.
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  # Bounded so a wedged hook cannot hold an uninstall open indefinitely.
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        {{- include "autobench.judgeLabels" $ | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $hook }}
+      restartPolicy: Never
+      containers:
+        - name: patch
+          image: {{ $.Values.ibacJudge.image }}
+          command: ["python", "/app/platform-config-ibac.py"]
+          env:
+            - name: MODE
+              value: {{ $mode | quote }}
+            - name: NAMESPACE
+              value: {{ $ns | quote }}
+            - name: TARGET_CM
+              value: {{ $.Values.ibacJudge.platformConfigMap | quote }}
+            - name: PRIOR_CM
+              value: {{ printf "%s-prior" $judge | quote }}
+            - name: JUDGE_APP
+              value: {{ $judge | quote }}
+            # Derived, never configured: it is this chart's own Service, so it cannot disagree with
+            # the Service actually rendered. The plugin gets an in-cluster URL with no credential in
+            # it — the key stays in the proxy's Secret.
+            - name: JUDGE_ENDPOINT
+              value: http://{{ $judge }}.{{ $ns }}.svc.cluster.local:{{ $.Values.ibacJudge.port }}{{ $.Values.ibacJudge.chatPath }}
+            - name: JUDGE_MODEL
+              value: {{ $.Values.ibacJudge.model | quote }}
+          volumeMounts:
+            - name: code
+              mountPath: /app
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: code
+          configMap:
+            name: {{ $hook }}-code
+{{- end }}
+{{- end }}

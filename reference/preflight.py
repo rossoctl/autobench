@@ -384,6 +384,98 @@ def check_workload_secrets(rep: Report, cluster: Cluster | None, teams: list[str
             )
 
 
+def check_ibac_judge(rep: Report, cluster: Cluster, namespace: str, *, required: bool) -> None:
+    """The IBAC judge: AutoBench-owned, and silent when missing — which is why this check exists.
+
+    The judge is AutoBench's. Rossoctl ships no judge — `rossoctl-platform-config` arrives with every
+    `ibac.*` field EMPTY — and a cluster with no benchmark workloads never needs one, so the judge on
+    these clusters was created for the plugin legs and for nothing else. The chart therefore INSTALLS
+    it (`ibacJudge.enabled`) and `helm uninstall` removes it again, which is the only lifecycle that
+    leaves nothing behind for the next person to puzzle over.
+
+    The two `ibac.*` FIELDS are the one part that cannot be chart-owned: they are keys inside a
+    ConfigMap templated by the `rossoctl` release, and Helm owns whole objects, not fields inside
+    another release's. So a post-install hook records what they said and patches them, and a
+    pre-delete hook writes the recorded pair back — see the chart's files/platform-config-ibac.py.
+
+    Which is exactly why this check is not redundant with the install. A `helm upgrade` of the
+    ROSSOCTL release re-renders that ConfigMap and reverts the patch, and nothing about that failure
+    is loud: an unset judgeEndpoint fails no deploy and no run, plugin legs pass with the ibac plugin
+    inert, and the only tell is a judge call count of zero. That is how it went unnoticed once
+    already. Install-time state is not run-time state; this reads the live cluster.
+
+    `required` is the caller saying plugin legs are in scope; otherwise a missing judge is a warning,
+    because legs #1-#4 and #9-#12 neither use nor need one.
+    """
+    rep.section("IBAC judge (needed only by the plugin legs, #5-#8)")
+    note = rep.fail if required else rep.warn
+
+    cm = cluster.get_json("get", "cm", "rossoctl-platform-config", "-n", namespace, "-o", "json")
+    ibac: dict = {}
+    if cm:
+        raw = (cm.get("data") or {}).get("config.yaml") or ""
+        # Deliberately not a YAML parse: preflight has no yaml dependency, and the three keys are
+        # flat scalars two spaces under `ibac:`. Anything more structured belongs to the operator.
+        in_ibac = False
+        for line in raw.splitlines():
+            if line.startswith("ibac:"):
+                in_ibac = True
+                continue
+            if in_ibac:
+                if line and not line.startswith((" ", "\t")):
+                    break
+                if ":" in line:
+                    k, _, v = line.strip().partition(":")
+                    ibac[k.strip()] = v.strip().strip('"').strip("'")
+    else:
+        note("rossoctl-platform-config", f"not readable in {namespace} — cannot tell if a judge is configured")
+        return
+
+    endpoint, model = ibac.get("judgeEndpoint", ""), ibac.get("judgeModel", "")
+    if not endpoint and not model:
+        note("ibac.judgeEndpoint / judgeModel",
+             "both EMPTY — the ibac plugin loads and does nothing. Legs #5-#8 would complete and "
+             "measure no enforcement at all; the tell is zero judge calls, not an error")
+    else:
+        if endpoint:
+            rep.ok("ibac.judgeEndpoint", "set")
+        else:
+            note("ibac.judgeEndpoint", "empty while judgeModel is set — the plugin cannot call anything")
+        if model:
+            rep.ok("ibac.judgeModel", model)
+        else:
+            note("ibac.judgeModel", "empty while judgeEndpoint is set — the judge has no model to use")
+    if ibac.get("judgeBearer"):
+        # Cleartext in a ConfigMap. The working shape is a Secret-backed judge proxy.
+        rep.warn("ibac.judgeBearer is set", "a ConfigMap is cleartext — use the Secret-backed proxy instead")
+
+    # The judge's upstream key is its own, and its model must come from THAT gateway's catalogue.
+    # Same pairing as the workload profile's base+model, and it fails the same silent way.
+    if cluster.secret_data(namespace, "ibac-judge-upstream") is None:
+        note(f"{namespace}/ibac-judge-upstream",
+             "absent — the judge proxy has no upstream key, so every judge call 401s")
+    else:
+        rep.ok(f"{namespace}/ibac-judge-upstream", "present")
+    if cluster.exists("get", "deploy", "ibac-judge", "-n", namespace):
+        rep.ok("ibac-judge Deployment", "present")
+    else:
+        note("ibac-judge Deployment",
+             f"absent from {namespace} — install it with the chart: "
+             "helm upgrade --install ... --set ibacJudge.enabled=true "
+             "--set ibacJudge.upstreamBase=<that gateway> --set ibacJudge.model=<one of its models>")
+
+    # Present only between a chart install and its uninstall, and it is what makes the uninstall able
+    # to put the platform's own values back. Worth reporting because deleting it by hand is silent:
+    # nothing fails, and uninstall then leaves the fields pointing at a judge that no longer exists.
+    if cluster.exists("get", "cm", "ibac-judge-prior", "-n", namespace):
+        rep.ok("ibac-judge-prior", "present — uninstall can restore the platform's original ibac fields")
+    elif endpoint:
+        rep.warn("ibac-judge-prior",
+                 f"absent from {namespace} while ibac.judgeEndpoint is set — either the judge was "
+                 "configured outside the chart, or the record was deleted. `helm uninstall` will "
+                 "leave those fields as they are rather than guess")
+
+
 def check_collector(rep: Report, cluster: Cluster, namespace: str) -> dict:
     """Returns what the collector actually does: {http_port, traces_endpoint, experiment_id, workspace}."""
     rep.section("OTEL collector (the write half of the telemetry chain)")
@@ -1246,6 +1338,10 @@ def main() -> int:
                     help="kind only: host port the istio gateway is published on, used when the "
                          "issuer is discovered from an HTTPRoute (default: %(default)s)")
     ap.add_argument("--gateway", default="http", help="kind only: Gateway name (default: %(default)s)")
+    ap.add_argument("--plugin-legs", action="store_true",
+                    help="the plugin legs (#5-#8) are in scope, so a missing or half-configured "
+                         "IBAC judge is a FAILURE rather than a warning. Without a judge those legs "
+                         "still pass — with the ibac plugin inert and nothing measured")
     ap.add_argument("--image", help="expected Service image, to compare against what is deployed")
     ap.add_argument("--chart", default=CHART_DIR, help="chart directory (default: %(default)s)")
     ap.add_argument("--skip-chart", action="store_true", help="skip the local lint/parity checks")
@@ -1289,6 +1385,7 @@ def main() -> int:
         check_rossoctl(rep, cluster, args.namespace)
         check_namespaces(rep, cluster, args.namespace, teams, workload)
         check_workload_secrets(rep, workload, teams)
+        check_ibac_judge(rep, cluster, args.namespace, required=args.plugin_legs)
         collector = check_collector(rep, cluster, args.namespace)
         check_mlflow(rep, cluster, platform, args.namespace, collector)
         check_ingress(rep, cluster, platform, args.namespace, args.gateway)

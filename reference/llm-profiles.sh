@@ -30,6 +30,19 @@
 #   INTRANET_LLM_KEY_FILE   INTERNET_LLM_KEY_FILE     chmod 600 file holding that gateway's key
 #   INTRANET_LLM_NO_PROXY   INTERNET_LLM_NO_PROXY     optional explicit egress-proxy bypass list
 #
+# Three optional extras name the models for the legs of the 12-run matrix that do NOT ride the
+# instance default, so the matrix stays gateway-neutral and its spec file keeps recording what was
+# actually measured rather than what this gateway happens to offer:
+#
+#   *_LLM_MODEL_ALT         the gsm8k model-swap leg (#4)
+#   *_LLM_MODEL_TAU2        the tau2 legs (#9, #10)
+#   *_LLM_MODEL_APPWORLD    the appworld legs (#11, #12)
+#
+# These are read directly out of this file by reference/run-12.py (they are not exported by any
+# function here), and only when LLM_PROFILE is set. Unset, each leg's own literal stands. Verify each
+# id against `GET /v1/models` on the gateway the key belongs to before a run: a model the key cannot
+# see fails per completion, mid-leg, which looks like a benchmark result and is not one.
+#
 # `LLM_PROFILE=intranet|internet` selects one, and llm_profile_resolve copies it into the canonical
 # WORKLOAD_LLM_API_BASE / WORKLOAD_LLM_MODEL / LLM_KEY_FILE that every script already reads. An
 # explicitly exported WORKLOAD_LLM_* always wins, so nothing that worked before this file behaves
@@ -42,8 +55,15 @@
 #   INTRANET_LLM_API_BASE=https://<intranet LLM service host>
 #   INTRANET_LLM_MODEL=openai/aws/claude-haiku-4-5
 #   INTERNET_LLM_API_BASE=https://<Internet LLM service host>
-#   INTERNET_LLM_MODEL=openai/Azure/gpt-5-mini-2025-08-07
+#   INTERNET_LLM_MODEL=<a model id from that gateway's own catalogue>
+#   INTERNET_LLM_MODEL_ALT=<a dearer one, for the gsm8k model-swap leg>
+#   INTERNET_LLM_MODEL_TAU2=<...>
+#   INTERNET_LLM_MODEL_APPWORLD=<...>
 #   EOF
+#
+# No model id is suggested here on purpose. A catalogue is per-gateway and it changes under you: the
+# four ids the v1.28 matrix ran had all been withdrawn from ours by 2026-09-29, and a stale example
+# in a comment is how one gets copied into a config that then fails one completion at a time.
 #
 # The KEYS stay in their own per-profile files (default ~/.rossoctl-llm/<profile>.key, chmod 600) and
 # are never part of profiles.env, never passed on argv, and never echoed.

@@ -23,6 +23,33 @@ the one whose key table issued the key in openai-secret. A mismatch does not fai
 per completion, mid-run, and the leg finishes with zeroes. Set llmProfile to intranet or internet.
 {{- end }}
 
+{{ if .Values.ibacJudge.enabled }}
+The IBAC judge is part of this release, so `helm uninstall {{ .Release.Name }}` removes it. Two things
+it does NOT remove, both on purpose:
+
+  * secret/{{ .Values.ibacJudge.upstreamSecret }} — a credential, installed out-of-band, so delete it
+    by hand if this cluster is done with benchmarking. The proxy reads it once at pod start:
+
+        kubectl -n {{ .Release.Namespace }} rollout restart deploy/{{ include "autobench.judgeName" . }}
+{{- if .Values.ibacJudge.managePlatformConfig }}
+  * nothing in configmap/{{ .Values.ibacJudge.platformConfigMap }} permanently: the post-install hook
+    recorded that ConfigMap's original ibac.judgeEndpoint/judgeModel in
+    configmap/{{ include "autobench.judgeName" . }}-prior, and the pre-delete hook writes them back.
+    Do not delete that record by hand — without it, uninstall leaves the fields pointing at a judge
+    that no longer exists. Check the patch landed:
+
+        kubectl -n {{ .Release.Namespace }} get cm {{ .Values.ibacJudge.platformConfigMap }} \
+          -o jsonpath='{.data.config\.yaml}' | grep -A6 '^ibac:'
+
+    A `helm upgrade` of the ROSSOCTL release re-renders that ConfigMap and reverts the patch. The
+    plugin then goes inert with no error — every tool call admitted, the legs still pass — so re-run
+    `python3 reference/preflight.py --plugin-legs ...` after any platform upgrade.
+{{- else }}
+  * configmap/{{ .Values.ibacJudge.platformConfigMap }}'s ibac fields — managePlatformConfig is false,
+    so nothing points the plugin at this judge yet and it stays INERT: it admits every tool call and
+    the legs still pass. Set them yourself, or set managePlatformConfig=true.
+{{- end }}
+{{- end }}
 Verify the rollout, then the API:
 
     kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "autobench.name" . }}

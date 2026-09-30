@@ -13,6 +13,11 @@ Expected differences, and the only ones tolerated: the openshift render adds a R
 deploy/ declares one — ykt3's was created by hand), and the openshift Deployment drops
 runAsUser/runAsGroup/fsGroup, which is precisely what deploy/openshift/deployment-patch.yaml's
 nulls do.
+
+The IBAC judge is off by default and so changes neither render. The last four checks cover it when
+enabled: its objects are additive, it leaves the Service's alone, its two lifecycle hooks are the
+ones the chart promises (create on install, restore on uninstall), and its proxy code is identical to
+deploy/kind/ibac-judge.yaml's — the two install paths must not drift into serving different judges.
 """
 
 from __future__ import annotations
@@ -30,11 +35,18 @@ NS = "rossoctl-system"
 
 
 def render(*args: str) -> dict[str, dict]:
+    """Rendered objects keyed `Kind/name`.
+
+    Keyed by BOTH, not by kind alone: enabling the IBAC judge adds a second Deployment, a second
+    Service and a second ConfigMap, and a kind-only key silently kept whichever came last — so the
+    parity assertions below would have compared the judge's Deployment against deploy/deployment.yaml
+    and failed for the wrong reason, or worse, passed by accident.
+    """
     out = subprocess.run(
         ["helm", "template", "autobench", str(CHART), "-n", NS, *args],
         capture_output=True, text=True, check=True,
     ).stdout
-    return {d["kind"]: d for d in yaml.safe_load_all(out) if d}
+    return {f"{d['kind']}/{d['metadata']['name']}": d for d in yaml.safe_load_all(out) if d}
 
 
 def load(rel: str) -> dict:
@@ -71,26 +83,60 @@ def check(label: str, manifest: dict, rendered: dict, failures: list[str]) -> No
     failures.extend(deltas)
 
 
+def expect(got, want, label: str, failures: list[str]) -> None:
+    ok = got == want
+    print(f"{'ok  ' if ok else 'FAIL'}  {label}")
+    if not ok:
+        print(f"        want {want!r}")
+        print(f"        got  {got!r}")
+        failures.append(f"{label}: {got!r} != {want!r}")
+
+
 def main() -> int:
     failures: list[str] = []
 
     kind = render("--set", "platform=kind")
-    check("kind Deployment  == deploy/deployment.yaml", load("deploy/deployment.yaml"), kind["Deployment"], failures)
-    check("kind Service     == deploy/service.yaml", load("deploy/service.yaml"), kind["Service"], failures)
-    check("kind HTTPRoute   == deploy/kind/httproute.yaml", load("deploy/kind/httproute.yaml"), kind["HTTPRoute"], failures)
+    check("kind Deployment  == deploy/deployment.yaml", load("deploy/deployment.yaml"), kind["Deployment/autobench-service"], failures)
+    check("kind Service     == deploy/service.yaml", load("deploy/service.yaml"), kind["Service/autobench-service"], failures)
+    check("kind HTTPRoute   == deploy/kind/httproute.yaml", load("deploy/kind/httproute.yaml"), kind["HTTPRoute/autobench"], failures)
 
     ocp = render("-f", str(REPO / "deploy/helm/values-openshift.yaml"))
     patched = copy.deepcopy(load("deploy/deployment.yaml"))
     sc = patched["spec"]["template"]["spec"]["securityContext"]
     for key in ("runAsUser", "runAsGroup", "fsGroup"):  # the patch nulls these
         sc.pop(key, None)
-    check("ocp  Deployment  == deployment.yaml + openshift patch", patched, ocp["Deployment"], failures)
-    check("ocp  Service     == deploy/service.yaml", load("deploy/service.yaml"), ocp["Service"], failures)
+    check("ocp  Deployment  == deployment.yaml + openshift patch", patched, ocp["Deployment/autobench-service"], failures)
+    check("ocp  Service     == deploy/service.yaml", load("deploy/service.yaml"), ocp["Service/autobench-service"], failures)
 
-    extra = sorted(k for k in ocp if k not in {"Deployment", "Service"})
-    print(f"{'ok  ' if extra == ['Route'] else 'FAIL'}  ocp  extra objects == ['Route'] (got {extra})")
-    if extra != ["Route"]:
-        failures.append(f"unexpected extra objects: {extra}")
+    expect(sorted(k for k in ocp if not k.endswith("/autobench-service")),
+           ["Route/autobench"], "ocp  extra objects == the Route", failures)
+
+    # The judge is off by default, so the two renders above are unaffected by it. Enabled, it must add
+    # exactly its own objects and nothing else — and in particular must not disturb the Service's.
+    judge = render("--set", "platform=kind", "--set", "ibacJudge.enabled=true",
+                   "--set", "ibacJudge.upstreamBase=https://llm.example.com",
+                   "--set", "ibacJudge.model=example/model")
+    for key in ("Deployment/autobench-service", "Service/autobench-service", "HTTPRoute/autobench"):
+        check(f"judge render leaves {key} unchanged", kind[key], judge[key], failures)
+    expect(sorted(k for k in judge if k not in kind),
+           ["ConfigMap/ibac-judge-code", "ConfigMap/ibac-judge-config-code",
+            "Deployment/ibac-judge", "Job/ibac-judge-config-apply",
+            "Job/ibac-judge-config-restore", "Role/ibac-judge-config",
+            "RoleBinding/ibac-judge-config", "Service/ibac-judge",
+            "ServiceAccount/ibac-judge-config"],
+           "judge objects added", failures)
+
+    # The two Jobs are the lifecycle contract the chart promises: one on install, one on uninstall.
+    hooks = {k: judge[k]["metadata"]["annotations"]["helm.sh/hook"] for k in judge if k.startswith("Job/")}
+    expect(hooks, {"Job/ibac-judge-config-apply": "post-install,post-upgrade",
+                   "Job/ibac-judge-config-restore": "pre-delete"}, "judge hook annotations", failures)
+
+    # Byte-identical proxy code in the chart and in the raw manifest, so the two install paths cannot
+    # drift into serving different judges.
+    raw = next(d for d in yaml.safe_load_all((REPO / "deploy/kind/ibac-judge.yaml").read_text())
+               if d["kind"] == "ConfigMap")["data"]["proxy.py"]
+    expect(judge["ConfigMap/ibac-judge-code"]["data"]["proxy.py"].rstrip("\n"), raw.rstrip("\n"),
+           "judge proxy.py == deploy/kind/ibac-judge.yaml's copy", failures)
 
     if failures:
         print(f"\n{len(failures)} difference(s) — fix the CHART, not the manifests.")

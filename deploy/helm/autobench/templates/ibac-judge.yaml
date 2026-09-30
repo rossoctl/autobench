@@ -1,0 +1,113 @@
+{{- if .Values.ibacJudge.enabled }}
+{{- /*
+The IBAC judge upstream proxy, and the one part of the AuthBridge story AutoBench OWNS.
+
+WHY THE CHART OWNS IT. The judge exists on these clusters for benchmarking and for nothing else:
+Rossoctl does not ship one — `rossoctl-platform-config` arrives with every `ibac.*` field EMPTY, and
+a cluster with no benchmark workloads never needs a judge at all. So the objects below are
+AutoBench's, they were created by hand for AutoBench's plugin legs, and the lifecycle has to be
+symmetric: `helm install` creates them, `helm uninstall` takes them away. That is what a template
+in this chart gives, for free, with no bookkeeping.
+
+The three `ibac.*` FIELDS are a different problem and are handled in ibac-judge-hooks.yaml — see the
+comment there. They live inside a ConfigMap owned by the `rossoctl` release, so Helm cannot own them
+the way it owns these objects, and pretending otherwise is how the platform's own value gets eaten.
+
+WHAT IT IS FOR. The `ibac` plugin calls a judge model to decide whether a tool call is allowed. The
+plugin's ConfigMap is cleartext, so the upstream key cannot live there; this proxy holds the key in a
+Secret and adds the `Authorization` header on the way out, so the plugin only ever points at an
+in-cluster URL with no credential. Without it the plugin is INERT — it admits every call and the run
+looks like a clean pass, so enforcement is proven by COUNTING judge calls, never by the pass rate.
+
+The `app: ibac-judge` labels match the objects already running on the OpenShift workload clusters
+byte for byte, deliberately: a Deployment's selector is immutable, so an existing judge can be
+ADOPTED into the release (annotate + label, per docs/ADMIN_GUIDE.md) instead of recreated.
+*/}}
+{{- $ns := .Release.Namespace }}
+{{- if not .Values.ibacJudge.upstreamBase }}
+{{- fail "ibacJudge.enabled=true requires ibacJudge.upstreamBase — the LLM or LiteLLM service this cluster's workloads already call. It is not committed to any values file (this repo is public); pass it at install time from the selected profile's <INTRANET|INTERNET>_LLM_API_BASE." }}
+{{- end }}
+{{- if not .Values.ibacJudge.model }}
+{{- fail "ibacJudge.enabled=true requires ibacJudge.model — an id THAT gateway lists in GET /v1/models. A model the judge's key cannot see fails one judge call at a time, mid-leg, and the plugin falls back to admitting the call." }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "autobench.judgeName" . }}-code
+  namespace: {{ $ns }}
+  labels:
+    {{- include "autobench.judgeLabels" . | nindent 4 }}
+data:
+  # Deliberately stdlib-only: no pip install at container start, so the pod is ready in seconds on a
+  # stock python image. Kept byte-identical to deploy/kind/ibac-judge.yaml's copy, which
+  # reference/helm-parity-check.py asserts.
+  proxy.py: |
+{{ .Files.Get "files/proxy.py" | indent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "autobench.judgeName" . }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "autobench.judgeLabels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "autobench.judgeLabels" . | nindent 4 }}
+  ports:
+    - port: {{ .Values.ibacJudge.port }}
+      targetPort: {{ .Values.ibacJudge.port }}
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "autobench.judgeName" . }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "autobench.judgeLabels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "autobench.judgeLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "autobench.judgeLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: proxy
+          image: {{ .Values.ibacJudge.image }}
+          command: ["python", "/app/proxy.py"]
+          env:
+            - name: UPSTREAM_BASE
+              value: {{ .Values.ibacJudge.upstreamBase | quote }}
+            - name: UPSTREAM_KEY
+              valueFrom:
+                secretKeyRef:
+                  # REFERENCED, never created: it is a credential, so it is installed out-of-band
+                  # and is therefore NOT removed by `helm uninstall` — see NOTES.txt. The proxy reads
+                  # it once at start, so a key installed after this pod is up needs a rollout restart.
+                  name: {{ .Values.ibacJudge.upstreamSecret }}
+                  key: apikey
+          ports:
+            - containerPort: {{ .Values.ibacJudge.port }}
+              protocol: TCP
+          volumeMounts:
+            - name: code
+              mountPath: /app
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            {{- toYaml .Values.ibacJudge.resources | nindent 12 }}
+      volumes:
+        - name: code
+          configMap:
+            name: {{ include "autobench.judgeName" . }}-code
+{{- end }}

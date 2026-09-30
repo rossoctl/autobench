@@ -16,6 +16,20 @@ Target is selected entirely by env so the same script drives kind and the OCP cl
                      https://{service}-{namespace}.apps.ykt2.../.well-known/agent-card.json
     BM_SPECS         alternate spec file (default reference/run12_specs.json)
     BM_ORDER         comma-separated execution order, overriding the spec file's own
+    BM_MODEL_ALT     model for the gsm8k "swap model" leg (#4)
+    BM_MODEL_TAU2    model for the tau2 legs
+    BM_MODEL_APPWORLD  model for the appworld legs
+                     A model id only exists on the gateway it came from, and no two gateways carry
+                     the same catalogue — so the ids in the spec file are the record of what the
+                     v1.28 matrix measured, not a portable instruction. These three rebind the legs
+                     that name a model of their own, leaving the file (and its history) intact.
+                     Unset, each leg's own literal stands. When LLM_PROFILE is set, an unset
+                     BM_MODEL_* falls back to <INTRANET|INTERNET>_LLM_MODEL_<ROLE> in
+                     LLM_PROFILE_ENV_FILE, so a gateway's catalogue is written down in exactly one
+                     place — see reference/llm-profiles.sh.
+                     BM_MODEL_TAU2 is also the only way to displace the `model_override` baked into
+                     the Service image's tau2 definition without rebuilding the image: an explicit
+                     deploy model outranks it (see registry._resolve_model).
     BM_CACHE_GAP     seconds a (benchmark, model) prompt set must rest between legs, so the LLM
                      gateway's completion cache expires and every leg pays for real completions.
                      Measured TTL on the internal gateway is ~10 min (hit at 9, miss at 11), so 900
@@ -82,6 +96,8 @@ ORDER = ([int(x) for x in os.environ["BM_ORDER"].split(",")]
 MIRROR = pathlib.Path("/tmp/autobench")
 SPECS = pathlib.Path(os.environ.get("BM_SPECS")
                      or pathlib.Path(__file__).with_name("run12_specs.json"))
+PROFILE_ENV_FILE = pathlib.Path(os.path.expanduser(
+    os.environ.get("LLM_PROFILE_ENV_FILE", "~/.rossoctl-llm/profiles.env")))
 
 _CTX = ssl._create_unverified_context() if INSECURE else None
 
@@ -296,6 +312,71 @@ def execute(spec, H):
     return rec
 
 
+def _profile_model(role: str) -> str | None:
+    """The selected LLM profile's model for ROLE, or None.
+
+    Read straight out of LLM_PROFILE_ENV_FILE rather than the environment, because that file is
+    sourced by the shell scripts and never exported into this process. Keeps the profile as the one
+    place a gateway's catalogue is recorded, so a spec file cannot disagree with the key in
+    openai-secret about which gateway it is talking to.
+    """
+    profile = os.environ.get("LLM_PROFILE")
+    if not profile or not PROFILE_ENV_FILE.is_file():
+        return None
+    want = f"{profile.upper()}_LLM_MODEL_{role}"
+    for line in PROFILE_ENV_FILE.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        if name.strip() == want:
+            return value.strip().strip('"').strip("'") or None
+    return None
+
+
+def model_role(spec) -> str | None:
+    """Which model role a leg plays, read off its shape rather than its number.
+
+    A benchmark with a model of its own gets that benchmark's role. A gsm8k leg counts as ALT only
+    when it already names a model — which is exactly what makes #4 the model-swap leg — because a
+    gsm8k leg with no model of its own rides the *instance* default, and that is the control the
+    swap is measured against. Structural, so an experiment file that renumbers its legs still lands
+    on the right roles.
+    """
+    if spec.get("bench") == "tau2":
+        return "TAU2"
+    if spec.get("bench") == "appworld":
+        return "APPWORLD"
+    if (spec.get("deploy_body") or {}).get("model") or (spec.get("run") or {}).get("model"):
+        return "ALT"
+    return None
+
+
+def apply_model_roles(specs) -> list[str]:
+    """Rebind each leg's deploy model from BM_MODEL_* / the LLM profile. Returns a line per change.
+
+    Only ``deploy_body["model"]`` binds anything: the agent's LLM is fixed at deploy time, and
+    RunRequest deliberately has no ``model`` field (it would be inert, so it is ignored). ``run``'s
+    copy is rewritten anyway where a spec carries one, so the saved run record cannot advertise a
+    model the deploy did not actually use.
+    """
+    changes = []
+    for spec in specs:
+        role = model_role(spec)
+        if not role:
+            continue
+        model = os.environ.get(f"BM_MODEL_{role}") or _profile_model(role)
+        db = spec.get("deploy_body")
+        if not model or db is None or db.get("model") == model:
+            continue
+        changes.append(f"#{spec['n']} {spec['bench']}: {db.get('model') or '(instance default)'}"
+                       f" -> {model}  [{role}]")
+        db["model"] = model
+        if (spec.get("run") or {}).get("model") is not None:
+            spec["run"]["model"] = model
+    return changes
+
+
 def cache_group(spec) -> str:
     """Legs that would hit the LLM gateway's completion cache in each other's wake.
 
@@ -347,6 +428,9 @@ def main():
         order = [1, 2, 3, 5, 6, 7, 8, 4, 9, 10, 11, 12]  # #4 last of gsm8k: it swaps the model
     if ORDER:                        # BM_ORDER wins over both, so a reordering needs no second
         order = ORDER                # copy of the legs that would drift from the canonical file
+    # Before by_n, and before any cache_group call: the group key includes the effective model.
+    for line in apply_model_roles(specs):
+        log(f"model rebind {line}")
     by_n = {s["n"]: s for s in specs}
     tok = token()
     H = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}

@@ -96,6 +96,65 @@ httpRoute:
     # Defaults to the release namespace when empty.
     namespace: ""
 
+# The IBAC judge — the upstream proxy the AuthBridge `ibac` plugin calls to decide whether a tool
+# call is allowed. Needed only by the plugin legs of the benchmark matrix (#5–#8).
+#
+# WHY IT IS IN THIS CHART AT ALL. Rossoctl does not ship a judge: `rossoctl-platform-config` arrives
+# with every `ibac.*` field empty, and a cluster with no benchmark workloads never needs one. The
+# judge on these clusters exists for benchmarking and nothing else, so AutoBench owns it — and
+# ownership has to be symmetric. `helm install` creates it; `helm uninstall` takes it away. Nothing
+# is left behind for the next person to find and wonder about.
+#
+# Two exceptions to that, both deliberate and both printed by NOTES.txt:
+#
+#   * the upstream KEY (`upstreamSecret` below) is referenced, never created — it is a credential,
+#     installed out-of-band, so it is removed out-of-band too.
+#   * `rossoctl-platform-config`'s ibac.judgeEndpoint/judgeModel are not objects but keys inside a
+#     ConfigMap owned by the `rossoctl` release. Helm owns objects, not fields in another release's
+#     object, so those two keys are set by a post-install hook that first RECORDS what they said, and
+#     put back by a pre-delete hook. See files/platform-config-ibac.py.
+#
+# Off by default: a cluster that only ever runs legs #1–#4 and #9–#12 does not need it, and an
+# install that creates a judge nobody asked for is the mirror of the problem this block solves.
+ibacJudge:
+  enabled: false
+
+  # REQUIRED when enabled, and not committed to any values file in this public repo: the LLM or
+  # LiteLLM service this cluster's workloads already call. The judge is one more caller of it, and no
+  # two services share a key table, so it must be the SAME one — pass the selected profile's
+  # <INTRANET|INTERNET>_LLM_API_BASE at install time.
+  upstreamBase: ""
+
+  # REQUIRED when enabled: a model id THAT gateway lists in GET /v1/models. It need not be the model
+  # the benchmark itself runs, and it is priced separately — reference/model_prices.json's judge row
+  # is what gen-cost-analysis.py bills these calls at, and judge calls do NOT appear in
+  # report.ndjson. A model the judge's key cannot see fails one judge call at a time, mid-leg.
+  model: ""
+
+  # Referenced, NEVER created — see above. Key `apikey`. The proxy reads it once at start, so a key
+  # installed after the pod is up needs `kubectl rollout restart deploy/ibac-judge`.
+  upstreamSecret: ibac-judge-upstream
+
+  # Set false to install the judge workload but leave rossoctl-platform-config alone — for a cluster
+  # whose ibac fields are managed elsewhere. The plugin then stays INERT until something else points
+  # it here: it admits every tool call and the legs still pass, so prove enforcement by counting
+  # judge calls (reference/preflight.py --plugin-legs checks the fields are set).
+  managePlatformConfig: true
+  platformConfigMap: rossoctl-platform-config
+
+  port: 8080
+  chatPath: /v1/chat/completions
+  # Stdlib-only proxy, so a stock python image needs no build and no pip install at start. Also used
+  # by the two hook Jobs. mirror.gcr.io avoids docker.io's anonymous pull throttle.
+  image: mirror.gcr.io/library/python:3.12-slim
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
 # Extra container env, appended after SERVICE_INSTANCES_DIR and SERVICE_PORT.
 extraEnv: []
 

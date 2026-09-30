@@ -52,10 +52,13 @@ Flags (each also has an env fallback):
                         the gateway follows the NETWORK, not the platform.
   --llm-api-base URL    WORKLOAD_LLM_API_BASE   gateway origin; overrides the profile's. There is no
                         default and none is baked in (this repo is public)
-  --llm-model M         WORKLOAD_LLM_MODEL      (default: openai/Azure/gpt-5-mini-2025-08-07)
+  --llm-model M         WORKLOAD_LLM_MODEL      a model id from the SELECTED gateway's catalogue.
+                        Required, and no default: a catalogue is per-gateway and it is revised under
+                        you, so the profile is the only place to write one down
   --otel-endpoint URL   WORKLOAD_OTEL_ENDPOINT  (default: the in-cluster collector on :8335)
   --otel-insecure B     WORKLOAD_OTEL_INSECURE  true|false (default: true for an in-cluster http URL)
-  --agent-runner R      WORKLOAD_AGENT_RUNNER   (default: direct)
+  --agent-runner R      WORKLOAD_AGENT_RUNNER   service|direct (default: service — `direct` yields a
+                        clean run with ZERO token rows on the current agent image)
   --endpoint-template T ENDPOINT_TEMPLATE  set ONLY when the workloads live on another cluster,
                         e.g. 'https://{service}-{namespace}.apps.ykt2.example.com'. Leave
                         unset when Service and workloads share the cluster (ykt5) — the Service
@@ -107,10 +110,23 @@ MLFLOW_EXPERIMENT_ID="${MLFLOW_EXPERIMENT_ID:-}"
 MLFLOW_WORKSPACE="${MLFLOW_WORKSPACE:-}"
 MLFLOW_TOKEN_SECRET="${MLFLOW_TOKEN_SECRET:-mlflow-reader-token}"
 WORKLOAD_LLM_API_BASE="${WORKLOAD_LLM_API_BASE:-}"
-WORKLOAD_LLM_MODEL="${WORKLOAD_LLM_MODEL:-openai/Azure/gpt-5-mini-2025-08-07}"
+# Empty, like the base above, and for the same reason: llm_profile_resolve only fills a name that is
+# still unset, so ANY default here outranks the profile and makes --llm-profile inert for the model
+# while still resolving the base -- a config that names one gateway's host and another's catalogue.
+# It failed exactly that way on 2026-09-29. A model id is per-gateway, so there is nothing safe to
+# default it to; require one instead.
+WORKLOAD_LLM_MODEL="${WORKLOAD_LLM_MODEL:-}"
 WORKLOAD_OTEL_ENDPOINT="${WORKLOAD_OTEL_ENDPOINT:-http://otel-collector.rossoctl-system.svc.cluster.local:8335}"
 WORKLOAD_OTEL_INSECURE="${WORKLOAD_OTEL_INSECURE:-}"
-WORKLOAD_AGENT_RUNNER="${WORKLOAD_AGENT_RUNNER:-direct}"
+# `service`, not `direct`: with the current agent image `service` is what emits agent spans and
+# `direct` produces a clean-looking run whose token rows are all ZERO (docs/ADMIN_GUIDE.md §"the
+# runner"). The old `direct` default came from a kind measurement on 2026-08-31 where `service` lost
+# token rows at max_parallel_sessions=4 — that was the warm-agent attribution loss, fixed in agent
+# dev145, and the note at src/autobench/models.py:132 records it as history. Six of the twelve legs
+# run at p=4, and the canonical matrix deploys with EXGENTIC_DEFAULT_RUNNER=service (see leg #9 in
+# run12_specs.json), so `direct` here contradicted the matrix it exists to set up. Do not infer which
+# one is live — look for a non-zero token row in report.ndjson.
+WORKLOAD_AGENT_RUNNER="${WORKLOAD_AGENT_RUNNER:-service}"
 ENDPOINT_TEMPLATE="${ENDPOINT_TEMPLATE:-}"
 S3_PREFIX="${S3_PREFIX:-}"
 S3_FROM="${S3_FROM:-}"
@@ -175,6 +191,7 @@ esac
 . "$(dirname "${BASH_SOURCE[0]}")/llm-profiles.sh"
 llm_profile_resolve || die "could not resolve LLM_PROFILE=${LLM_PROFILE:-}"
 [ -n "$WORKLOAD_LLM_API_BASE" ] || die "a gateway is required: --llm-profile intranet|internet, or --llm-api-base"
+[ -n "$WORKLOAD_LLM_MODEL" ] || die "a model is required: --llm-model, or set <INTRANET|INTERNET>_LLM_MODEL for the selected profile. It must be an id THAT gateway lists in GET /v1/models — a model the key cannot see fails one completion at a time, mid-leg"
 command -v "$KUBECTL_BIN" >/dev/null || die "$KUBECTL_BIN is required"
 
 APPS_DOMAIN="${APPS_DOMAIN:-apps.${CLUSTER}.hcp.res.ibm.com}"
@@ -353,6 +370,36 @@ if [ -n "${LLM_PROFILE:-}" ]; then
     fi
 else
     warn "no --llm-profile: the base cannot be checked against the gateway that issued the key"
+fi
+
+# The IBAC judge. A WARNING, never a failure: legs #1-#4 and #9-#12 neither use nor need one, so a
+# cluster with no judge is a perfectly good install. It is reported at all because its absence is
+# otherwise SILENT — an empty judgeEndpoint fails no deploy and no run; the plugin legs complete with
+# the ibac plugin inert, and the only tell is a judge call count of zero.
+#
+# THIS script never installs a judge — the CHART does, and that is the difference from the collector
+# and MLflow below, which AutoBench only ever asserts. Rossoctl ships no judge (every ibac.* field
+# arrives empty) and only the benchmark's plugin legs need one, so the judge belongs to AutoBench and
+# `helm uninstall` takes it away again: `--set ibacJudge.enabled=true --set ibacJudge.upstreamBase=...
+# --set ibacJudge.model=...`. This script runs BEFORE that install, to write the instance file, so
+# here the fields are simply reported. Warning, not failure, for the same reason as above.
+IBAC_CFG="$(kc -n rossoctl-system get cm rossoctl-platform-config -o jsonpath='{.data.config\.yaml}' 2>/dev/null || true)"
+if [ -z "$IBAC_CFG" ]; then
+    warn "rossoctl-platform-config not readable in rossoctl-system: cannot tell whether an IBAC judge is configured"
+else
+    J_EP="$(printf '%s\n' "$IBAC_CFG" | sed -n 's/^[[:space:]]*judgeEndpoint:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' | head -1)"
+    J_MODEL="$(printf '%s\n' "$IBAC_CFG" | sed -n 's/^[[:space:]]*judgeModel:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' | head -1)"
+    if [ -z "$J_EP" ] && [ -z "$J_MODEL" ]; then
+        warn "ibac.judgeEndpoint and ibac.judgeModel are both empty: plugin legs #5-#8 would run with the ibac plugin INERT (zero judge calls, no error)"
+    elif [ -z "$J_EP" ] || [ -z "$J_MODEL" ]; then
+        warn "ibac judge half-configured (endpoint='${J_EP}' model='${J_MODEL}'): both are required"
+    else
+        check "ibac judge configured (model ${J_MODEL})" 0
+        # The judge's key is its own, and the model must be one THAT gateway lists. Same base+model
+        # pairing as the workload profile, and it fails the same silent way.
+        kc -n rossoctl-system get secret ibac-judge-upstream >/dev/null 2>&1 \
+            || warn "ibac-judge-upstream Secret absent in rossoctl-system: every judge call 401s"
+    fi
 fi
 
 # The collector's HTTP receiver. The shipped ConfigMap says 4318, but the Deployment overrides it
