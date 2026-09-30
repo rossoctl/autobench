@@ -9,13 +9,18 @@
 #   1. build + kind-load the autobench image
 #   2. re-seed the `benchmarker` Keycloak user (incl. the firstName/lastName the
 #      realm requires for ROPC — keycloak-ensure-user.sh omits them)
-#   3. stand up the MLflow read path (mlflow-reader + point the collector at it)
+#   3. stand up the MLflow read path (mlflow-reader + point the collector at it) — unless an MLflow
+#      is already serving the configured tracking URL, which --install-mlflow decides
 #   4. generate the per-instance config + create the autobench-instances secret
 #   5. deploy the Service (Deployment + Service + kind HTTPRoute), pinned to the image
 #   6. verify /healthz
 #
 # Step 3 is not optional if you want token reports: without it the collector's export 401s against
 # the OIDC-gated MLflow and every run publishes `model: "unknown"` with zero tokens, successfully.
+# What is optional is *installing* the MLflow — a cluster may already be pointed at one that exists
+# (`--install-mlflow never`, or `auto` finding it), in which case this script only repoints the
+# collector. Either way, prove the result with `autobench-cli mlflow-health`: "installed" and
+# "accepts the spans we write" are different claims, and only the second one empties a report.
 #
 # DEV/TEST ONLY. No secret is ever echoed. Secrets are resolved as:
 #   KC_USER_PASSWORD   the `benchmarker` password — from `--password-file`, `--password-stdin` or
@@ -60,6 +65,13 @@ BENCH_USER="${BENCH_USER:-benchmarker}"
 BENCH_EMAIL="${BENCH_EMAIL:-benchmarker@localtest.me}"
 TEAM_NAMESPACES="${TEAM_NAMESPACES:-team1}"
 KC_CRED_FILE="${KC_CRED_FILE:-$HOME/.rossoctl-kind/benchmarker.pass}"
+# Whether to install MLflow is a QUESTION, not a platform constant: on OpenShift it is pre-installed
+# and on kind it usually is not, but a kind cluster can also be pointed at an existing one.
+INSTALL_MLFLOW="${INSTALL_MLFLOW:-auto}"
+# The URL the instance config will name. kind-service-bootstrap.sh defaults to the same address, and
+# the two must agree — the Service reads the experiment the collector writes, and a split between
+# them is silent (the run passes, every token count reads 0).
+MLFLOW_URL="${MLFLOW_URL:-http://mlflow-reader.rossoctl-system.svc.cluster.local:5000}"
 
 # --- flags ---
 # Only the credential has flags; everything else stays env-only (see the header). Unknown arguments
@@ -77,10 +89,20 @@ Flags:
   --password-stdin    read the password from stdin
   --password P        the password on the command line — accepted, but argv is world-readable
                       via \`ps\`, and it lands in your shell history
+  --install-mlflow M  auto|always|never   (default: ${INSTALL_MLFLOW}; env INSTALL_MLFLOW)
+                      auto   — apply deploy/kind/mlflow-reader.yaml only when nothing is already
+                               serving the configured tracking URL (env MLFLOW_URL, default the
+                               in-cluster reader). A kind cluster pointed at an MLflow that already
+                               exists keeps it: installing a second one splits the traces between
+                               two databases, and reports then read the wrong half.
+                      always — apply it regardless (the pre-2026-09-30 behaviour)
+                      never  — apply nothing; MLflow is somebody else's, and its credential goes in
+                               via kind-service-bootstrap.sh
   -h, --help
 
 Everything else is environment-only: IMAGE, CLUSTER, KUBE_CONTEXT, REALM, CLIENT, KC_HOST,
-TEAM_NAMESPACES, KC_ADMIN_PASSWORD, LLM_PROFILE, LLM_KEY_FILE, BM_WORKLOAD_LLM_KEY.
+TEAM_NAMESPACES, KC_ADMIN_PASSWORD, LLM_PROFILE, LLM_KEY_FILE, BM_WORKLOAD_LLM_KEY, MLFLOW_URL
+(the tracking URL the instance config names — also what --install-mlflow auto looks for).
 EOF
 }
 CRED_PASSWORD_FILE=""
@@ -92,10 +114,15 @@ while [ $# -gt 0 ]; do
     --password-file)  CRED_PASSWORD_FILE="$2"; shift 2 ;;
     --password-stdin) CRED_PASSWORD_STDIN=1; shift ;;
     --password)       CRED_PASSWORD_ARGV="$2"; shift 2 ;;
+    --install-mlflow) INSTALL_MLFLOW="$2"; shift 2 ;;
     -h|--help)        usage; exit 0 ;;
     *)                usage; echo "Error: unknown argument '$1'" >&2; exit 1 ;;
   esac
 done
+case "$INSTALL_MLFLOW" in
+  auto|always|never) ;;
+  *) echo "Error: --install-mlflow must be auto, always or never (got '$INSTALL_MLFLOW')" >&2; exit 1 ;;
+esac
 
 # --- secrets (flags, else env, else chmod-600 file; admin pw falls back to the cluster secret) ---
 # shellcheck source=reference/credfile.sh
@@ -242,31 +269,76 @@ fi
 # with no auth, and the collector has to export to IT rather than to the OIDC-gated `mlflow` that
 # rossoctl-deps installs. Getting this wrong is silent — the run passes, `model` is "unknown", and
 # every token count is 0, which reads like an agent that emitted no telemetry.
-echo "==> ensuring the MLflow read path (mlflow-reader + collector export)"
-kubectl --context "$CTX" apply -f "$BENCH_REPO/deploy/kind/mlflow-reader.yaml"
-kubectl --context "$CTX" -n rossoctl-system rollout status deploy/mlflow-reader --timeout=300s
-# Gate on the API, not on the pod: two pip installs run at container start, so Ready precedes
-# usable by a wide margin. Three details make this the only probe that works: the query runs from
-# INSIDE the pod (MLflow 3.x rejects the API server's service proxy as a DNS-rebinding attempt),
-# `experiment_ids` is required (without it the endpoint answers 400, which reads like a broken
-# server), and the image ships no curl — python is what is there.
-MLFLOW_PROBE="import urllib.request;urllib.request.urlopen('http://localhost:5000/api/2.0/mlflow/traces?experiment_ids=0&max_results=1',timeout=10)"
-MLFLOW_READY=0
-for _ in $(seq 1 30); do
-  if kubectl --context "$CTX" -n rossoctl-system exec deploy/mlflow-reader -- \
-      python -c "$MLFLOW_PROBE" >/dev/null 2>&1; then
-    MLFLOW_READY=1; break
+#
+# WHETHER to install it is asked, not assumed (--install-mlflow). `auto` looks for a Service already
+# serving the configured tracking URL: if one is there, installing our reader beside it would write
+# the traces to one database and read them from the other, which looks exactly like an agent that
+# emitted no telemetry. The Service OBJECT is what is checked, because that is all that is knowable
+# from the host — whether it ANSWERS is the round-trip probe (reference/preflight.py, or
+# `autobench-cli mlflow-health`), and "installed" and "answering" are different claims.
+MLFLOW_HOSTPORT="${MLFLOW_URL#*://}"; MLFLOW_HOSTPORT="${MLFLOW_HOSTPORT%%/*}"
+MLFLOW_SVC="${MLFLOW_HOSTPORT%%.*}"
+MLFLOW_NS="${MLFLOW_HOSTPORT#*.}"; MLFLOW_NS="${MLFLOW_NS%%.*}"
+[ "$MLFLOW_NS" = "$MLFLOW_SVC" ] && MLFLOW_NS=rossoctl-system   # a bare host, no svc DNS suffix
+DO_INSTALL_MLFLOW=1
+case "$INSTALL_MLFLOW" in
+  never)  DO_INSTALL_MLFLOW=0
+          echo "==> MLflow install skipped (--install-mlflow never): using ${MLFLOW_URL}" ;;
+  always) echo "==> installing mlflow-reader (--install-mlflow always)" ;;
+  auto)   if kubectl --context "$CTX" -n "$MLFLOW_NS" get svc "$MLFLOW_SVC" >/dev/null 2>&1; then
+            DO_INSTALL_MLFLOW=0
+            echo "==> reusing the MLflow already serving ${MLFLOW_URL} (svc ${MLFLOW_SVC} in ${MLFLOW_NS})"
+            echo "    installing a second one would split the traces; pass --install-mlflow always to force"
+          else
+            echo "==> nothing serves ${MLFLOW_URL} yet; installing mlflow-reader"
+          fi ;;
+esac
+if [ "$DO_INSTALL_MLFLOW" = 1 ]; then
+  if [ "$MLFLOW_SVC" != "mlflow-reader" ]; then
+    # Applying our reader would not make the configured URL resolve, so the run would still publish
+    # an empty report — with an installed MLflow nobody reads sitting next to it.
+    echo "Error: MLFLOW_URL names svc ${MLFLOW_SVC} in ${MLFLOW_NS}, which does not exist, and" >&2
+    echo "       deploy/kind/mlflow-reader.yaml serves mlflow-reader in rossoctl-system — installing" >&2
+    echo "       it would not make that URL answer. Create that MLflow, or drop MLFLOW_URL." >&2
+    exit 1
   fi
-  sleep 5
-done
-if [ "$MLFLOW_READY" = 1 ]; then
-  echo "==> mlflow-reader answers /api/2.0/mlflow/traces"
-else
-  echo "WARNING: mlflow-reader is Ready but its traces API is not answering — token reports will be" >&2
-  echo "         empty. Check the container's lastState: one MLflow 3.x worker idles at ~2.3 GiB, so" >&2
-  echo "         an OOMKill leaves a log ending on 'Application startup complete' with no error." >&2
+  kubectl --context "$CTX" apply -f "$BENCH_REPO/deploy/kind/mlflow-reader.yaml"
 fi
-python3 "$REFERENCE_DIR/kind-collector-mlflow.py" --context "$CTX"
+# The rollout wait and the API probe run whenever the reader is present — including when this run did
+# not install it — because being installed is not the same as answering. They exec INTO that pod, so
+# an MLflow provided from elsewhere has no equivalent here and is deferred to the round-trip probe.
+if ! kubectl --context "$CTX" -n rossoctl-system get deploy mlflow-reader >/dev/null 2>&1; then
+  echo "==> no deploy/mlflow-reader to probe; verify ${MLFLOW_URL} with \`autobench-cli mlflow-health\`"
+  echo "    after step 6 — it is the only check that proves the write half of the path"
+else
+  kubectl --context "$CTX" -n rossoctl-system rollout status deploy/mlflow-reader --timeout=300s
+  # Gate on the API, not on the pod: two pip installs run at container start, so Ready precedes
+  # usable by a wide margin. Three details make this the only probe that works: the query runs from
+  # INSIDE the pod (MLflow 3.x rejects the API server's service proxy as a DNS-rebinding attempt),
+  # `experiment_ids` is required (without it the endpoint answers 400, which reads like a broken
+  # server), and the image ships no curl — python is what is there.
+  MLFLOW_PROBE="import urllib.request;urllib.request.urlopen('http://localhost:5000/api/2.0/mlflow/traces?experiment_ids=0&max_results=1',timeout=10)"
+  MLFLOW_READY=0
+  for _ in $(seq 1 30); do
+    if kubectl --context "$CTX" -n rossoctl-system exec deploy/mlflow-reader -- \
+        python -c "$MLFLOW_PROBE" >/dev/null 2>&1; then
+      MLFLOW_READY=1; break
+    fi
+    sleep 5
+  done
+  if [ "$MLFLOW_READY" = 1 ]; then
+    echo "==> mlflow-reader answers /api/2.0/mlflow/traces"
+  else
+    echo "WARNING: mlflow-reader is Ready but its traces API is not answering — token reports will be" >&2
+    echo "         empty. Check the container's lastState: one MLflow 3.x worker idles at ~2.3 GiB, so" >&2
+    echo "         an OOMKill leaves a log ending on 'Application startup complete' with no error." >&2
+  fi
+fi
+# The collector must export to the MLflow the Service reads, whoever installed it — so the URL comes
+# from MLFLOW_URL rather than from this script's default, which is the same address anyway unless an
+# existing MLflow was named.
+python3 "$REFERENCE_DIR/kind-collector-mlflow.py" --context "$CTX" \
+  --reader-url "${MLFLOW_URL%/}/v1/traces"
 
 # --- 3. generate per-instance config + (re)create the autobench-instances secret ---
 echo "==> generating instance config + secret"
@@ -288,7 +360,7 @@ else
 fi
 "$REFERENCE_DIR/kind-service-bootstrap.sh" \
   --cluster "$CLUSTER" --context "$CTX" --realm "$REALM" --client "$CLIENT" \
-  --keycloak-host "$KC_HOST" --out-dir "$OUT_DIR" "${COPY_ARGS[@]}"
+  --keycloak-host "$KC_HOST" --out-dir "$OUT_DIR" --mlflow-url "$MLFLOW_URL" "${COPY_ARGS[@]}"
 FROM_FILE_ARGS=()
 for f in "$OUT_DIR"/*.json; do FROM_FILE_ARGS+=(--from-file="$(basename "$f")=$f"); done
 kubectl --context "$CTX" -n rossoctl-system create secret generic autobench-instances \

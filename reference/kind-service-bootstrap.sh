@@ -44,6 +44,10 @@ Flags (each also has an env fallback):
                                           in-cluster svc URL — see the note below)
   --experiment-id N    MLFLOW_EXPERIMENT_ID  (default: READ from the collector's own exporter
                                           header, because guessing it yields a zero-token report)
+  --mlflow-no-auth     MLFLOW_NO_AUTH=1   declare this MLflow unauthenticated — the same spelling
+                                          ocp-service-bootstrap.sh takes. Without it, auth is
+                                          INFERRED from the URL (a *mlflow-reader* URL is treated
+                                          as no-auth) and the inference is logged.
   --copy-from FILE     COPY_FROM          existing instance JSON to carry `s3` and `workload_llm`
                                           over from. Those two are environment facts this script
                                           cannot discover, and a cluster rebuild should reproduce
@@ -112,6 +116,9 @@ ROSSOCTL_BASE_URL="${ROSSOCTL_BASE_URL:-http://rossoctl-backend.rossoctl-system:
 MLFLOW_NAMESPACE="${MLFLOW_NAMESPACE:-rossoctl-system}"
 MLFLOW_URL="${MLFLOW_URL:-}"
 MLFLOW_EXPERIMENT_ID="${MLFLOW_EXPERIMENT_ID:-}"
+# Captured before MLFLOW_NO_AUTH is computed below, so "the caller declared it" stays distinguishable
+# from "this script worked it out" — the whole point of the flag.
+MLFLOW_NO_AUTH_DECLARED="${MLFLOW_NO_AUTH:-}"
 COPY_FROM="${COPY_FROM:-}"
 # WORKLOAD_LLM_API_BASE is the canonical name — it matches the instance-file field this script
 # writes (workload_llm.api_base) and the OpenShift sibling's variable. WORKLOAD_LLM_BASE is accepted
@@ -145,6 +152,7 @@ while [ $# -gt 0 ]; do
         --mlflow-namespace) MLFLOW_NAMESPACE="$2"; shift 2 ;;
         --mlflow-url)       MLFLOW_URL="$2"; shift 2 ;;
         --experiment-id)    MLFLOW_EXPERIMENT_ID="$2"; shift 2 ;;
+        --mlflow-no-auth)   MLFLOW_NO_AUTH_DECLARED=1; shift ;;
         --copy-from)        COPY_FROM="$2"; shift 2 ;;
         --llm-profile)      LLM_PROFILE="$2"; shift 2 ;;
         --llm-api-base|--llm-base) WORKLOAD_LLM_API_BASE="$2"; shift 2 ;;
@@ -348,10 +356,26 @@ OUT_FILE="${OUT_DIR%/}/${ENCODED_HOST}.json"
 # identical in appearance to a broken collector. So a placeholder is emitted, which the reader
 # ignores. When --mlflow-url points at an authenticating MLflow instead, the mlflow-oauth-secret
 # client-credentials are emitted and no bearer, so the grant runs.
-case "$MLFLOW_URL" in
-    *mlflow-reader*) MLFLOW_NO_AUTH=1 ;;
-    *)               MLFLOW_NO_AUTH=0 ;;
-esac
+#
+# Whether this MLflow authenticates is DECLARED by --mlflow-no-auth, and only INFERRED from the URL
+# when nothing was declared. The inference is right for every default kind cluster and wrong for any
+# other — and getting it wrong fails soft, with an empty token report on a run that passes — so it is
+# logged rather than made silently. An MLflow that already exists is the case it cannot get right.
+if [ -n "$MLFLOW_NO_AUTH_DECLARED" ]; then
+    MLFLOW_NO_AUTH=1
+    log "==> MLflow declared unauthenticated (--mlflow-no-auth)"
+else
+    case "$MLFLOW_URL" in
+        *mlflow-reader*) MLFLOW_NO_AUTH=1 ;;
+        *)               MLFLOW_NO_AUTH=0 ;;
+    esac
+    if [ "$MLFLOW_NO_AUTH" = 1 ]; then
+        log "==> MLflow auth INFERRED from the URL: none, it is an mlflow-reader"
+    else
+        log "==> MLflow auth INFERRED from the URL: client-credentials from mlflow-oauth-secret"
+    fi
+    log "    pass --mlflow-no-auth (or point --mlflow-url at an authenticating MLflow) to declare it"
+fi
 
 # Every value reaches jq through the ENVIRONMENT, not through --arg: argv is world-readable
 # (`ps`, /proc/<pid>/cmdline) and this file carries the ROPC password and the bucket keys. The

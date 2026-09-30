@@ -46,6 +46,27 @@ Flags (each also has an env fallback):
   --mlflow-workspace W  MLFLOW_WORKSPACE      (default: read from the collector's export headers)
   --mlflow-token-secret S  MLFLOW_TOKEN_SECRET  ServiceAccount-token Secret holding the read
                         bearer, in rossoctl-system (default: mlflow-reader-token)
+  --mlflow-insecure-tls B  MLFLOW_INSECURE_TLS  true|false (default: true — the in-cluster RHOAI
+                        endpoint is reencrypt with a service-CA cert. Set false for an MLflow
+                        behind a certificate this pod's trust store already accepts)
+
+MLflow credentials (pick ONE shape; they are the four the Service itself resolves, in this
+precedence). An MLflow that already exists on the cluster is authenticated by whoever installed it,
+not by us, so its credential has to be supplied rather than discovered:
+  --mlflow-bearer-file F   a chmod-600 file holding a pre-obtained bearer, read in-process
+  --mlflow-username U      with --mlflow-password-file F, and optionally --mlflow-oauth-url URL:
+                           the OpenShift OAuth challenge flow an RHOAI oauth-proxy expects (the
+                           oauth URL is derived from the tracking URL when omitted)
+  --mlflow-client-id ID    with --mlflow-client-secret-file F and --mlflow-token-url URL: an OIDC
+                           client-credentials grant, for an MLflow fronted by Keycloak
+  --mlflow-no-auth         declare this MLflow unauthenticated. What kind's mlflow-reader is, and
+                           the ONLY way to install with no MLflow credential — otherwise a resolved
+                           credential of none is a precheck FAILURE, because every run would then
+                           pass and publish an empty token report.
+  (no flag)                fall back to --mlflow-token-secret, the SA-token Secret shape
+
+Half of a shape is an error, not a fallback: --mlflow-username without --mlflow-password-file stops
+here rather than quietly reverting to the Secret and installing a credential nobody chose.
   --llm-profile P       LLM_PROFILE        intranet|internet — selects the INTRANET_LLM_* or
                         INTERNET_LLM_* variable set (see llm-profiles.sh). An OpenShift cluster on
                         the organisation's intranet uses `intranet`, same as a local kind cluster:
@@ -109,6 +130,15 @@ MLFLOW_URL="${MLFLOW_URL:-https://mlflow.redhat-ods-applications.svc.cluster.loc
 MLFLOW_EXPERIMENT_ID="${MLFLOW_EXPERIMENT_ID:-}"
 MLFLOW_WORKSPACE="${MLFLOW_WORKSPACE:-}"
 MLFLOW_TOKEN_SECRET="${MLFLOW_TOKEN_SECRET:-mlflow-reader-token}"
+MLFLOW_INSECURE_TLS="${MLFLOW_INSECURE_TLS:-true}"
+MLFLOW_BEARER_FILE="${MLFLOW_BEARER_FILE:-}"
+MLFLOW_USERNAME="${MLFLOW_USERNAME:-}"
+MLFLOW_PASSWORD_FILE="${MLFLOW_PASSWORD_FILE:-}"
+MLFLOW_OAUTH_URL="${MLFLOW_OAUTH_URL:-}"
+MLFLOW_CLIENT_ID="${MLFLOW_CLIENT_ID:-}"
+MLFLOW_CLIENT_SECRET_FILE="${MLFLOW_CLIENT_SECRET_FILE:-}"
+MLFLOW_TOKEN_URL="${MLFLOW_TOKEN_URL:-}"
+MLFLOW_NO_AUTH="${MLFLOW_NO_AUTH:-}"
 WORKLOAD_LLM_API_BASE="${WORKLOAD_LLM_API_BASE:-}"
 # Empty, like the base above, and for the same reason: llm_profile_resolve only fills a name that is
 # still unset, so ANY default here outranks the profile and makes --llm-profile inert for the model
@@ -151,6 +181,15 @@ while [ $# -gt 0 ]; do
         --mlflow-experiment)  MLFLOW_EXPERIMENT_ID="$2"; shift 2 ;;
         --mlflow-workspace)   MLFLOW_WORKSPACE="$2"; shift 2 ;;
         --mlflow-token-secret) MLFLOW_TOKEN_SECRET="$2"; shift 2 ;;
+        --mlflow-insecure-tls) MLFLOW_INSECURE_TLS="$2"; shift 2 ;;
+        --mlflow-bearer-file) MLFLOW_BEARER_FILE="$2"; shift 2 ;;
+        --mlflow-username)    MLFLOW_USERNAME="$2"; shift 2 ;;
+        --mlflow-password-file) MLFLOW_PASSWORD_FILE="$2"; shift 2 ;;
+        --mlflow-oauth-url)   MLFLOW_OAUTH_URL="$2"; shift 2 ;;
+        --mlflow-client-id)   MLFLOW_CLIENT_ID="$2"; shift 2 ;;
+        --mlflow-client-secret-file) MLFLOW_CLIENT_SECRET_FILE="$2"; shift 2 ;;
+        --mlflow-token-url)   MLFLOW_TOKEN_URL="$2"; shift 2 ;;
+        --mlflow-no-auth)     MLFLOW_NO_AUTH=1; shift ;;
         --llm-profile)        LLM_PROFILE="$2"; shift 2 ;;
         --llm-api-base)       WORKLOAD_LLM_API_BASE="$2"; shift 2 ;;
         --llm-model)          WORKLOAD_LLM_MODEL="$2"; shift 2 ;;
@@ -217,25 +256,74 @@ fi
 # Unlike kind, the iss route IS reachable from inside an OpenShift cluster, so no backchannel
 # override is needed: the Service composes the JWKS and ROPC URLs from iss.
 
-# --- 2. MLflow read bearer, from the ServiceAccount-token Secret ---
-log "==> Reading MLflow read bearer from secret ${MLFLOW_TOKEN_SECRET} (rossoctl-system)..."
-MLFLOW_BEARER="$(kc -n rossoctl-system get secret "$MLFLOW_TOKEN_SECRET" \
-    -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-if [ -n "$MLFLOW_BEARER" ]; then
-    log "    bearer present (len ${#MLFLOW_BEARER}, sha8 $(sha8 "$MLFLOW_BEARER"))"
+# --- 2. MLflow credential, in the shape the installer declared ---
+# On OpenShift MLflow is PRE-INSTALLED — rossoctl-deps or RHOAI put it there, SAR-gated on :8443 —
+# so its credential belongs to whoever installed it and cannot be discovered from here. The four
+# shapes below are exactly the ones src/autobench/auth/mlflow.py resolves, in its precedence order,
+# so that what this script writes and what the Service does with it cannot drift apart. Every value
+# comes from a chmod-600 file or from the cluster, never from argv, and is displayed only as a hash.
+#
+# Half a shape stops the script. Falling back to the Secret because a password file was forgotten
+# would install a credential nobody chose, and the resulting failure is the silent one: reads 403,
+# token counts read 0, the run still passes.
+MLFLOW_BEARER=""
+MLFLOW_PASSWORD=""
+MLFLOW_CLIENT_SECRET=""
+MLFLOW_MODE="none"
+if [ -n "$MLFLOW_NO_AUTH" ]; then
+    MLFLOW_MODE="none (--mlflow-no-auth)"
+    log "==> MLflow declared unauthenticated (--mlflow-no-auth)"
+elif [ -n "$MLFLOW_BEARER_FILE" ]; then
+    MLFLOW_BEARER="$(cred_read_file "$MLFLOW_BEARER_FILE")" || exit 1
+    [ -n "$MLFLOW_BEARER" ] || die "${MLFLOW_BEARER_FILE} is empty"
+    MLFLOW_MODE="bearer_token (file ${MLFLOW_BEARER_FILE})"
+    log "==> MLflow bearer from ${MLFLOW_BEARER_FILE} (sha8 $(sha8 "$MLFLOW_BEARER"))"
+elif [ -n "$MLFLOW_USERNAME" ] || [ -n "$MLFLOW_PASSWORD_FILE" ]; then
+    [ -n "$MLFLOW_USERNAME" ]      || die "--mlflow-password-file needs --mlflow-username"
+    [ -n "$MLFLOW_PASSWORD_FILE" ] || die "--mlflow-username needs --mlflow-password-file (a chmod-600 file; the value must not reach argv)"
+    MLFLOW_PASSWORD="$(cred_read_file "$MLFLOW_PASSWORD_FILE")" || exit 1
+    [ -n "$MLFLOW_PASSWORD" ] || die "${MLFLOW_PASSWORD_FILE} is empty"
+    MLFLOW_MODE="openshift_oauth (user ${MLFLOW_USERNAME})"
+    log "==> MLflow OpenShift OAuth as ${MLFLOW_USERNAME} (sha8 $(sha8 "$MLFLOW_PASSWORD"))"
+    [ -n "$MLFLOW_OAUTH_URL" ] || log "    no --mlflow-oauth-url: the Service derives it from the tracking URL"
+elif [ -n "$MLFLOW_CLIENT_ID" ] || [ -n "$MLFLOW_CLIENT_SECRET_FILE" ] || [ -n "$MLFLOW_TOKEN_URL" ]; then
+    [ -n "$MLFLOW_CLIENT_ID" ]          || die "client-credentials for MLflow needs --mlflow-client-id"
+    [ -n "$MLFLOW_CLIENT_SECRET_FILE" ] || die "client-credentials for MLflow needs --mlflow-client-secret-file (a chmod-600 file)"
+    [ -n "$MLFLOW_TOKEN_URL" ]          || die "client-credentials for MLflow needs --mlflow-token-url"
+    MLFLOW_CLIENT_SECRET="$(cred_read_file "$MLFLOW_CLIENT_SECRET_FILE")" || exit 1
+    [ -n "$MLFLOW_CLIENT_SECRET" ] || die "${MLFLOW_CLIENT_SECRET_FILE} is empty"
+    MLFLOW_MODE="client_credentials (client ${MLFLOW_CLIENT_ID})"
+    log "==> MLflow client-credentials as ${MLFLOW_CLIENT_ID} (secret sha8 $(sha8 "$MLFLOW_CLIENT_SECRET"))"
 else
-    warn "secret ${MLFLOW_TOKEN_SECRET} has no .data.token — MLflow reads will fail, so every"
-    warn "         per-task token count will read 0 while the run still passes. Create it with:"
-    warn "           oc -n rossoctl-system create sa mlflow-reader"
-    warn "           oc -n rossoctl-system apply -f - <<'Y'"
-    warn "           apiVersion: v1"
-    warn "           kind: Secret"
-    warn "           metadata:"
-    warn "             name: ${MLFLOW_TOKEN_SECRET}"
-    warn "             annotations: {kubernetes.io/service-account.name: mlflow-reader}"
-    warn "           type: kubernetes.io/service-account-token"
-    warn "           Y"
+    log "==> Reading MLflow read bearer from secret ${MLFLOW_TOKEN_SECRET} (rossoctl-system)..."
+    MLFLOW_BEARER="$(kc -n rossoctl-system get secret "$MLFLOW_TOKEN_SECRET" \
+        -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+    if [ -n "$MLFLOW_BEARER" ]; then
+        MLFLOW_MODE="bearer_token (secret ${MLFLOW_TOKEN_SECRET})"
+        log "    bearer present (len ${#MLFLOW_BEARER}, sha8 $(sha8 "$MLFLOW_BEARER"))"
+    else
+        # Reported as a precheck FAILURE below, not just here: this used to be a warning, and the
+        # file was written with an empty bearer anyway.
+        warn "secret ${MLFLOW_TOKEN_SECRET} has no .data.token, and no MLflow credential was given."
+        warn "         Either create it:"
+        warn "           oc -n rossoctl-system create sa mlflow-reader"
+        warn "           oc -n rossoctl-system apply -f - <<'Y'"
+        warn "           apiVersion: v1"
+        warn "           kind: Secret"
+        warn "           metadata:"
+        warn "             name: ${MLFLOW_TOKEN_SECRET}"
+        warn "             annotations: {kubernetes.io/service-account.name: mlflow-reader}"
+        warn "           type: kubernetes.io/service-account-token"
+        warn "           Y"
+        warn "         or supply the credential of the MLflow that already exists"
+        warn "         (--mlflow-bearer-file / --mlflow-username / --mlflow-client-id),"
+        warn "         or declare it unauthenticated with --mlflow-no-auth."
+    fi
 fi
+case "$MLFLOW_INSECURE_TLS" in
+    true|false) ;;
+    *) die "--mlflow-insecure-tls must be true or false (got '${MLFLOW_INSECURE_TLS}')" ;;
+esac
 
 # --- 3. MLflow experiment/workspace, defaulted from what the collector actually writes ---
 # Reading them from the collector's export headers rather than assuming: the Service must read the
@@ -428,6 +516,18 @@ case "$COLLECTOR_CFG" in
             "the collector's traces_endpoint does not contain ${MLFLOW_HOSTPORT}" ;;
 esac
 
+# An MLflow credential is REQUIRED unless the installer declares there is none. This was a warning
+# until 2026-09-30, and the file was written with `bearer_token: ""` regardless — which produces the
+# worst failure shape we have: the Service reads 403, every per-task token count reads 0, and the run
+# still reports pass_rate 1.0. `--mlflow-no-auth` is the declaration, not the default, because "I
+# forgot the credential" and "this MLflow has no auth" must not look the same to this script.
+if [ "$MLFLOW_MODE" = "none" ]; then
+    check "MLflow credential resolved" 1 \
+        "no credential and no --mlflow-no-auth. Supply one (--mlflow-bearer-file, --mlflow-username + --mlflow-password-file, --mlflow-client-id + --mlflow-client-secret-file + --mlflow-token-url, or a populated ${MLFLOW_TOKEN_SECRET}), or declare the MLflow unauthenticated with --mlflow-no-auth"
+else
+    check "MLflow credential resolved: ${MLFLOW_MODE}" 0
+fi
+
 if [ "$PRECHECK_FAIL" -ne 0 ] && [ -z "$SKIP_PRECHECK" ]; then
     log ""
     die "${PRECHECK_FAIL} precheck failure(s) — fix the cluster, or pass --skip-precheck to write anyway"
@@ -440,43 +540,84 @@ OUT_FILE="${OUT_DIR%/}/${ISS_HOST//:/_}.json"
 
 NO_PROXY_HOSTS="127.0.0.1,localhost,${WORKLOAD_LLM_API_BASE#*://},otel-collector.rossoctl-system.svc.cluster.local,keycloak.keycloak.svc.cluster.local"
 
-jq -n \
-    --arg iss "$ISS" \
-    --arg rossoctl "$ROSSOCTL_BASE_URL" \
-    --arg scid "$KC_SERVICE_CLIENT_ID" \
-    --arg scsec "${KC_SERVICE_CLIENT_SECRET:-}" \
-    --arg suser "$KC_SERVICE_USERNAME" \
-    --arg spass "$KC_SERVICE_PASSWORD" \
-    --arg murl "$MLFLOW_URL" \
-    --arg mtok "${MLFLOW_BEARER:-}" \
-    --arg mexp "$MLFLOW_EXPERIMENT_ID" \
-    --arg mws "$MLFLOW_WORKSPACE" \
-    --arg sbucket "$S3_BUCKET" \
-    --arg sregion "$S3_REGION" \
-    --arg sak "${S3_ACCESS_KEY_ID:-}" \
-    --arg ssk "${S3_SECRET_ACCESS_KEY:-}" \
-    --arg sprefix "$S3_PREFIX" \
-    --arg tmpl "$ENDPOINT_TEMPLATE" \
-    --arg lbase "$WORKLOAD_LLM_API_BASE" \
-    --arg lmodel "$WORKLOAD_LLM_MODEL" \
-    --arg lnoproxy "$NO_PROXY_HOSTS" \
-    --arg oep "$WORKLOAD_OTEL_ENDPOINT" \
-    --argjson oinsecure "$WORKLOAD_OTEL_INSECURE" \
-    --arg runner "$WORKLOAD_AGENT_RUNNER" \
-    '{
-        iss: $iss,
-        rossoctl_base_url: $rossoctl,
-        service_credential: { client_id: $scid, client_secret: $scsec, username: $suser, password: $spass },
-        mlflow: { tracking_url: $murl, bearer_token: $mtok, experiment_id: $mexp, workspace: $mws, insecure_tls: true },
-        s3: { bucket: $sbucket, region: $sregion, access_key_id: $sak, secret_access_key: $ssk, prefix: $sprefix },
-        workload_llm: { api_base: $lbase, default_model: $lmodel, no_proxy: $lnoproxy },
-        workload_otel: { enabled: true, endpoint: $oep, protocol: "http/protobuf", insecure: $oinsecure },
-        workload_agent_runner: $runner
+# Every value reaches jq through the ENVIRONMENT, not through --arg: argv is world-readable (`ps`,
+# /proc/<pid>/cmdline) and this file carries the ROPC password, the MLflow credential and the bucket
+# keys. A process environment is readable by its own user only. Same mechanism as
+# kind-service-bootstrap.sh; this script used --arg until 2026-09-30, which published the password to
+# anyone who ran `ps` during the second jq took to run. Nothing here is ever echoed.
+#
+# The MLflow credential is emitted in ONE shape — the one resolved above — rather than as a union
+# with empty strings. `auth/mlflow.py` picks by precedence, so a leftover empty field is harmless but
+# a leftover NON-empty one silently outranks the shape the installer asked for.
+export ISS ROSSOCTL_BASE_URL KC_SERVICE_CLIENT_ID KC_SERVICE_CLIENT_SECRET \
+       KC_SERVICE_USERNAME KC_SERVICE_PASSWORD \
+       MLFLOW_URL MLFLOW_BEARER MLFLOW_USERNAME MLFLOW_PASSWORD MLFLOW_OAUTH_URL \
+       MLFLOW_CLIENT_ID MLFLOW_CLIENT_SECRET MLFLOW_TOKEN_URL \
+       MLFLOW_EXPERIMENT_ID MLFLOW_WORKSPACE MLFLOW_INSECURE_TLS MLFLOW_NO_AUTH \
+       S3_BUCKET S3_REGION S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_PREFIX \
+       ENDPOINT_TEMPLATE WORKLOAD_LLM_API_BASE WORKLOAD_LLM_MODEL NO_PROXY_HOSTS \
+       WORKLOAD_OTEL_ENDPOINT WORKLOAD_OTEL_INSECURE WORKLOAD_AGENT_RUNNER
+(
+umask 077
+jq -n '
+    {
+        iss: env.ISS,
+        rossoctl_base_url: env.ROSSOCTL_BASE_URL,
+        service_credential: {
+            client_id: env.KC_SERVICE_CLIENT_ID,
+            client_secret: (env.KC_SERVICE_CLIENT_SECRET // ""),
+            username: env.KC_SERVICE_USERNAME,
+            password: env.KC_SERVICE_PASSWORD
+        },
+        mlflow: (
+            {
+                tracking_url: env.MLFLOW_URL,
+                experiment_id: env.MLFLOW_EXPERIMENT_ID,
+                workspace: env.MLFLOW_WORKSPACE,
+                insecure_tls: (env.MLFLOW_INSECURE_TLS == "true")
+            }
+            + (if   (env.MLFLOW_BEARER   // "") != "" then { bearer_token: env.MLFLOW_BEARER }
+               elif (env.MLFLOW_PASSWORD // "") != "" then
+                   { username: env.MLFLOW_USERNAME, password: env.MLFLOW_PASSWORD }
+                   + (if (env.MLFLOW_OAUTH_URL // "") != ""
+                      then { oauth_url: env.MLFLOW_OAUTH_URL } else {} end)
+               elif (env.MLFLOW_CLIENT_SECRET // "") != "" then
+                   { client_id: env.MLFLOW_CLIENT_ID,
+                     client_secret: env.MLFLOW_CLIENT_SECRET,
+                     token_url: env.MLFLOW_TOKEN_URL }
+               elif (env.MLFLOW_NO_AUTH // "") != "" then
+                   # An unauthenticated MLflow still needs a bearer_token key, and that is not a
+                   # contradiction: mlflow_token() mints before it reads, and with no shape at all it
+                   # raises, the route catches it, and the run fails soft into an EMPTY token report.
+                   # A placeholder selects the static-bearer branch, which then sends a header the
+                   # reader ignores. kind-service-bootstrap.sh writes the same value.
+                   { bearer_token: "unused-no-auth-reader" }
+               else {} end)
+        ),
+        s3: {
+            bucket: env.S3_BUCKET, region: env.S3_REGION,
+            access_key_id: (env.S3_ACCESS_KEY_ID // ""),
+            secret_access_key: (env.S3_SECRET_ACCESS_KEY // ""),
+            prefix: env.S3_PREFIX
+        },
+        workload_llm: {
+            api_base: env.WORKLOAD_LLM_API_BASE,
+            default_model: env.WORKLOAD_LLM_MODEL,
+            no_proxy: env.NO_PROXY_HOSTS
+        },
+        workload_otel: {
+            enabled: true, endpoint: env.WORKLOAD_OTEL_ENDPOINT, protocol: "http/protobuf",
+            insecure: (env.WORKLOAD_OTEL_INSECURE == "true")
+        },
+        workload_agent_runner: env.WORKLOAD_AGENT_RUNNER
       }
       # Only set for a cross-cluster split (Service here, workloads there); when unset the Service
       # dials the co-located svc.cluster.local address.
-      + (if $tmpl == "" then {} else { mcp_endpoint_template: $tmpl, agent_endpoint_template: $tmpl } end)' \
+      + (if (env.ENDPOINT_TEMPLATE // "") == "" then {}
+         else { mcp_endpoint_template: env.ENDPOINT_TEMPLATE,
+                agent_endpoint_template: env.ENDPOINT_TEMPLATE } end)' \
     > "$OUT_FILE"
+)
 chmod 600 "$OUT_FILE"
 log ""
 log "==> Wrote ${OUT_FILE}"

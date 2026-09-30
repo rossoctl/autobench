@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preflight an AutoBench install — read-only, no cluster writes, no secret values printed.
+"""Preflight an AutoBench install — no cluster writes, no secret values printed.
 
 Run this BEFORE `helm upgrade --install` (and again after, as a post-install audit). Every check
 here corresponds to a failure we have actually shipped, and the reason there is a script at all is
@@ -12,6 +12,8 @@ that most of those failures do not look like misconfiguration:
     says 4318, and an agent pointed at 4318 hard-fails into CrashLoopBackOff
   * an MLflow the Service reads but the collector does not write to (or a mismatched experiment
     id) produces a run that PASSES with `model: "unknown"` and every token count 0
+  * a span export that 403s or fails TLS verification is logged by the exporter and swallowed, so
+    the run reports pass_rate 1.0 and publishes a ZERO-BYTE report.ndjson
   * Rossoctl below v0.8.0 accepts the Service's deploy request and silently drops fields it does
     not know, so the benchmark comes up in a shape nobody configured
 
@@ -45,6 +47,16 @@ password is supplied *and* the Secret holds one, a mismatch is a FAILURE — oth
 preflight can sit next to a Service that 502s on every deploy.
 
     python3 reference/preflight.py --password-file ~/.rossoctl-kind/benchmarker.pass
+
+The one thing this script asks the Service to do
+-----------------------------------------------
+Every check reads. The exception is the final MLflow section, which calls `GET /mlflow/health` on the
+deployed Service; that endpoint emits one synthetic trace through the real exporter and reads it
+back. It is the only way to test the *write* half, because the ingredients can all be present while
+the export still fails silently — and a failed export does not fail a run, it empties its report. The
+probe costs no LLM gateway call, and its trace cannot enter a report (reports are filtered to a run's
+own session ids; the probe's is a uuid). `--skip-mlflow-probe` turns it off, at the price of the
+install no longer being gated on the failure that is hardest to notice.
 
 Two things ROPC cannot distinguish are "the password is wrong" and "the user has no password
 credential at all" — Keycloak answers `invalid_grant` to both. With a Keycloak admin credential
@@ -591,22 +603,46 @@ def check_mlflow(rep: Report, cluster: Cluster, platform: str, namespace: str, c
                 )
             _probe_mlflow_traces(rep, cluster, namespace, collector.get("experiment_id", "0"))
         else:
+            # Absent is not automatically wrong: a kind cluster can be pointed at an MLflow that
+            # already exists (`kind-post-setup.sh --install-mlflow never`), and installing a second
+            # one beside it would split the traces between two databases. So the question is whether
+            # the collector's target exists — not whether OUR reader does. Whether it ANSWERS is the
+            # round-trip section, which is the only check that can tell.
+            if svc and cluster.exists("-n", ns, "get", "svc", svc):
+                rep.ok(
+                    "MLflow provided externally",
+                    f"no deploy/mlflow-reader, and the collector writes to {svc} in {ns} — treating "
+                    "it as pre-installed rather than missing",
+                )
+            else:
+                rep.fail(
+                    "MLflow reachable on this cluster",
+                    "no deploy/mlflow-reader, and the collector's target does not exist either — "
+                    "apply deploy/kind/mlflow-reader.yaml (or kind-post-setup.sh --install-mlflow "
+                    "always), or every token count reads 0",
+                )
+        # `mlflow` is the OIDC-gated writer the rossoctl install ships: it 401s every span export
+        # while the run still passes. Any other target is a deliberate choice — our reader, or a
+        # pre-installed MLflow — and only the round trip can judge it.
+        if svc == "mlflow":
             rep.fail(
-                "deploy/mlflow-reader present",
-                "absent — apply deploy/kind/mlflow-reader.yaml, or every token count reads 0",
+                "collector does not export to the OIDC-gated mlflow",
+                f"it exports to {endpoint or '(unset)'}; that writer 401s the export and the run "
+                "still passes — fix with reference/kind-collector-mlflow.py",
             )
-        if "mlflow-reader" not in endpoint:
-            rep.fail(
-                "collector exports to mlflow-reader",
-                f"it exports to {endpoint or '(unset)'}; the OIDC-gated writer 401s the export "
-                "and the run still passes — fix with reference/kind-collector-mlflow.py",
-            )
-        else:
+        elif "mlflow-reader" in endpoint:
             rep.ok("collector exports to mlflow-reader")
+        else:
+            rep.warn(
+                "collector exports to a non-default MLflow",
+                f"{endpoint or '(unset)'} — not the reader this repo installs. Intended when MLflow "
+                "is pre-installed; the round-trip section is then the check that matters",
+            )
     else:
         rep.skip(
-            "MLflow content probe",
-            "OpenShift MLflow is SAR-gated and cross-namespace; verified by a 1-task leg instead",
+            "MLflow content probe from inside the pod",
+            "OpenShift MLflow is SAR-gated and lives in another namespace, so there is no pod here "
+            "to exec into — the round-trip section probes it through the Service instead",
         )
 
 
@@ -1314,6 +1350,163 @@ def _discover_iss(cluster: Cluster, args: argparse.Namespace) -> str | None:
     return None
 
 
+def _service_base_url(
+    cluster: Cluster, platform: str, namespace: str, args: argparse.Namespace
+) -> tuple[str | None, str]:
+    """Where a client reaches the Service: (base_url, how). Read from the cluster, never guessed.
+
+    The chart names both the Route and the HTTPRoute after the release with `-service` trimmed off,
+    so `autobench-service` is reached at `autobench`. A hand-made Route may be called anything, so
+    OpenShift falls back to whichever Route points at the Service — matching on the target rather
+    than on a name, the same reasoning as check_mlflow_write_grant.
+    """
+    name = SERVICE_DEPLOY.removesuffix("-service")
+    if platform == "openshift":
+        obj = cluster.get_json("-n", namespace, "get", "route", name)
+        if obj is None:
+            for route in (cluster.get_json("-n", namespace, "get", "routes") or {}).get("items", []):
+                if ((route.get("spec") or {}).get("to") or {}).get("name") == SERVICE_DEPLOY:
+                    obj = route
+                    break
+        spec = (obj or {}).get("spec") or {}
+        if not spec.get("host"):
+            return None, f"no Route in {namespace} points at svc/{SERVICE_DEPLOY}"
+        scheme = "https" if spec.get("tls") else "http"
+        return f"{scheme}://{spec['host']}", f"Route/{obj['metadata']['name']}"
+    obj = cluster.get_json("-n", namespace, "get", "httproute", name)
+    hostnames = ((obj or {}).get("spec") or {}).get("hostnames") or []
+    if not hostnames:
+        return None, f"no HTTPRoute/{name} in {namespace}"
+    port = f":{args.kind_gateway_port}" if args.kind_gateway_port else ""
+    return f"http://{hostnames[0]}{port}", f"HTTPRoute/{name}"
+
+
+def _ropc_token(
+    cluster: Cluster, args: argparse.Namespace, instances: dict[str, dict] | None,
+    iss_hint: str | None,
+) -> tuple[str | None, str]:
+    """Mint a caller token, or explain why not: (token, reason). Reports nothing itself.
+
+    check_identity owns the diagnosis of a bad or missing credential and prints it in full; a second
+    verdict here would double every identity failure with a differently-worded copy of itself.
+    """
+    user, password, source, err = resolve_service_credential(args, instances)
+    if err or not password:
+        return None, err or f"no benchmarker password available ({source})"
+    iss = args.iss or os.environ.get("KC_ISS") or iss_hint or _discover_iss(cluster, args)
+    if not iss:
+        return None, "the Keycloak issuer could not be determined — pass --iss"
+    form = {
+        "client_id": os.environ.get("KC_SERVICE_CLIENT_ID", "rossoctl"),
+        "grant_type": "password",
+        "username": user or "benchmarker",
+        "password": password,
+    }
+    if os.environ.get("KC_SERVICE_CLIENT_SECRET"):
+        form["client_secret"] = os.environ["KC_SERVICE_CLIENT_SECRET"]
+    status, body = _post_form(f"{iss.rstrip('/')}/protocol/openid-connect/token", form)
+    token = body.get("access_token", "") if (status == 200 and isinstance(body, dict)) else ""
+    return (token or None), ("" if token else _ropc_cause(status, body))
+
+
+# The stages GET /mlflow/health reports, in the order it attempts them, with what a failure means.
+# `write` and `round_trip` are the two no other check in this file can reach.
+MLFLOW_STAGE_MEANING = {
+    "auth": "the Service cannot authenticate to MLflow at all",
+    "read": "the traces API refused or did not answer — every token report would be empty",
+    "write": "spans do not reach MLflow. A run will still pass and publish a ZERO-BYTE report",
+    "round_trip": "MLflow accepted the spans and dropped them — same empty report, no error anywhere",
+}
+
+
+def check_mlflow_round_trip(
+    rep: Report, cluster: Cluster, platform: str, namespace: str,
+    args: argparse.Namespace, instances: dict[str, dict] | None, iss_hint: str | None,
+) -> None:
+    """Probe MLflow through the Service, which is the only way to exercise the WRITE half.
+
+    Everything else in this file checks the ingredients: the Service object exists, a RoleBinding
+    grants the writer, the collector names an endpoint. None of them can tell you that a span
+    emitted by THIS Service, with THIS instance's credential, arrives and comes back — and that is
+    the failure that matters, because it is silent. On 2026-09-30 both ykt5 and ykt3 published a
+    zero-byte report.ndjson on a run that reported pass_rate 1.0, once from a missing TLS anchor and
+    once from a missing RBAC grant, and in both cases the read path answered 200 throughout.
+
+    Scoped to ONE instance: the caller's token carries an `iss`, and the Service probes the MLflow
+    that instance's config names. A cluster serving several instances needs the probe once per
+    credential, which `autobench-cli mlflow-health` does.
+    """
+    rep.section("MLflow round trip (the only check that reaches the write half end to end)")
+    base, how = _service_base_url(cluster, platform, namespace, args)
+    if not base:
+        rep.skip("MLflow round trip", f"{how} — the Service is not exposed yet, so it cannot be asked")
+        return
+
+    token, why = _ropc_token(cluster, args, instances, iss_hint)
+    if not token:
+        # Not a pass and not a failure: nothing was checked. Hand over the exact command, because
+        # the alternative is an installer who believes a green preflight covered this.
+        rep.skip(
+            "MLflow round trip",
+            f"{why}. Run it yourself: BM_BASE={base} BM_ISS=<issuer> "
+            "BM_PASSWORD_FILE=<chmod-600 file> autobench-cli mlflow-health",
+        )
+        return
+
+    status, body = _get_json_authed(f"{base}/mlflow/health", token, timeout=120)
+    if status == 404:
+        # The endpoint is newer than some deployed images, and a registry/route change needs a
+        # rebuild before it exists. A FAIL here would be a failure of the check, not of the cluster.
+        rep.warn(
+            "GET /mlflow/health served",
+            "404 — the deployed Service image predates this endpoint. Rebuild and redeploy to gate "
+            "the install on the write half",
+        )
+        return
+    if status == 0 and "CERTIFICATE_VERIFY" in str(body):
+        rep.warn(
+            "GET /mlflow/health served",
+            f"TLS verification against {base} failed from here, so the probe could not run. This "
+            "says nothing about MLflow — rerun as `BM_INSECURE=1 autobench-cli mlflow-health`",
+        )
+        return
+    if status != 200 or not isinstance(body, dict):
+        rep.fail("GET /mlflow/health served", f"HTTP {status}: {str(body)[:200]}")
+        return
+
+    if not body.get("tracking_url"):
+        rep.fail(
+            "MLflow configured for this instance",
+            "the Service resolves no mlflow.tracking_url, so nothing is recorded — every run will "
+            "pass and publish an empty token report. Set mlflow.tracking_url in the instance config",
+        )
+        return
+    rep.ok("MLflow tracking URL (as the Service resolves it)", body["tracking_url"])
+    rep.ok(
+        "MLflow credential mode",
+        f"{body.get('credential_mode', '?')}"
+        + (f", workspace {body['workspace']}" if body.get("workspace") else "")
+        + (", TLS verification DISABLED" if body.get("insecure_tls") else ""),
+    )
+
+    for stage, meaning in MLFLOW_STAGE_MEANING.items():
+        info = body.get(stage)
+        if info is None:
+            # Absent means not attempted — the handler stops after a failure rather than piling on.
+            continue
+        label = f"MLflow {stage.replace('_', ' ')}"
+        error = info.get("error") or "failed"
+        if info.get("ok"):
+            rep.ok(label, info.get("detail") or "")
+        elif error.startswith("not attempted"):
+            # An earlier stage already failed and the handler stopped. Reporting this one as a
+            # failure too would attach a cause to a stage that never ran — and the meaning below
+            # would then describe something that did not happen.
+            rep.skip(label, error)
+        else:
+            rep.fail(label, f"{error} — {meaning}")
+
+
 def check_service_install(rep: Report, cluster: Cluster, namespace: str, image: str | None) -> None:
     rep.section("Existing AutoBench install (post-install audit)")
     obj = cluster.get_json("-n", namespace, "get", "deploy", SERVICE_DEPLOY)
@@ -1424,6 +1617,10 @@ def main() -> int:
                     help="the plugin legs (#5-#8) are in scope, so a missing or half-configured "
                          "IBAC judge is a FAILURE rather than a warning. Without a judge those legs "
                          "still pass — with the ibac plugin inert and nothing measured")
+    ap.add_argument("--skip-mlflow-probe", action="store_true",
+                    help="skip GET /mlflow/health. That probe WRITES one synthetic trace (no LLM "
+                         "call, and it cannot enter a report — its session id is a uuid), but it is "
+                         "the only check that proves a passing run will not publish an empty report")
     ap.add_argument("--image", help="expected Service image, to compare against what is deployed")
     ap.add_argument("--chart", default=CHART_DIR, help="chart directory (default: %(default)s)")
     ap.add_argument("--skip-chart", action="store_true", help="skip the local lint/parity checks")
@@ -1478,6 +1675,13 @@ def main() -> int:
         iss_hint = next((cfg.get("iss") for cfg in (instances or {}).values() if cfg.get("iss")), None)
         check_identity(rep, cluster, instances, args, iss_hint)
         check_service_install(rep, cluster, args.namespace, args.image)
+        # Last, and through the Service: it needs the Service running, the credential resolved and
+        # the ingress up, so every one of its failure modes is already named above it.
+        if args.skip_mlflow_probe:
+            rep.section("MLflow round trip (the only check that reaches the write half end to end)")
+            rep.skip("MLflow round trip", "--skip-mlflow-probe")
+        else:
+            check_mlflow_round_trip(rep, cluster, platform, args.namespace, args, instances, iss_hint)
     if not args.skip_chart:
         check_chart(rep, args.chart, platform)
 
