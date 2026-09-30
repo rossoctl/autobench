@@ -605,10 +605,14 @@ def dash(sp):
 
 # Shared LLM gateway across the top: the agent, the tau2 user simulator and the IBAC judge all
 # call it, so drawing it once as a bar keeps three flows short and non-crossing. Which gateway is
-# per-instance config (workload_llm.api_base) with no default: OCP reaches an external ete-litellm,
-# KinD must reach the internal (vpc-int) one, and they have separate API-key tables.
+# per-instance config (workload_llm.api_base) with no default. Which one a cluster needs follows the
+# NETWORK its pods sit on, not the platform it runs: anything on the intranet — a laptop KinD on the
+# VPN and an intranet OpenShift cluster alike — needs the internal (vpc-int) gateway, and only an
+# internet-facing OpenShift cluster uses the external (vpc) one. Separate API-key tables, so a key
+# copied between them always 401s.
 gw = box(s, inch(0.45), inch(1.20), inch(12.4), inch(0.6),
-         "LLM gateway (per instance)   ·   ete-litellm   ·   external for OCP / internal vpc-int for KinD",
+         "LLM gateway (per instance)   ·   ete-litellm   ·   "
+         "external (vpc) for internet OCP / internal (vpc-int) for intranet KinD and OCP",
          STORE, STORE,
          font=12.5, font_color=WHITE, shape=MSO_SHAPE.ROUNDED_RECTANGLE)
 

@@ -37,9 +37,11 @@ import argparse
 import base64
 import html
 import mimetypes
+import os
 import pathlib
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -450,7 +452,14 @@ def render(md_path: pathlib.Path, pdf_path: pathlib.Path, chrome: str,
     title = md_path.stem
     doc = HTML_SHELL.format(title=html.escape(title), css=CSS, body=body)
 
-    with tempfile.TemporaryDirectory() as td:
+    # `ignore_cleanup_errors` because Chrome's helper processes (zygote, renderers, network
+    # service) are not our child -- killing the one we launched does not stop them writing to
+    # `profile/`, so the rmtree below used to race them and raise `Directory not empty`. That
+    # exception escaped `main()` and killed the whole batch: the .pptx pair is rendered LAST,
+    # so a crash here left docs/AutoBench.pdf silently unregenerated while the three markdown
+    # PDFs beside it were fresh. Starting a new session (below) makes the group kill reliable;
+    # this is the belt to that braces, since a leftover temp profile harms nothing.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         tmp = pathlib.Path(td)
         html_file = tmp / f"{title}.html"
         html_file.write_text(doc, encoding="utf-8")
@@ -479,7 +488,8 @@ def render(md_path: pathlib.Path, pdf_path: pathlib.Path, chrome: str,
         # on the process turns a 6-second render into a 90-second one. So watch the artifact
         # instead: as soon as it is rewritten and its size has stopped growing, we have what
         # we came for and Chrome can be killed.
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                start_new_session=True)
         deadline, last_size, done = time.monotonic() + timeout, None, False
         while time.monotonic() < deadline:
             if proc.poll() is not None:          # exited on its own; artifact is final
@@ -493,7 +503,12 @@ def render(md_path: pathlib.Path, pdf_path: pathlib.Path, chrome: str,
                 last_size = st.st_size
             time.sleep(0.3)
         if proc.poll() is None:
-            proc.kill()
+            # Kill the whole group, not just the launcher: Chrome's helpers survive a plain
+            # kill() and keep the temp profile busy (and, on a long batch, keep running).
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                proc.kill()
         proc.wait()
         if not done or not pdf_path.is_file() or pdf_path.stat().st_mtime_ns == before:
             sys.exit(f"chrome produced no PDF for {md_path} within {timeout}s")
