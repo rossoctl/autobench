@@ -69,9 +69,9 @@ latency. They are independent.
 > | 4 — one sentence appended | 7.391 s | `1NdXijnEEQw3` | 465 |
 >
 > A response `id` is minted per request, so **the same `id` coming back three times is a replay of one
-> stored response** — served by `ete-litellm.ai-models.vpc.res.ibm.com`, not by anything in the agent.
+> stored response** — served by the **external** LiteLLM gateway, not by anything in the agent.
 > The same test inside a KinD agent pod against the *other* gateway
-> (`ete-litellm.ai-models.vpc-int.res.ibm.com`, a separate deployment with its own key table) behaves
+> (the **internal** deployment — a separate LiteLLM with its own key table) behaves
 > identically: 6.283 s then 0.561 s and 0.595 s on one `id`, a new body 5.067 s on a new one. **Both
 > our gateways do this.** **The TTL is ~10 minutes**, measured 2026-09-15 by survival curve on the
 > internal gateway — 11 nonce prompts seeded together, each probed **exactly once** at its own age:
@@ -165,10 +165,9 @@ every benchmark (gsm8k, tau2, appworld) and is not concentrated in one leg shape
 
 It is a *latency* interaction, not a misconfiguration — the endpoint answers `401` in 0.19 s warm from
 both the host and inside the agent pod, and 48 of 50 tasks in leg #3 succeeded against the same
-endpoint in the same process. The KinD gateway is VPN-routed
-(`ete-litellm.ai-models.vpc-int.res.ibm.com`, 9.47.x), each task opens a *fresh* connection with no
-pooling, and a cold DNS+TCP+TLS handshake measured 3.1 s from inside the pod. OpenShift never trips it
-because its path to the gateway is fast.
+endpoint in the same process. The KinD gateway here is the **internal** deployment, reached across a
+VPN; each task opens a *fresh* connection with no pooling, and a cold DNS+TCP+TLS handshake measured
+3.1 s from inside the pod. OpenShift never trips it because its path to the gateway is fast.
 
 ⚠️ **Two figures previously quoted here came from an earlier, partial KinD run and are withdrawn.**
 That run reported 11 of 66 tasks in its first four legs, and leg #5 (`auth-only`, sidecar) losing 3 of

@@ -418,12 +418,15 @@ this is *agent-side* config living in the instance file, distinct from `PUT /con
 manages the Service's own MLflow/S3.
 
 **Targeting the LLM endpoint (required `workload_llm.api_base`).** There is deliberately **no built-in
-default LLM gateway**. Every deployment target reaches a different one and they are not
-interchangeable: ykt2/ykt3 use *external* endpoints, while KinD must use ETE's *internal* VPC endpoint
-`https://ete-litellm.ai-models.vpc-int.res.ibm.com` — note **`vpc-int`**, not `vpc`. The external
-clusters cannot reach the internal host, and the internal host is only routable where the VPN carries
-the internal `9.x` range (the `vpc` form resolves into IBM Cloud ranges the split tunnel does not
-route, so it fails from a laptop and from KinD alike).
+default LLM gateway**. There are two separate LiteLLM deployments — an **internal** one and an
+**external** one, with separate key tables and separate completion caches — and which one a cluster
+must use follows where its pods sit on the **network**, not what platform it runs: an intranet
+OpenShift cluster needs the internal gateway, exactly as a laptop KinD on the VPN does, while a
+cluster off the intranet needs the external one. The internal host is only routable where the VPN
+carries the intranet's own address range; the external host resolves into public cloud
+load-balancer ranges that a split tunnel does not route, so *it* is the one that fails from inside.
+The choice is therefore declared, never inferred — `LLM_PROFILE=intranet|internet`, see
+`docs/ADMIN_GUIDE.md` §3.5.
 
 A baked-in default was removed because it is wrong for every instance while still looking plausible,
 and a wrong-but-syntactically-valid base is *worse* than none: the workload deploys happily and then
