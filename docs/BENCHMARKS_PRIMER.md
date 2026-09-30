@@ -131,14 +131,22 @@ current tau2-bench figure or leaderboard entry. Like the domain, **the version i
 artifact**; it is only readable out of the image. The one thing the pin buys is reproducibility — a
 tag does not drift when `:latest` is re-pulled.
 
-> **The user simulator's own model calls are cached inside the MCP pod.** `tau2_shim.py` re-enables
-> the Exgentic LiteLLM disk cache at import — explicitly undoing τ²-bench's own decision to disable
-> it — and nothing in the `exgentic mcp` path turns it back off, because the `EXGENTIC_LITELLM_CACHING`
-> flip lives in the *agent* classes and our tau2 `tool_env` does not set it. This cannot touch any
-> published token or latency figure, because simulator calls were never in our telemetry to begin
-> with. What it plausibly does is make the simulator's unmeasured cost partly un-*incurred*, and
-> reduce turn-by-turn diversity across the tasks of one leg, since the pod outlives the task. Effect
-> on pass rate is unsigned and **unmeasured** — this is read off the code path, not out of a run.
+> **The user simulator's own model calls used to be cached inside the MCP pod, and that cache broke
+> tasks outright.** `tau2_shim.py` re-enables the Exgentic LiteLLM disk cache at import — explicitly
+> undoing τ²-bench's own decision to disable it — so simulator completions landed in a SQLite cache
+> shared by every session for the pod's whole life. As of litellm 1.103.1 any *hit* on that cache
+> raises `ModuleNotFoundError: No module named 'soundfile'` from inside litellm's cache-hit
+> bookkeeping, tau2 aborts ~70 ms in, and because the MCP action executor never learns, the task
+> surfaces 600 s later as `Failed to execute action: timed out`. The pod's own startup primes the
+> cache on **task 0** (it opens a dummy session on the first task to enumerate action types), so task
+> 0 failed on every run; on a re-used pod, so did every task a previous run had completed. Measured
+> on a 4-task leg: tasks 0 and 1 errored at 600 s, tasks 2 and 3 ran normally.
+>
+> Our tau2 `tool_env` therefore pins **`EXGENTIC_LITELLM_CACHING=false`** as of 2026-09-30, which
+> makes the broken code path unreachable. The fingerprint of an affected run is `llm_count 1`,
+> `llm_input_tokens 5054` and `tool_total_s ≈ 600.1` on the errored tasks. Pass rates from the
+> 2026-09-30 tau2 runs need a **`total − 1`** denominator (fresh pod) and should not be compared with
+> anything; the matrices in `docs/results/` predate the litellm version that introduced this.
 
 **The key architectural difference.** tau2 introduces a **second LLM — a user simulator** that plays
 the customer. So each task involves two models talking to each other, plus tool calls. That single
