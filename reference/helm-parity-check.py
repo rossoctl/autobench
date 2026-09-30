@@ -127,9 +127,14 @@ def main() -> int:
            "judge objects added", failures)
 
     # The two Jobs are the lifecycle contract the chart promises: one on install, one on uninstall.
-    hooks = {k: judge[k]["metadata"]["annotations"]["helm.sh/hook"] for k in judge if k.startswith("Job/")}
-    expect(hooks, {"Job/ibac-judge-config-apply": "post-install,post-upgrade",
-                   "Job/ibac-judge-config-restore": "pre-delete"}, "judge hook annotations", failures)
+    # Their cleanup policies differ on purpose — apply's Job survives success so its log stays
+    # readable, restore's cannot, because after an uninstall nothing else would ever delete it.
+    hooks = {k: (judge[k]["metadata"]["annotations"]["helm.sh/hook"],
+                 judge[k]["metadata"]["annotations"]["helm.sh/hook-delete-policy"])
+             for k in judge if k.startswith("Job/")}
+    expect(hooks, {"Job/ibac-judge-config-apply": ("post-install,post-upgrade", "before-hook-creation"),
+                   "Job/ibac-judge-config-restore": ("pre-delete", "before-hook-creation,hook-succeeded")},
+           "judge hook + cleanup annotations", failures)
 
     # Byte-identical proxy code in the chart and in the raw manifest, so the two install paths cannot
     # drift into serving different judges.

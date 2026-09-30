@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-09-30T02:52:21Z
+**Last modified:** 2026-09-30T03:02:07Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -772,8 +772,13 @@ Verify both directions:
 ```bash
 kubectl -n rossoctl-system get cm rossoctl-platform-config \
   -o jsonpath='{.data.config\.yaml}' | grep -A6 '^ibac:'      # judgeEndpoint/judgeModel now set
-kubectl -n rossoctl-system logs job/ibac-judge-config-apply   # what it recorded as the prior pair
+kubectl -n rossoctl-system get cm ibac-judge-prior -o jsonpath='{.data}'   # the recorded prior pair
+kubectl -n rossoctl-system logs job/ibac-judge-config-apply   # and how it got there
 ```
+
+The apply Job is **not** deleted on success — its log is the only account of what the fields said at
+the moment of the patch, and the next upgrade replaces it. The restore Job is the opposite: it
+deletes itself on success, because after an uninstall nothing else ever would.
 
 Enforcement itself is proven by **counting judge calls**, never by a pass rate — an inert plugin and
 a working one produce the same pass rate. See `docs/PLUGIN_OVERHEAD.md`.

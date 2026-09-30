@@ -12,8 +12,8 @@ specific reason: Helm deletes a release's resources AFTER its pre-delete hooks r
 Job still has its permissions at the moment it needs them. Hook-annotated RBAC would either be
 deleted too early or survive the uninstall as orphans.
 
-The Role is scoped by resourceName to exactly two ConfigMaps. It cannot read a Secret, and it cannot
-touch any other platform object.
+The Role is scoped by resourceName to exactly two ConfigMaps and one Job. It cannot read a Secret,
+and it cannot touch any other platform object.
 */}}
 {{- $ns := .Release.Namespace }}
 {{- $judge := include "autobench.judgeName" . }}
@@ -48,6 +48,12 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["create"]
+  # The restore hook's last act is to delete the apply hook's Job, which survives its own success so
+  # its log stays readable while the release lives. Nothing else would ever clean it up.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    resourceNames: [{{ printf "%s-apply" $hook | quote }}]
+    verbs: ["delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -75,7 +81,18 @@ metadata:
 data:
   platform-config-ibac.py: |
 {{ .Files.Get "files/platform-config-ibac.py" | indent 4 }}
-{{- range $mode, $spec := dict "apply" (dict "hook" "post-install,post-upgrade" "weight" "5") "restore" (dict "hook" "pre-delete" "weight" "-5") }}
+{{- /*
+The two Jobs clean up differently, and the asymmetry is deliberate.
+
+`apply` keeps its Job after success: the log is the only record of what the prior ibac pair was at the
+moment of the patch, and `before-hook-creation` already stops them accumulating — the next upgrade
+replaces it. `restore` must delete itself on success, because by then the release is gone and a hook
+resource is not a release resource: nothing else would ever remove it.
+
+Neither deletes on FAILURE, either way. A failed hook's log is the only thing that explains why, and
+for `restore` the failure also blocks the uninstall on purpose.
+*/}}
+{{- range $mode, $spec := dict "apply" (dict "hook" "post-install,post-upgrade" "weight" "5" "cleanup" "before-hook-creation") "restore" (dict "hook" "pre-delete" "weight" "-5" "cleanup" "before-hook-creation,hook-succeeded") }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -87,9 +104,7 @@ metadata:
   annotations:
     "helm.sh/hook": {{ $spec.hook }}
     "helm.sh/hook-weight": {{ $spec.weight | quote }}
-    # A FAILED Job is left behind on purpose — its log is the only record of why, and a failed
-    # pre-delete hook blocks the uninstall rather than silently orphaning the platform's fields.
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-delete-policy": {{ $spec.cleanup }}
 spec:
   backoffLimit: 2
   # Bounded so a wedged hook cannot hold an uninstall open indefinitely.
@@ -116,6 +131,8 @@ spec:
               value: {{ printf "%s-prior" $judge | quote }}
             - name: JUDGE_APP
               value: {{ $judge | quote }}
+            - name: APPLY_JOB
+              value: {{ printf "%s-apply" $hook | quote }}
             # Derived, never configured: it is this chart's own Service, so it cannot disagree with
             # the Service actually rendered. The plugin gets an in-cluster URL with no credential in
             # it — the key stays in the proxy's Secret.

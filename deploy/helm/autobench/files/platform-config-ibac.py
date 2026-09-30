@@ -174,6 +174,20 @@ def restore():
         sys.exit(f"[ibac-{MODE}] delete configmap/{PRIOR}: HTTP {status}: {resp.get('message')}")
     log(f"restored and removed configmap/{PRIOR}")
 
+    # Last act: remove the apply hook's Job. It deliberately SURVIVES its own success so its log stays
+    # readable for the life of the release — but a hook resource is not a release resource, so an
+    # uninstall would leave it behind as the one piece of litter this whole design exists to avoid.
+    # Background propagation so its pod goes too. This Job deletes itself via hook-delete-policy.
+    apply_job = os.environ.get("APPLY_JOB")
+    if apply_job:
+        status, resp = api("DELETE", f"/apis/batch/v1/namespaces/{NS}/jobs/{apply_job}",
+                           {"propagationPolicy": "Background"})
+        if status not in (200, 202, 404):
+            # Not fatal: the platform's fields are already back, which is the part that matters.
+            log(f"WARNING: could not delete job/{apply_job}: HTTP {status}: {resp.get('message')}")
+        elif status != 404:
+            log(f"removed job/{apply_job}")
+
 
 if MODE == "apply":
     apply()
