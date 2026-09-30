@@ -30,7 +30,8 @@
       "provider": "bedrock",
       "litellm_model": "bedrock/us.anthropic.claude-sonnet-5",
       "input_per_1m": 1.52,
-      "output_per_1m": 7.6
+      "output_per_1m": 7.6,
+      "_role_2026_09_30": "The INTRANET (vpc-int) tau2 role, counterpart to aws/claude-sonnet-4-6 on vpc: no Sonnet ID is served by both gateways, and this is the only Sonnet vpc-int carries that is priced here. It is also registry.py's own model_override for tau2, so INTRANET_LLM_MODEL_TAU2 restates what that pod resolves anyway -- set explicitly because the same variable is the only lever that displaces the override on vpc, where it is NOT served. Consequence: tau2 legs #9/#10 run a different model per platform at ~half the price of the vpc side (1.52/7.60 vs 3.00/15.00), so tau2 DOLLAR figures do not compare across clusters even when the token counts do."
     },
     "openai/gemini-2.5-pro": {
       "public_name": "gemini-2.5-pro",
@@ -47,7 +48,8 @@
       "output_per_1m": 1.2,
       "_added_2026_09_29": "Replaces Azure/gpt-5-mini as the INSTANCE DEFAULT, so it prices gsm8k legs #1-#3 and #5-#8. Cheaper than the model it replaces on both directions (0.25/2.00), so a gsm8k leg's cost is not directly comparable with the v1.28 figure even at identical token counts.",
       "_also": "Also the IBAC judge model from 2026-09-29 (rossoctl-platform-config ibac.judgeModel), taking over from Azure/gpt-4.1. Judge calls are NOT in report.ndjson -- see gen-cost-analysis.py's judge section. The judge is now an order of magnitude cheaper per call than it was, which moves the plugin-overhead cost figures on its own, independently of any change in call COUNT.",
-      "_backend_not_read": "`/model/info` is admin-only (403) for an ['llm_api_routes'] key, so which Azure deployment sits behind this alias was not read. `litellm_model` is therefore omitted rather than guessed."
+      "_backend_not_read": "`/model/info` is admin-only (403) for an ['llm_api_routes'] key, so which Azure deployment sits behind this alias was not read. `litellm_model` is therefore omitted rather than guessed.",
+      "_role_2026_09_30": "Not used for tau2: registry.py records that tau2 needs a Sonnet-class model (the old default gpt-5-mini scored ~0.1 on the same 10 tasks; the slower reasoning model gpt-5 gave 6/10 'timed out'), and the vpc/vpc-int Sonnets carry that role instead. NOTE this is registry.py's recorded measurement, not something re-measured in 2026-09-30's tau2 runs -- those hit an unrelated MODEL-INDEPENDENT failure (see aws/claude-sonnet-4-6's _tau2_task0_2026_09_30), so they say nothing either way about luna's tau2 capability."
     },
     "openai/azure/gpt-5.6-terra": {
       "public_name": "azure/gpt-5.6-terra",
@@ -55,7 +57,8 @@
       "input_per_1m": 2.0,
       "output_per_1m": 12.0,
       "_added_2026_09_29": "Replaces Azure/gpt-4.1 in the gsm8k model-swap leg (#4). Input matches what it replaces exactly (2.00); output is 12.00 against 8.00. Against the new default it is 10x input and 10x output, so it still plays the 'dearer rung' role the leg exists to measure -- but the RATIO changed (gpt-4.1 was 8x/4x over gpt-5-mini), which is the figure to re-derive rather than carry over.",
-      "_backend_not_read": "As above: 403 on /model/info."
+      "_backend_not_read": "As above: 403 on /model/info.",
+      "_role_2026_09_30": "Also the INTRANET (vpc-int) appworld role, because vpc-int serves no gemini. Priced identically to gcp/gemini-3.1-pro-preview (2.00/12.00), so appworld COST comparisons across platforms still hold even though the token counts belong to different models. Note this model now plays two roles on the intranet profile -- the gsm8k swap leg #4 and appworld #11/#12."
     },
     "openai/aws/claude-sonnet-4-6": {
       "public_name": "aws/claude-sonnet-4-6",
@@ -63,7 +66,8 @@
       "input_per_1m": 3.0,
       "output_per_1m": 15.0,
       "_added_2026_09_29": "Replaces aws/claude-sonnet-5 on the tau2 legs (#9, #10) -- the only Sonnet the catalogue now carries, and a LOWER version number than the withdrawn one. Roughly 2x the price it replaces (1.52/7.60), so tau2 cost figures move up even where token counts hold.",
-      "_backend_not_read": "As above: 403 on /model/info."
+      "_backend_not_read": "As above: 403 on /model/info.",
+      "_tau2_task0_2026_09_30": "tau2 TASK 0 IS BROKEN UPSTREAM, on the MCP side and independently of the model -- so it is not a pricing property of this model, only the row it was measured on. ykt5 2026-09-30, 4 attempts / 2 models: task 0 errors EVERY time with 'Failed to run mcp call {error: Failed to execute action: timed out}' after llm_count 1 and tool_total_s 600.1 -- twice on azure/gpt-5.6-luna, twice on this model. Other tasks pass alongside it (1/2/3 at 3/6/20 llm calls). Two alternatives were ruled out rather than argued: (1) NOT a bad task -- v1.28 leg #9 passed task 0 on 2026-09-15 with 92670 in / 12 calls, and the task set is pinned to upstream tag v0.1.3; (2) NOT the ETE gateway stall biting the MCP pod's first user-simulator call -- a 4-task run at parallelism 4 started all four sessions at the same instant (20:59:05.199) and task 0 alone still failed, so nothing about being first explains it. The 600 s cap is not ours either: we send benchmark.action_timeout=1000 (echoed by the MCP pod) and the Service task timeout was 1200 on these runs. Image was exgentic-mcp-tau2@sha256:1846bdc82802d6327684c3ed45e653d7692437030b75909d408a992caff6ad41 (:latest, so it moved since v1.28); agent was exgentic-a2a-tool_calling@sha256:6f70f41fa9e9871bf5cf545548e19de812e454768e0f32dbdec7506b65008914. CONSEQUENCE FOR PRICING: task selection is deterministic from 0, so every tau2 leg now carries one guaranteed errored task -- use a (total - 1) denominator for tau2 pass rates until this clears, and count its ~4.2k tokens as real spend that bought no verdict."
     },
     "openai/gcp/gemini-3.1-pro-preview": {
       "public_name": "gcp/gemini-3.1-pro-preview",
