@@ -608,11 +608,11 @@ def dash(sp):
 # per-instance config (workload_llm.api_base) with no default. Which one a cluster needs follows the
 # NETWORK its pods sit on, not the platform it runs: anything on the intranet — a laptop KinD on the
 # VPN and an intranet OpenShift cluster alike — needs the internal (vpc-int) gateway, and only an
-# internet-facing OpenShift cluster uses the external (vpc) one. Separate API-key tables, so a key
+# Internet-facing OpenShift cluster uses the external (vpc) one. Separate API-key tables, so a key
 # copied between them always 401s.
 gw = box(s, inch(0.45), inch(1.20), inch(12.4), inch(0.6),
          "LLM gateway (per instance)   ·   ete-litellm   ·   "
-         "external (vpc) for internet OCP / internal (vpc-int) for intranet KinD and OCP",
+         "external (vpc) for Internet OCP / internal (vpc-int) for intranet KinD and OCP",
          STORE, STORE,
          font=12.5, font_color=WHITE, shape=MSO_SHAPE.ROUNDED_RECTANGLE)
 
