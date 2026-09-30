@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-09-30T04:15:29Z
+**Last modified:** 2026-09-30T14:39:30Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -48,6 +48,7 @@ install, §6 is the only verification that means anything.
   - [3.4 KinD and OpenShift differ — and the differences fail silently](#34-kind-and-openshift-differ--and-the-differences-fail-silently)
   - [3.5 The LLM gateway: two named profiles](#35-the-llm-gateway-two-named-profiles)
   - [3.6 The `benchmarker` password: how it gets in, and how it is checked](#36-the-benchmarker-password-how-it-gets-in-and-how-it-is-checked)
+  - [3.7 MLflow: already there, or installed by us — and how you find out which](#37-mlflow-already-there-or-installed-by-us--and-how-you-find-out-which)
 - [4. The instance-config Secret](#4-the-instance-config-secret)
 - [5. Installing with Helm](#5-installing-with-helm)
   - [5.1 OpenShift](#51-openshift)
@@ -166,9 +167,12 @@ experiment nothing writes to.
 
 ### 2.4 The preflight script
 
-`reference/preflight.py` checks every row of §2.3 against the live cluster. It is **read-only** —
-no writes, no deploys — and prints every credential as an 8-char SHA-256 prefix unconditionally,
-with no attempt to decide which values are sensitive.
+`reference/preflight.py` checks every row of §2.3 against the live cluster. It makes **no cluster
+writes and no deploys**, and prints every credential as an 8-char SHA-256 prefix unconditionally,
+with no attempt to decide which values are sensitive. It is read-only with exactly one exception, the
+final MLflow section: that asks the deployed Service for `GET /mlflow/health`, which writes one
+synthetic trace to MLflow (§3.7). `--skip-mlflow-probe` turns it off, at the price of the install no
+longer being gated on the failure that is hardest to notice.
 
 ```bash
 python3 reference/preflight.py --platform kind      --context kind-rossoctl
@@ -178,10 +182,10 @@ python3 reference/preflight.py --platform openshift --context <ykt3-ctx> \
 python3 reference/preflight.py --json                                # machine-readable
 ```
 
-Exit status is 0 when nothing FAILed; warnings do not fail the run. Twelve sections, in the order
+Exit status is 0 when nothing FAILed; warnings do not fail the run. Thirteen sections, in the order
 a request travels: tooling, cluster reachability, Rossoctl version and CRDs, namespaces, workload
-secrets, the collector, MLflow, ingress, the instance config, identity, an audit of any existing
-install, and the local chart.
+secrets, the collector, MLflow, ingress, the instance config, identity, the MLflow round trip, an
+audit of any existing install, and the local chart.
 
 ```
 Workload secrets (per team namespace)
@@ -196,6 +200,14 @@ OTEL collector (the write half of the telemetry chain)
 MLflow (the read half — this is what turns a run into a token report)
   ok    MLflow traces API answers 200 — experiment 0, 1 trace(s) visible
   ok    collector exports to mlflow-reader
+...
+MLflow round trip (the only check that reaches the write half end to end)
+  ok    MLflow tracking URL (as the Service resolves it) — http://mlflow-reader.rossoctl-system.svc.cluster.local:5000
+  ok    MLflow credential mode — bearer_token
+  ok    MLflow auth — bearer obtained via bearer_token
+  ok    MLflow read — traces API answered; experiment 0 is non-empty
+  ok    MLflow write — probe spans exported
+  ok    MLflow round trip — probe trace readable after 2 attempt(s)
 ...
 47 ok, 0 warning(s), 0 failure(s) — ready to install
 A clean preflight is necessary, not sufficient: only a 1-task leg with a non-zero token row proves the whole chain.
@@ -586,6 +598,77 @@ The causes and their fixes:
   alongside the Rossoctl-version and gateway-profile checks.
 - **`preflight.py`** is the read-only pre-`helm` gate, and the only one with the admin tier.
 
+### 3.7 MLflow: already there, or installed by us — and how you find out which
+
+MLflow is the one dependency whose *existence* varies by cluster rather than by configuration. On
+OpenShift it is normally **pre-installed** — `rossoctl-deps` or RHOAI puts it there, SAR-gated on
+`:8443`, owned by whoever installed it. On KinD it normally has to be **installed by us**, because
+the MLflow `rossoctl-deps` ships runs mlflow-oidc-auth and rejects both the collector's export and
+the Service's read (§8). Neither is a rule: a KinD cluster on an Internet server may well be pointed
+at an MLflow that already exists, and then installing a second one is wrong.
+
+So the install path **checks** instead of assuming:
+
+| script | what it does now |
+|---|---|
+| `kind-post-setup.sh --install-mlflow auto\|always\|never` | `auto` (the default) applies `deploy/kind/mlflow-reader.yaml` only when nothing is already serving `MLFLOW_URL`; it logs which way it went and why. `never` is for a cluster whose MLflow is external — the collector is still repointed at `MLFLOW_URL`, which is the half that actually matters |
+| `ocp-service-bootstrap.sh` | resolving to **no MLflow credential at all is a precheck failure**, not the warning it used to be. It previously wrote `bearer_token: ""` and let the install proceed |
+| `autobench-cli mlflow-health` | the gate. One authenticated `GET /mlflow/health` against the deployed Service |
+| `preflight.py` | calls that endpoint for both platforms; `--skip-mlflow-probe` opts out |
+
+#### The credential is supplied, not discovered
+
+A pre-installed MLflow is authenticated by whoever installed it, so its credential cannot be read off
+the cluster the way the experiment id and workspace can (§2.3). `ocp-service-bootstrap.sh` therefore
+exposes all four shapes the Service itself resolves, in this precedence — pick **one**:
+
+| flag(s) | instance config | for |
+|---|---|---|
+| `--mlflow-bearer-file F` | `bearer_token` | a pre-obtained bearer, read in-process from a `600`/`400` file |
+| `--mlflow-token-secret S` (the default, `mlflow-reader-token`) | `bearer_token` | a ServiceAccount-token Secret in `rossoctl-system` |
+| `--mlflow-username U --mlflow-password-file F` `[--mlflow-oauth-url URL]` | `username` + `password` | the OpenShift OAuth challenge flow an RHOAI oauth-proxy expects |
+| `--mlflow-client-id ID --mlflow-client-secret-file F --mlflow-token-url URL` | `client_id` + `client_secret` | an MLflow fronted by Keycloak |
+| `--mlflow-no-auth` | the ignored `bearer_token` placeholder of §4 | declaring the MLflow unauthenticated — what KinD's `mlflow-reader` is, and the only way to install without a real credential |
+
+Values come from files or the cluster, **never argv**, and are displayed only as an 8-char SHA-256
+prefix, the same discipline as §3.6. Half a shape is an error rather than a fallback:
+`--mlflow-username` without `--mlflow-password-file` stops the script, because quietly reverting to
+the token Secret would install a credential nobody chose. `kind-service-bootstrap.sh` takes
+`--mlflow-no-auth` with the same spelling; without it, it still *infers* no-auth from an
+`mlflow-reader` tracking URL, and now says so in the log.
+
+#### Why the check is a round trip
+
+`GET /mlflow/health` is authenticated as `benchmarker`, runs **four independent stages**, and always
+answers 200 — the verdict is in the body, because "the probe could not run" and "MLflow is broken"
+are different findings:
+
+| stage | what it proves |
+|---|---|
+| `auth` | a bearer could be minted at all, through `auth/mlflow.py` — the Service's own resolution, not a re-implementation. `credential_mode` names which shape was selected: `bearer_token`, `openshift_oauth`, `client_credentials` or `none`. A declared no-auth MLflow reads as `bearer_token`, because that is what the placeholder selects; `none` means nothing was configured, and it fails |
+| `read` | the traces API answers. This is the half a token report reads |
+| `write` | the OTLP exporter posted one synthetic trace **without logging an error** |
+| `round_trip` | that trace came back out of the read side again |
+
+The last two are the reason this exists. The two failures that shipped zero-byte reports on
+2026-09-30 (§3.4) were both on the **write** half, and the read path answered 200 throughout — reads
+go through `httpx` honouring `insecure_tls`, while the span exporter is a different library needing a
+real trust anchor and an RBAC grant. A read-only check would have passed on both clusters. Worse, the
+OTLP exporter never raises: `BatchSpanProcessor` runs it on a worker thread and logs the failure,
+which is why the endpoint captures the `opentelemetry` logger for the probe's duration and returns
+`CERTIFICATE_VERIFY_FAILED` or `403 PERMISSION_DENIED` to you instead of leaving it in a pod log.
+
+```sh
+BM_BASE=https://autobench-rossoctl-system.apps.example.com \
+BM_PASSWORD_FILE=~/.rossoctl-ykt5/benchmarker.pass \
+  uv run autobench-cli mlflow-health          # exit 8 = not healthy; --no-round-trip reads only
+```
+
+The probe **cannot pollute a report**, which is what makes it safe to run against a live install:
+every report is filtered to its own run's session ids, and the probe's is a fresh uuid. It also costs
+no LLM gateway call. It does write one trace per call, so `?round_trip=false` exists for a cheap
+read-only check.
+
 ## 4. The instance-config Secret
 
 One JSON file per issuer, keyed by `iss`, mounted read-only at `/etc/service/instances`. **No
@@ -636,8 +719,11 @@ Four properties of these scripts are load-bearing:
   rather than lose them — losing them is silent, and costs a run's artifacts.
 - **A no-auth MLflow still needs a `bearer_token`,** which is not a contradiction: the Service
   mints a token *before* it reads, and with neither a bearer nor client-credentials the token
-  helper raises, the route catches it, and the run fails soft into an empty token report. For the
-  KinD reader the scripts emit an ignored placeholder.
+  helper raises, the route catches it, and the run fails soft into an empty token report. Both
+  bootstrap scripts therefore emit the same ignored placeholder, `unused-no-auth-reader`, when the
+  MLflow is declared unauthenticated (§3.7) — it is what KinD's reader gets. Writing *no* credential
+  key is the one thing that does not work, and `GET /mlflow/health` reports it as a failed `auth`
+  stage rather than leaving you to infer it from an empty report.
 
 ## 5. Installing with Helm
 
@@ -877,7 +963,7 @@ not emit spans for. Preflight separates the first three; only a run separates th
 | symptom | actual cause | how to confirm |
 |---|---|---|
 | run passes, every token count 0, `model: "unknown"` | refused MLflow read, wrong experiment id, unreachable collector, or the wrong `workload_agent_runner` | §2.4, then §6 |
-| run passes `pass_rate 1.0`, and `report.ndjson`/`token_report.ndjson` are **zero bytes** — only 4 of the 8 artifacts carry anything | the Service's *own* span export failed, so MLflow never got the root `Agent.Session` span and the trace was dropped. On OpenShift, one of the two halves in §3.4: no service-CA trust anchor (TLS) or no trace-writer RoleBinding (403) | `preflight.py` reports both halves; in the Service log, `CERTIFICATE_VERIFY_FAILED` vs `403 PERMISSION_DENIED` distinguishes them |
+| run passes `pass_rate 1.0`, and `report.ndjson`/`token_report.ndjson` are **zero bytes** — only 4 of the 8 artifacts carry anything | the Service's *own* span export failed, so MLflow never got the root `Agent.Session` span and the trace was dropped. On OpenShift, one of the two halves in §3.4: no service-CA trust anchor (TLS) or no trace-writer RoleBinding (403) | `autobench-cli mlflow-health` (§3.7) — its `write` stage names the cause where the run named nothing, and it is the only check that reproduces this without a run. `preflight.py` reports both halves separately as well |
 | the run publishes **no artifacts at all**, `botocore … SSLError: unable to get local issuer certificate` | `REQUESTS_CA_BUNDLE` was used for the service CA instead of `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`; botocore honours it too and the S3 client can no longer validate AWS's cert | §3.4 |
 | one task errors `A2A task ended in state 'failed': Error: timed out` at ~30 s, with `llm_count: 0` | the LLM gateway accepted the connection and never answered. The agent's `service` runner caps a single `react` at a hard-coded **30 s** with no retry (`docker` and `venv` allow 600 s), so a stalled completion becomes a failed task | probe the gateway from inside the agent pod: a stall is a *read* timeout after TLS succeeds, and it also hits the unauthenticated `GET /public/litellm_model_cost_map`, which proves it is not the model |
 | `/deploy` returns **502** | Keycloak or the operator returned 403 — the service credential no longer logs in, or the user lacks the `rossoctl-operator` realm role. The install itself looks healthy: the password is only used per deploy | `preflight.py --password-file …` (§3.6); then the role mapping in the realm |

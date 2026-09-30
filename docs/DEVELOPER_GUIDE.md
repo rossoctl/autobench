@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-30T01:17:56Z
+**Last modified:** 2026-09-30T14:39:30Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -46,6 +46,7 @@ multi-turn) on the `ykt3` and `kind-rossoctl` clusters.
   - [4.4 What each benchmark bakes in, and what it needs from you](#44-what-each-benchmark-bakes-in-and-what-it-needs-from-you)
   - [4.5 MLflow + OTEL collector (optional, for reports)](#45-mlflow--otel-collector-optional-for-reports)
 - [5. Instance-specific Service config (`/config`)](#5-instance-specific-service-config-config)
+  - [5.1 `GET /mlflow/health` — is the MLflow you just configured actually usable?](#51-get-mlflowhealth--is-the-mlflow-you-just-configured-actually-usable)
 - [6. Benchmark lifecycle](#6-benchmark-lifecycle)
   - [6.0 Discover what's available](#60-discover-whats-available)
   - [6.1 Deploy (create the MCP tool + A2A agent)](#61-deploy-create-the-mcp-tool--a2a-agent)
@@ -99,7 +100,7 @@ Two consequences shape everything below:
 | Group | Endpoints | Auth |
 |---|---|---|
 | Identity | `GET /hello`, `GET /healthz` (public, unschematized) | caller JWT |
-| Config | `GET /config`, `PUT /config` | **benchmarker only** |
+| Config | `GET /config`, `PUT /config`, `GET /mlflow/health` | **benchmarker only** |
 | Discovery | `GET /namespaces`, `GET /benchmarks`, `GET /benchmarks/{name}` | caller JWT |
 | Raw workloads | `GET/POST /agents`, `GET/DELETE /agents/{ns}/{name}`, same for `/tools` | caller JWT |
 | Benchmark deploy | `POST /benchmarks/{name}/deploy`, `DELETE /benchmarks/{name}/deploy`, `GET /benchmarks/{name}/status` | caller JWT |
@@ -766,6 +767,56 @@ curl -s -o /dev/null -w '%{http_code}\n' -X PUT "$SVC/config" \
   -d '{"hf-secret": "..."}'          # -> 422
 ```
 
+### 5.1 `GET /mlflow/health` — is the MLflow you just configured actually usable?
+
+Same auth as `/config`, and the natural follow-up to it: a `PUT` that returns 200 proves the config
+parsed, not that MLflow accepts it. This probes the effective config in four independent stages —
+`auth`, `read`, `write`, `round_trip` — and **always answers 200**, because "the probe could not run"
+and "MLflow is broken" are different findings and an HTTP status cannot carry both.
+
+```bash
+curl -s "$SVC/mlflow/health" -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+curl -s "$SVC/mlflow/health?round_trip=false" -H "Authorization: Bearer $TOKEN"   # read stages only
+```
+
+```json
+{
+  "ok": true,
+  "tracking_url": "https://mlflow.redhat-ods-applications.svc.cluster.local:8443",
+  "credential_mode": "bearer_token",
+  "experiment_id": "1",
+  "workspace": "team1",
+  "insecure_tls": true,
+  "auth": {"ok": true, "detail": "bearer obtained via bearer_token"},
+  "read": {"ok": true, "detail": "traces API answered; experiment 1 is non-empty"},
+  "write": {"ok": true, "detail": "probe spans exported"},
+  "round_trip": {"ok": true, "detail": "probe trace readable after 2 attempt(s)"}
+}
+```
+
+`write` and `round_trip` are the reason this exists, and they are why it is not a read-only check.
+The Service emits four spans of its own per run, and a trace whose root `Agent.Session` span never
+arrives is **dropped** when the report is assembled — so a broken export yields `pass_rate 1.0`
+beside a zero-byte `report.ndjson`, with no error anywhere. The read path answers 200 throughout
+that, since reads go through `httpx` honouring `insecure_tls` while the span exporter is a separate
+library needing a real trust anchor and an RBAC grant. `write` therefore emits one synthetic trace
+through the real exporter and captures the `opentelemetry` logger for its duration, because
+`BatchSpanProcessor` exports on a worker thread and **logs** failures rather than raising —
+`CERTIFICATE_VERIFY_FAILED` or `403 PERMISSION_DENIED` comes back in `write.error` instead of sitting
+in a pod log. `round_trip` then reads that trace back, which is the only way to catch an MLflow that
+accepts the POST and drops it.
+
+The response is a **whitelist** of fields, the same discipline `span_report.*` follows: the probe
+holds a bearer and possibly a password, and `credential_mode` names the shape without disclosing the
+material. Fields are absent, not false, for a stage that never ran — the handler stops after a
+failure instead of piling a second cause onto it.
+
+Two properties make it safe against a live install: the probe **cannot pollute a report**, because
+every report is filtered to its own run's session ids and the probe's is a fresh `uuid4`, and it
+costs **no LLM gateway call**. It does write one trace per call. `autobench-cli mlflow-health` wraps
+it (§7.1) and exits `8` when any stage failed, so an install script and an operator gate on the same
+probe.
+
 ---
 
 ## 6. Benchmark lifecycle
@@ -1372,6 +1423,7 @@ Each step is also a subcommand, so the CLI doubles as a way to see one HTTP call
 ```bash
 autobench-cli whoami                                  # GET /hello
 autobench-cli list                                    # GET /benchmarks
+autobench-cli mlflow-health                           # GET /mlflow/health (§5.1); exit 8 = not healthy
 autobench-cli deploy    --benchmark gsm8k
 autobench-cli wait      --benchmark gsm8k             # stability + card gates
 autobench-cli run       --benchmark gsm8k --tasks 1    # prints the run_id
@@ -1411,6 +1463,7 @@ tool serves "just run it" and "show me one HTTP call".
 | `all` | pre-clean → deploy → wait → run → poll → artifacts → summary (→ teardown if asked) |
 | `whoami` | `GET /hello` — proves the token and shows which instance you routed to |
 | `list` | `GET /benchmarks` |
+| `mlflow-health` | `GET /mlflow/health` (§5.1) — run this **before** trusting a report. Exits `8` when any stage failed, so a bring-up script can gate on `$?`; `--no-round-trip` reads only |
 | `deploy` / `teardown` | create / delete the MCP tool + A2A agent |
 | `wait` | block on the readiness-stability and agent-card gates |
 | `run` | `POST …/runs`, prints the `run_id` |
@@ -1470,6 +1523,9 @@ serving flaps Ready → CrashLoopBackOff → Ready.
 | `--poll-interval S` | `10` | gap between status polls |
 | `--wait-timeout S` | `1800` | give up waiting for readiness |
 
+**Probing MLflow.** `--no-round-trip` restricts `mlflow-health` to the `auth` and `read` stages, for
+when you want a cheap check and not the one synthetic trace the write stages emit.
+
 **Results.** `--run RUN_ID` selects the run for `poll`/`report`/`artifacts`. `--mirror DIR`
 downloads every artifact under `DIR` and lists them — the artifact URLs are public, so no AWS
 credentials are involved.
@@ -1492,7 +1548,8 @@ Two settings are **environment-only**, with no flag:
 - **`BM_CARD_TEMPLATE`** — when set, `wait` additionally polls the agent card until it returns 200.
   Needed for cross-cluster runs where the agent is reachable only via an edge Route.
 
-**Exit codes.** `0` success · `7` the run reached a terminal state that was **not** `succeeded` ·
+**Exit codes.** `0` success · `8` `mlflow-health` found a stage that failed · `7` the run reached a
+terminal state that was **not** `succeeded` ·
 `6` a teardown that returned neither 204 nor 404 · `1` a usage or configuration error. A run that
 legitimately scores `pass_rate 0.0` still exits `0` if its status is `succeeded` — appworld does
 this by design, so do not treat exit 0 as "the agent solved it".
@@ -1735,7 +1792,7 @@ byte-identical work, which a concurrent gateway load would spoil. Each exits `0`
 | `plugin_config_file` on deploy | `422` | local-path input with no HTTP analog; use `plugin_preset`/`plugins`/`on_error` instead |
 | Run before deploy | `409` | `POST …/deploy` first |
 | Run while not Ready | `424` | provision the named Secret(s), wait for Ready (§6.2) |
-| Report with MLflow unconfigured | `409` | set MLflow read creds via `PUT /config` (§4.5) |
+| Report with MLflow unconfigured | `409` | set MLflow read creds via `PUT /config` (§4.5), then confirm with `GET /mlflow/health` (§5.1) |
 | Upstream Rossoctl/MLflow failure | `502` | transient upstream issue; retry |
 
 **AuthBridge plugin presets (runs 4–8 of the ibac comparison):** layer-3 plugin composition
