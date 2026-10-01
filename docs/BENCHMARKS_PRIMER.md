@@ -184,10 +184,21 @@ variance, not a regression.
 > `HealthCheckError: … team not allowed to access model` and the pod **CrashLoopBackOffs**; the agent
 > then crash-loops connecting to it, so you see *both* pods failing and a readiness gate flapping
 > `tool=Ready agent=Not Ready` for minutes. **Diagnose from the MCP pod's log** — the agent's "Failed
-> to connect to MCP server" is downstream noise. No rebuild is needed to work around it: an explicit
-> deploy/run `--model` outranks `model_override` (see `_resolve_model` in
-> `src/autobench/benchmarks/registry.py`), so `--model <a model you hold>` runs the leg — just say
-> which model produced the number, per the paragraph above.
+> to connect to MCP server" is downstream noise.
+>
+> **The right response is to restore the grant, not to change the pin.** "team not allowed to access
+> model" is a *grant* error: the model is served, your key's team is not entitled to it. Confirm with
+> `GET /v1/models` on that key, which lists exactly what the key is granted and nothing about the
+> catalogue. Switching `model_override` to the nearest available Sonnet has already been tried once on
+> the mistaken belief that sonnet-5 had been withdrawn, and was reverted — `aws/claude-sonnet-4-6`
+> costs **2× sonnet-5** (3.00/15.00 against 1.52/7.60 per 1M), so it pays double and abandons
+> comparability with every earlier tau2 figure. `reference/model_prices.json` records that history in
+> the `_role`/`_added` notes on both rows; read them before touching a model.
+>
+> To get *a* number while the grant is being fixed, an explicit deploy/run `--model` outranks
+> `model_override` with no rebuild (see `_resolve_model` in
+> `src/autobench/benchmarks/registry.py`) — but treat the result as a different measurement, and say
+> which model produced it, per the paragraph above.
 
 ---
 
