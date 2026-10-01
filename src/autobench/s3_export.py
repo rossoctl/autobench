@@ -25,6 +25,12 @@ Export is opt-in (only when the instance's S3 `bucket` is set) and fail-soft (a 
 leaves `run.artifacts` empty; it never fails the run). boto3 is synchronous, so all S3 work runs on
 a worker thread via `asyncio.to_thread`. Objects are uploaded public-read by default (readable by
 all, owner-only writes); if the bucket rejects ACLs the put is retried without one.
+
+Because the bucket is anonymously readable *and listable*, no artifact may carry free-text from
+upstream. `span_report.*` enforces that with a field whitelist; `run.json`'s `error` fields and
+`report.*`'s `status_message` are classified to a closed category set by `public_errors` on the way
+out (`export_run`). The in-memory models keep the verbatim text for the authenticated API and the
+pod log — the substitution happens only in the projection written here.
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ import json
 import logging
 import re
 
+from . import public_errors
 from .models import RunArtifact, S3Config
 
 logger = logging.getLogger(__name__)
@@ -235,6 +242,13 @@ async def export_run(
     """
     prefix = run_prefix(cfg, preferred_username, source_iss, benchmark, run_id)
     record_dicts = [r.model_dump(mode="json") for r in records]
+    # Everything below this line is published to an anonymously-readable bucket, so the two
+    # free-text fields that carry upstream error strings are classified here -- the one chokepoint
+    # both record projections (ndjson, parquet, token rows) and run.json pass through. Scrubbing the
+    # dicts rather than the models is deliberate: the in-memory `RunState`/`MLflowTraceRecord` keep
+    # the verbatim text, so the authenticated API and the pod log still have it. See public_errors.
+    record_dicts = public_errors.scrub_records(record_dicts)
+    run_summary = public_errors.scrub_run_summary(run_summary)
     return await asyncio.to_thread(
         _export_sync,
         cfg,

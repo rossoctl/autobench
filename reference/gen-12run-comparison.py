@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from gen_toc import build as _toc  # noqa: E402
 import shortlistlib as SL  # noqa: E402
+import causelib as CL  # noqa: E402
+from causelib import cause  # noqa: E402
 
 A, ALAB, B, BLAB, VERSION = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 OUT = pathlib.Path(sys.argv[6]) if len(sys.argv) > 6 else None
@@ -63,33 +65,6 @@ def lost(x):
     return (lc > 0 and not x.get("llm_input_tokens")) or (lc <= 1 and tc >= 2)
 
 
-_CAUSES = [
-    # Ordered: the first pattern that matches wins, so the specific infrastructure signatures are
-    # tested before the generic ones. Every bucket below was observed in a real matrix; `other` exists
-    # so a new failure mode shows up as unclassified rather than being folded into a wrong answer.
-    ("health probe (Bug 3)", ("/v1/models",)),
-    ("transport / gateway", ("peer closed connection", "incomplete chunked", "503",
-                             "Network communication error")),
-    ("per-task timeout", ("per-task timeout",)),
-    ("agent (upstream defect)", ("missing assistant content",)),
-    ("wrong answer", ("Error executing submit", "does not match")),
-]
-
-
-def cause(msg):
-    """Bucket a task's error text by *what kind of thing went wrong*.
-
-    A pass-rate delta between platforms is only interpretable if you know whether the losing side lost
-    a task to the model getting it wrong or to a socket closing. Those two live in the same
-    `evaluated_pass` denominator and read identically in every table above.
-    """
-    m = msg or ""
-    for label, pats in _CAUSES:
-        if any(p in m for p in pats):
-            return label
-    return "other"
-
-
 def load(path):
     d = json.loads(pathlib.Path(path).read_text())
     out = {}
@@ -118,8 +93,7 @@ def load(path):
             rp = pathlib.Path(md) / "run.json"
             if rp.exists():
                 res = json.loads(rp.read_text()).get("results", [])
-                probe = sum(1 for x in res
-                            if (x.get("error") or "").endswith("/v1/models"))
+                probe = sum(1 for x in res if CL.is_probe_failure(x.get("error")))
                 for x in res:
                     if x.get("error"):
                         c = cause(x["error"])

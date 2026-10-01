@@ -344,3 +344,98 @@ async def test_export_run_survives_unparquetable_span_rows(monkeypatch):
     assert "span_report.ndjson" in names               # NDJSON still carries the evidence
     assert {"run.json", "report.ndjson", "report.parquet", "token_report.ndjson",
             "token_report.parquet", "manifest.json"} <= names
+
+
+async def test_no_uploaded_object_carries_upstream_error_text(monkeypatch):
+    """The bucket is anonymously readable AND listable, so scan every byte we upload.
+
+    A survey of the 575 runs already published found 1,056 verbatim upstream strings in these two
+    fields, including the LLM gateway's hostname 317 times and the org's spend. `export_run` is the
+    single chokepoint where they become categories; this asserts it for all 8 objects at once,
+    including Parquet, where a stray column is easy to miss by reading the NDJSON only.
+    """
+    fake = _FakeS3Client()
+    _install_client(monkeypatch, fake)
+
+    gateway = "ete-litellm.ai-models.example.com"
+    spend = "30001.65"
+    team_uuid = "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
+    task_err = (
+        f"litellm.RateLimitError: Budget has been exceeded for team {team_uuid} on {gateway}! "
+        f"Current cost: {spend}, Max budget: 30000.0"
+    )
+    mcp_host = "exgentic-mcp-tau2-team1.apps.example.com"
+
+    records = _records(2)
+    records[0].status_message = f"MCP connect to https://{mcp_host}/mcp timed out after 30s"
+    records[1].status_message = task_err
+
+    await s3_export.export_run(
+        S3Config(bucket="bench-bkt", prefix="p"),
+        preferred_username="alice",
+        source_iss=ISS,
+        benchmark="tau2",
+        run_id="run-9",
+        records=records,
+        run_summary={
+            "run_id": "run-9",
+            "status": "failed",
+            "error": task_err,
+            "results": [
+                {"task_id": "t0", "passed": False, "error": task_err},
+                {"task_id": "t1", "passed": False, "error": records[0].status_message},
+            ],
+        },
+        span_dicts=[{"session_id": "sess-0", "span_name": "Agent.Session", "counted": True}],
+    )
+
+    assert len(fake.puts) == 8
+    for put in fake.puts:
+        body = put["Body"]
+        haystack = body if isinstance(body, bytes) else str(body).encode()
+        for secret in (gateway.encode(), spend.encode(), team_uuid.encode(), mcp_host.encode()):
+            assert secret not in haystack, f"{secret!r} leaked into {put['Key']}"
+
+    # The classification is still *there* -- scrubbing must not cost the reader the cause.
+    run_json = json.loads(next(p["Body"] for p in fake.puts if p["Key"].endswith("run.json")))
+    assert run_json["error"].startswith("budget_exceeded (shape ")
+    assert run_json["results"][0]["error"].startswith("budget_exceeded (shape ")
+    assert run_json["results"][1]["error"].startswith("mcp_connect_timeout (shape ")
+
+    rows = [
+        json.loads(line)
+        for line in next(
+            p["Body"] for p in fake.puts if p["Key"].endswith("report.ndjson")
+        ).decode().splitlines()
+    ]
+    assert rows[0]["status_message"].startswith("mcp_connect_timeout (shape ")
+    assert rows[1]["status_message"].startswith("budget_exceeded (shape ")
+
+    # And the in-memory records the authenticated API serves keep the verbatim text.
+    assert records[1].status_message == task_err
+
+
+async def test_report_parquet_status_message_column_stays_a_string(monkeypatch):
+    """A None in one run and a string in another would infer different Parquet schemas."""
+    import pyarrow.parquet as pq
+
+    fake = _FakeS3Client()
+    _install_client(monkeypatch, fake)
+    records = _records(2)
+    records[0].status_message = "Session terminated"   # classified
+    records[1].status_message = ""                     # untouched, stays ""
+    await s3_export.export_run(
+        S3Config(bucket="b"),
+        preferred_username="alice",
+        source_iss=ISS,
+        benchmark="gsm8k",
+        run_id="run-10",
+        records=records,
+        run_summary={"run_id": "run-10"},
+    )
+    body = next(p["Body"] for p in fake.puts if p["Key"].endswith("report.parquet"))
+    table = pq.read_table(io.BytesIO(body))
+    col = table.column("status_message").to_pylist()
+    assert all(isinstance(v, str) for v in col)
+    assert col[0].startswith("session_terminated (shape ")
+    assert col[1] == ""

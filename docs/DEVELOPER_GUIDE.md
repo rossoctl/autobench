@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-09-30T17:02:49Z
+**Last modified:** 2026-10-01T03:50:23Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -1103,6 +1103,42 @@ gsm8k task, 4 of 109 spans were the Service's and 106 sat under `Agent.Call`. Th
 measurement worth knowing: the agent-side `POST /` span brackets the whole agent-side task, so
 `Agent.Call − POST /` is the Service's own per-task cost — **16.9 ms of a 10.4 s gsm8k task, 13.2 ms
 of a 70.3 s tau2 task**.
+
+#### Error text is classified, not published
+
+`span_report.*`'s whitelist covers the artifact whose fields come from third-party spans. Two fields
+in the *other* artifacts were free-text pass-throughs in the same way, and are handled by the
+companion discipline:
+
+| artifact | field | source |
+|---|---|---|
+| `run.json` | `error`, and every `results[].error` | `RunState` |
+| `report.ndjson` / `report.parquet` (and, projected, `token_report.*`) | `status_message` | `MLflowTraceRecord` |
+
+Whatever the agent, the MCP server or the LLM gateway put in a message landed in the bucket
+unfiltered, and across the runs published before this change that included internal hostnames (the
+LLM gateway's among them), a team UUID and a spend figure. Every image that carries
+`src/autobench/public_errors.py` instead writes
+
+```
+<category> (shape <8 hex>)        e.g.  mcp_connect_timeout (shape 4f1c92ab)
+```
+
+- **category** — a member of the closed set in `src/autobench/public_errors.py` (`CATEGORIES`).
+  Nothing outside that set is ever written, so an upstream message nobody anticipated is at worst
+  `other`; when that happens the Service logs the verbatim text at WARNING so a bucket can be added.
+- **shape** — `sha256` truncated to 8 hex over the message *template*: URLs, UUIDs, hostnames,
+  emails, keys and digits are replaced with placeholders **before** hashing. Tasks that failed the
+  same way therefore share a shape id and group, while a guessed hostname cannot be confirmed by
+  reconstructing the string and re-hashing it.
+
+This is classification, not redaction, on purpose — a redactor has to enumerate every bad pattern,
+and only has to miss one. The substitution happens in `s3_export.export_run`, the single point every
+artifact passes through; the in-memory models keep the original, so **the authenticated API
+(`/runs/{id}`, `/report`) and the pod log still return the verbatim message**. Only the S3 projection
+is classified. Runs published by an earlier image still hold raw strings, so anything reading both eras
+should go through `reference/causelib.py`, which parses a classified value and falls back to the
+legacy patterns.
 
 #### The S3 URL is fully determined — you can construct it
 

@@ -23,6 +23,7 @@ OUT = pathlib.Path(sys.argv[4]) if len(sys.argv) > 4 else None
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from gen_toc import build as _toc  # noqa: E402
 import shortlistlib as SL  # noqa: E402
+import causelib as CL  # noqa: E402
 
 data = json.loads(SRC.read_text())
 runs = sorted(data["runs"], key=lambda r: r["n"])
@@ -160,7 +161,7 @@ def probe_failures(run):
     if not (p and p.exists()):
         return 0
     return sum(1 for x in json.loads(p.read_text()).get("results", [])
-               if (x.get("error") or "").endswith("/v1/models"))
+               if CL.is_probe_failure(x.get("error")))
 
 
 def failed_tasks(run):
@@ -403,11 +404,20 @@ def sec_s3():
           "",
           "Objects are readable **and listable anonymously** (no credentials needed), so treat "
           "anything written here as public. What is actually exposed: the **keys** carry the caller's "
-          "username and the Keycloak issuer host, and `run.json` / `report.ndjson` can carry "
-          "**exception strings** from failed tasks (`status_message`, `TaskResult.error`), which may "
-          "quote a server error body. No artifact contains task prompts or model outputs — the "
-          "record schema is entirely ids, counts and durations, and `span_report.*` is restricted to "
-          "a fixed whitelist of structural and numeric span fields for exactly this reason."]
+          "username and the Keycloak issuer host. No artifact contains task prompts or model outputs "
+          "— the record schema is entirely ids, counts and durations, and `span_report.*` is "
+          "restricted to a fixed whitelist of structural and numeric span fields.",
+          "",
+          "**Error text is classified, not published.** `run.json`'s `error` fields and "
+          "`report.ndjson`'s `status_message` used to carry the upstream message verbatim, which put "
+          "internal hostnames — including the LLM gateway's — a team UUID and a spend figure into "
+          "this bucket across earlier runs. They now carry `<category> (shape <8 hex>)`, where the "
+          "category comes from a closed set in `public_errors.py` and the shape is a hash of the "
+          "message *template* (hostnames, URLs, ids and numbers removed before hashing, so a guessed "
+          "hostname cannot be confirmed from it). Identical failures share a shape id, and the "
+          "verbatim text remains available from the authenticated API and the Service log. **Runs "
+          "published before that change still carry the raw strings** — the generators read both "
+          "eras via `reference/causelib.py`."]
     return "\n".join(o)
 
 
