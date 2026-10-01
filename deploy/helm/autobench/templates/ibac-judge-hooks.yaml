@@ -136,8 +136,16 @@ spec:
             # Derived, never configured: it is this chart's own Service, so it cannot disagree with
             # the Service actually rendered. The plugin gets an in-cluster URL with no credential in
             # it — the key stays in the proxy's Secret.
+            #
+            # BASE URL ONLY — no /v1/chat/completions. The ibac plugin appends the chat path to
+            # whatever this field holds, so a path here is sent twice and the judge answers
+            # `POST /v1/chat/completions/v1/chat/completions -> 404`. That fails one judge call at a
+            # time, which fails the TASK under `ibac-only`/`full` and is swallowed under
+            # `ibac:observe` — so it reads as a flaky model, not as a config error. Measured on ykt5
+            # 2026-10-01: 5 task failures across legs #6 and #7, and the hand-configured clusters
+            # were never affected because they were set to the bare base by hand.
             - name: JUDGE_ENDPOINT
-              value: http://{{ $judge }}.{{ $ns }}.svc.cluster.local:{{ $.Values.ibacJudge.port }}{{ $.Values.ibacJudge.chatPath }}
+              value: http://{{ $judge }}.{{ $ns }}.svc.cluster.local:{{ $.Values.ibacJudge.port }}
             - name: JUDGE_MODEL
               value: {{ $.Values.ibacJudge.model | quote }}
           volumeMounts:

@@ -450,7 +450,19 @@ def check_ibac_judge(rep: Report, cluster: Cluster, namespace: str, *, required:
              "measure no enforcement at all; the tell is zero judge calls, not an error")
     else:
         if endpoint:
-            rep.ok("ibac.judgeEndpoint", "set")
+            # Shape, not just presence. The plugin appends `/v1/chat/completions` to this value, so a
+            # path here is sent TWICE and every judge call 404s. Presence alone is what this check
+            # used to assert, and it passed on ykt5 while legs #6/#7 were losing tasks to exactly
+            # that (2026-10-01) — the chart appended its own path and nothing anywhere objected.
+            path = urllib.parse.urlsplit(endpoint).path.rstrip("/")
+            if path:
+                note("ibac.judgeEndpoint",
+                     f"carries a path ({path}) — it must be a BASE url. The ibac plugin appends the "
+                     f"chat path itself, so the judge receives POST {path}/v1/chat/completions and "
+                     "answers 404: one failed judge call per tool call, which fails the TASK under "
+                     "ibac-only/full and is swallowed entirely under ibac:observe")
+            else:
+                rep.ok("ibac.judgeEndpoint", endpoint)
         else:
             note("ibac.judgeEndpoint", "empty while judgeModel is set — the plugin cannot call anything")
         if model:

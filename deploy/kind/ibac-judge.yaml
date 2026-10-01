@@ -5,7 +5,12 @@
 # holds the key in a Secret and adds the `Authorization` header on the way out, so the plugin only
 # ever points at an in-cluster URL with no credential:
 #
-#     judge_endpoint: http://ibac-judge.rossoctl-system.svc.cluster.local:8080/v1/chat/completions
+#     judgeEndpoint: http://ibac-judge.rossoctl-system.svc.cluster.local:8080
+#
+# A BASE url, with no /v1/chat/completions: the plugin appends the chat path itself. Configure a path
+# here and the judge gets `POST /v1/chat/completions/v1/chat/completions -> 404`, one failed judge
+# call per tool call — which fails tasks under `ibac-only`/`full` and is swallowed under
+# `ibac:observe`. The proxy below still SERVES /v1/chat/completions; it is the caller that builds it.
 #
 # Without it the plugin is inert — it admits every call and the run looks like a clean pass. The way
 # to prove enforcement is to COUNT judge calls, not to read the pass rate.

@@ -143,7 +143,9 @@ ibacJudge:
   platformConfigMap: rossoctl-platform-config
 
   port: 8080
-  chatPath: /v1/chat/completions
+  # There is deliberately no chat-path knob. `ibac.judgeEndpoint` must be a BASE url, because the
+  # ibac plugin appends `/v1/chat/completions` itself — a path configured here arrives doubled and
+  # every judge call 404s silently-ish (it fails tasks, not the deploy). See ibac-judge-hooks.yaml.
   # Stdlib-only proxy, so a stock python image needs no build and no pip install at start. Also used
   # by the two hook Jobs. mirror.gcr.io avoids docker.io's anonymous pull throttle.
   image: mirror.gcr.io/library/python:3.12-slim
