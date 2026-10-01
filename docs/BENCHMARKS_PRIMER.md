@@ -142,11 +142,17 @@ tag does not drift when `:latest` is re-pulled.
 > 0 failed on every run; on a re-used pod, so did every task a previous run had completed. Measured
 > on a 4-task leg: tasks 0 and 1 errored at 600 s, tasks 2 and 3 ran normally.
 >
-> Our tau2 `tool_env` therefore pins **`EXGENTIC_LITELLM_CACHING=false`** as of 2026-09-30, which
-> makes the broken code path unreachable. The fingerprint of an affected run is `llm_count 1`,
-> `llm_input_tokens 5054` and `tool_total_s ≈ 600.1` on the errored tasks. Pass rates from the
-> 2026-09-30 tau2 runs need a **`total − 1`** denominator (fresh pod) and should not be compared with
-> anything; the matrices in `docs/results/` predate the litellm version that introduced this.
+> Our tau2 `tool_env` therefore pins **`EXGENTIC_LITELLM_CACHING=false`**, which makes the broken
+> code path unreachable. Because `tool_env` is baked into the Service image, the pin takes effect
+> only from **image `v1.32`** — on an earlier image the pin is not there however recent the repo is.
+> Verified on `v1.32`: task 0 runs at `llm_count 10` / 71k input / `tool_total_s 15.3`, against
+> `llm_count 1` / 5054 / `600.1` on the image before it.
+>
+> The fingerprint of an affected run is therefore `llm_count 1`, `llm_input_tokens 5054` and
+> `tool_total_s ≈ 600.1` on the errored tasks — if you see it, check the running image tag rather
+> than the benchmark. Pass rates from the 2026-09-30 tau2 runs, which predate `v1.32`, need a
+> **`total − 1`** denominator (fresh pod) and should not be compared with anything; the matrices in
+> `docs/results/` predate the litellm version that introduced this.
 
 **The key architectural difference.** tau2 introduces a **second LLM — a user simulator** that plays
 the customer. So each task involves two models talking to each other, plus tool calls. That single
