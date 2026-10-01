@@ -145,8 +145,10 @@ tag does not drift when `:latest` is re-pulled.
 > Our tau2 `tool_env` therefore pins **`EXGENTIC_LITELLM_CACHING=false`**, which makes the broken
 > code path unreachable. Because `tool_env` is baked into the Service image, the pin takes effect
 > only from **image `v1.32`** — on an earlier image the pin is not there however recent the repo is.
-> Verified on `v1.32`: task 0 runs at `llm_count 10` / 71k input / `tool_total_s 15.3`, against
-> `llm_count 1` / 5054 / `600.1` on the image before it.
+> Verified on `v1.32` on both architectures: task 0 runs at `llm_count 10` / 71k input /
+> `tool_total_s 15.3` on arm64 and `llm_count 9` / 41k / `8.9` on amd64, against `llm_count 1` /
+> 5054 / `600.1` on the image before it. The amd64 leg matters because that is the platform the
+> 600 s failures were first measured on.
 >
 > The fingerprint of an affected run is therefore `llm_count 1`, `llm_input_tokens 5054` and
 > `tool_total_s ≈ 600.1` on the errored tasks — if you see it, check the running image tag rather
@@ -176,6 +178,16 @@ variance, not a regression.
 > effectively unsolvable for one model and mostly solved by another. The Service therefore pins tau2
 > to claude-sonnet-5 via a `model_override`. If you see a tau2 number, check which model produced it
 > before comparing anything.
+>
+> **That pin is a hard dependency on a grant, and it fails loudly.** If your gateway key is not
+> granted `aws/claude-sonnet-5`, the MCP pod's startup model check raises
+> `HealthCheckError: … team not allowed to access model` and the pod **CrashLoopBackOffs**; the agent
+> then crash-loops connecting to it, so you see *both* pods failing and a readiness gate flapping
+> `tool=Ready agent=Not Ready` for minutes. **Diagnose from the MCP pod's log** — the agent's "Failed
+> to connect to MCP server" is downstream noise. No rebuild is needed to work around it: an explicit
+> deploy/run `--model` outranks `model_override` (see `_resolve_model` in
+> `src/autobench/benchmarks/registry.py`), so `--model <a model you hold>` runs the leg — just say
+> which model produced the number, per the paragraph above.
 
 ---
 
