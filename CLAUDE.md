@@ -19,7 +19,7 @@ non-obvious when *changing* it.
 ## Commands
 
 ```sh
-uv run pytest -q                      # 183 tests, ~40 s, no cluster required
+uv run pytest -q                      # 260 tests, ~40 s, no cluster required
 uv run autobench-service              # local service on :8000
 python3 reference/gen_toc.py <file>   # regenerate a doc's <!-- toc --> block after editing headings
 ```
@@ -82,6 +82,20 @@ killed task leaves a report row with zero tokens that skews every per-task stat,
 that pair need the `total − probe_failures` denominator. And the message wording is the *old* one — if
 you see `is unreachable` rather than `did not respond ... after N attempt(s): <cause>`, the pod is
 running dev145, whatever `:latest` points at now. Check the digest on the pod, not the tag.
+
+**`cannot pickle '_asyncio.Task' object` is an agent race, not a flaky model — and it is still
+open.** The `service` runner cloudpickles `start()`'s kwargs, and the action classes it sends carry
+`__pydantic_parent_namespace__["self"]` → the executor → `_background_tasks` → a live asyncio Task,
+so the encode fails whenever a `_fire_and_forget` event emit is still in flight. Reproduced
+deterministically (one pending task flips it); see `docs/exgentic-agent-bug-report-20261001.md`.
+**13 of 166 tasks on 2026-10-01**, and each is a *total* loss — it fails before the first LLM call, so
+the report row has null tokens, null duration and no pass result, exactly the contaminant that skews
+per-task stats. Two amplifiers, both measured: an authbridge sidecar on the event path (10 of 50
+plugin-leg tasks, against **0 of 66** same-benchmark non-plugin tasks) and a large tool count
+(appworld 3 of 20 with no sidecar at all). Concurrency is *not* the cause — gsm8k at 50 tasks and
+4-way parallel lost nothing — and `max_parallel_sessions: 1` only lowers the rate, because the
+same-session emit at `a2a_executor.py:330` races its own encode. We cannot dodge it by runner:
+`direct`/`thread` never pickle, but `service` is what produces the token spans.
 
 **Never bare-replace the strings `benchmarking` or `benchmarker`.** The S3 bucket
 (`rossoctl-benchmarking`), the Keycloak user (`benchmarker`), and the `BM_*` env prefix deliberately
