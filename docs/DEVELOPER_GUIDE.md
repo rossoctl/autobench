@@ -779,7 +779,7 @@ instance file or from an earlier `PUT`. Whole sections behave the same way — a
 > **zero-byte report on a run that reports `pass_rate 1.0`** (§5.1 is how you would now catch it).
 > The third silently re-enabled public-read ACLs on a bucket someone had deliberately made private.
 >
-> Fixed in `v1.31`, which is what `deploy/` now pins — so a cluster still serving `v1.30` still has
+> Fixed in `v1.31`, at or above what `deploy/` pins — so a cluster still serving `v1.30` still has
 > it. When driving one, send every field you care about on every `PUT` and read the result back: the
 > response body is the effective config, so a reset is visible immediately if you look for it.
 

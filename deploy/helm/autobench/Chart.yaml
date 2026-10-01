@@ -4,7 +4,7 @@ description: The AutoBench Service — runs agent benchmarks against Rossoctl-ma
 type: application
 # version is the CHART version; appVersion is the Service image tag the chart defaults to.
 version: 0.1.0
-appVersion: v1.31
+appVersion: v1.32
 keywords:
   - benchmarking
   - agents
