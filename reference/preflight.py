@@ -132,6 +132,15 @@ SERVICE_DEPLOY = "autobench-service"
 CHART_DIR = "deploy/helm/autobench"
 MIN_HELM = (3, 8)
 
+# litellm *client* provider prefixes, for the ibac.judgeModel shape check. Deliberately LOWERCASE
+# only and compared case-sensitively: litellm's prefixes are lowercase, while a gateway's own
+# deployment segment may legitimately be capitalised — `Azure/gpt-4.1` is a catalogue id and must
+# pass, `openai/Azure/gpt-4.1` is a client string and must not.
+LITELLM_PROVIDER_PREFIXES = frozenset((
+    "openai", "azure", "azure_ai", "anthropic", "bedrock", "vertex_ai", "gemini", "mistral",
+    "ollama", "openrouter", "together_ai", "watsonx", "groq", "cohere", "deepseek", "xai",
+))
+
 
 def sha8(value: str | bytes) -> str:
     raw = value.encode() if isinstance(value, str) else value
@@ -466,7 +475,29 @@ def check_ibac_judge(rep: Report, cluster: Cluster, namespace: str, *, required:
         else:
             note("ibac.judgeEndpoint", "empty while judgeModel is set — the plugin cannot call anything")
         if model:
-            rep.ok("ibac.judgeModel", model)
+            # Shape again, for the mirror-image reason. The plugin sends judgeModel VERBATIM as the
+            # wire `model`, so it must be an id the judge's gateway lists in GET /v1/models — not a
+            # litellm *client* model string. `workload_llm.default_model` is the opposite: it SHOULD
+            # keep its `openai/` prefix, because the agent's litellm client strips the provider
+            # prefix before the call. One string, correct in one field and wrong in the other.
+            #
+            # Measured on ykt5 2026-10-01, key sha8 a324b4f4: `Azure/gpt-4.1` HIT,
+            # `openai/Azure/gpt-4.1` miss and no granted id carried an `openai/` prefix at all — so
+            # the gateway routed it to an OpenAI passthrough the team has no entitlement for and
+            # answered 403 "team not allowed to access model". Presence-only passed this check while
+            # legs #6/#7 lost every task that made a tool call.
+            head = model.split("/")[0]
+            if "/" in model and head in LITELLM_PROVIDER_PREFIXES:
+                note("ibac.judgeModel",
+                     f"starts with the litellm provider prefix '{head}/' — judgeModel is sent to the "
+                     f"gateway verbatim, so it must be a bare catalogue id (likely "
+                     f"'{model.split('/', 1)[1]}'). Confirm with GET /v1/models using the key in "
+                     f"{namespace}/ibac-judge-upstream. A prefix the catalogue does not list routes "
+                     "the call elsewhere and answers 403/404 per judge call — which fails tasks "
+                     "under ibac-only/full and is swallowed under ibac:observe. Note this is the "
+                     "OPPOSITE of workload_llm.default_model, which keeps its prefix")
+            else:
+                rep.ok("ibac.judgeModel", model)
         else:
             note("ibac.judgeModel", "empty while judgeEndpoint is set — the judge has no model to use")
     if ibac.get("judgeBearer"):

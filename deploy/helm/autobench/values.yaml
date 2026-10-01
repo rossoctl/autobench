@@ -129,6 +129,18 @@ ibacJudge:
   # the benchmark itself runs, and it is priced separately — reference/model_prices.json's judge row
   # is what gen-cost-analysis.py bills these calls at, and judge calls do NOT appear in
   # report.ndjson. A model the judge's key cannot see fails one judge call at a time, mid-leg.
+  #
+  # A CATALOGUE ID, NOT A LITELLM CLIENT STRING — no `openai/` prefix. The plugin sends this value
+  # verbatim as the wire `model`, so it is the exact opposite of the Service's
+  # `workload_llm.default_model`, which SHOULD keep the prefix because the agent's litellm client
+  # strips it before calling. Measured on ykt5 2026-10-01: `Azure/gpt-4.1` is granted,
+  # `openai/Azure/gpt-4.1` matches no alias and the gateway routed it to an OpenAI passthrough the
+  # team has no entitlement for — 403 "team not allowed to access model" on every judge call, which
+  # failed legs #6 and #7 and was invisible in #8 because ibac:observe swallows it.
+  #
+  # Use a NON-REASONING model. A reasoning model can spend its whole budget on reasoning and return
+  # empty content (`finish_reason: length`), which is useless for a judge that must emit a short
+  # verdict — so gpt-5-mini is a bad judge and gpt-4.1 is a good one.
   model: ""
 
   # Referenced, NEVER created — see above. Key `apikey`. The proxy reads it once at start, so a key
