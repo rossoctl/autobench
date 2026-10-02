@@ -143,7 +143,11 @@ esac
 # S3 is declared, and checked here — before the image build and the Keycloak seeding — rather than only
 # in kind-service-bootstrap.sh, which runs after both and would fail with the cluster half set up.
 export S3_ENABLED S3_BUCKET S3_REGION S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_ENDPOINT_URL S3_PREFIX
-python3 "$REFERENCE_DIR/s3check.py" ${SKIP_S3_CHECK:+--offline} \
+# Every Python step runs in the repo's uv environment, never the python3 on PATH.
+# shellcheck source=reference/pyrun.sh
+. "$REFERENCE_DIR/pyrun.sh"
+repo_python "$(dirname "$REFERENCE_DIR")" || { echo "Error: $REPO_PYTHON_HINT" >&2; exit 1; }
+"${PY[@]}" "$REFERENCE_DIR/s3check.py" ${SKIP_S3_CHECK:+--offline} \
   || { echo "Error: S3 is not usable as declared (see above) — fix the S3_* values, or declare S3_ENABLED=false" >&2; exit 1; }
 
 # --- secrets (flags, else env, else chmod-600 file; admin pw falls back to the cluster secret) ---
@@ -360,9 +364,6 @@ fi
 # The collector must export to the MLflow the Service reads, whoever installed it — so the URL comes
 # from MLFLOW_URL rather than from this script's default, which is the same address anyway unless an
 # existing MLflow was named.
-# shellcheck source=reference/yamlpy.sh
-. "$REFERENCE_DIR/yamlpy.sh"
-yaml_python "$(dirname "$REFERENCE_DIR")" || { echo "Error: $YAML_PYTHON_HINT" >&2; exit 1; }
 "${PY[@]}" "$REFERENCE_DIR/kind-collector-mlflow.py" --context "$CTX" \
   --reader-url "${MLFLOW_URL%/}/v1/traces"
 

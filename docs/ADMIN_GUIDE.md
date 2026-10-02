@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-10-02T15:31:22Z
+**Last modified:** 2026-10-02T16:18:02Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -130,7 +130,8 @@ anything else.
 | `kubectl` (or `oc`) | everything | `oc` only for `Route` conveniences; `kubectl` can do it all |
 | `helm` ≥ 3.8 | §5 | 3.8 is the floor for the OCI/`--kube-context` behaviour used here |
 | `jq`, `curl` | the bootstrap scripts | secrets move through `jq` via the *environment*, never argv |
-| `python3` | `preflight.py`, `helm-parity-check.py`, `gen_toc.py` | the two that parse YAML — `helm-parity-check.py` and `kind-collector-mlflow.py` — need `pyyaml`. A `python3` without it (macOS's has none) is fine if `uv` is installed: the scripts fall back to the repo's uv environment, and stop with a hint if neither works |
+| `uv` | every Python step of `autobench-install.sh`, `autobench-uninstall.sh` and the bootstrap scripts they call | **required**. They run Python only as `uv run --project <repo> --frozen python` (`reference/pyrun.sh`): the repo's own environment, built from `uv.lock` on first use, never the `python3` on `PATH`. There is no virtualenv to set up, and a workstation interpreter's version or missing PyYAML cannot change what the install does |
+| `python3` | running `preflight.py`, `helm-parity-check.py` or `gen_toc.py` by hand | optional — `uv run python reference/…` does the same. `preflight.py` is stdlib-only and borrows the uv environment for the one check that parses YAML |
 | `kind` + a container engine | the KinD path only | the image is built locally and `kind load`ed |
 
 ### 2.3 Cluster-side checklist
@@ -193,6 +194,17 @@ On KinD, `--kind-mlflow` (only with `--pre-install`) does the same for the MLflo
 installer is about to create (§5.2): an absent `mlflow-reader` and a collector still pointed at the
 OIDC-gated `mlflow` are what that install fixes, so they are not failures, and the instance config is
 compared against where the collector *will* export.
+
+**The target can come from the env file**, as it does for the installer: `KUBE_CONTEXT`,
+`AB_PLATFORM`, `HELM_VALUES`, `NAMESPACE` and `TEAMS` stand in for `--context`, `--platform`,
+`--values`, `--namespace` and `--teams`, and a flag beats them. The header names the variable each
+one came from — `context=… ($KUBE_CONTEXT)` — and only when neither is given is the *current* kubectl
+context audited, marked `(current)`. Before this, an env file's `KUBE_CONTEXT` was ignored, so a
+preflight given ykt5's file while the current context was ykt2 audited ykt2.
+
+```bash
+uv run python reference/preflight.py --env-file ~/.rossoctl-ykt5/autobench.env --pre-install
+```
 
 On OpenShift the MLflow is never installed by us, so `--pre-install` does not excuse its absence:
 the MLflow section asks whether it **answers**, before Helm runs (§3.7).
@@ -688,7 +700,7 @@ So the install path **checks** instead of assuming:
 | `autobench-install.sh --install-mlflow auto\|always\|never` (KinD) | the same three modes through `reference/kind-mlflow.sh`, plus an **ownership record**, so `autobench-uninstall.sh` removes the reader only when this installed it (§5.2) |
 | `kind-post-setup.sh --install-mlflow auto\|always\|never` | `auto` (the default) applies `deploy/kind/mlflow-reader.yaml` only when nothing is already serving `MLFLOW_URL`; it logs which way it went and why. `never` is for a cluster whose MLflow is external — the collector is still repointed at `MLFLOW_URL`, which is the half that actually matters |
 | `ocp-service-bootstrap.sh` | resolving to **no MLflow credential at all is a precheck failure**, not the warning it used to be. It previously wrote `bearer_token: ""` and let the install proceed |
-| `kind-service-bootstrap.sh` | reads the experiment id off the collector, and a lookup that **cannot run is fatal**. It used to fall back to `0` with its stderr discarded, so on a `python3` without PyYAML every install guessed, silently. It now uses the uv fallback of §2.2, or takes `--experiment-id N` |
+| `kind-service-bootstrap.sh` | reads the experiment id off the collector, and a lookup that **cannot run is fatal**. It used to fall back to `0` with its stderr discarded, so on a `python3` without PyYAML every install guessed, silently. It now runs in the uv environment of §2.2, or takes `--experiment-id N` |
 | `preflight.py` (OpenShift) | **asks whether the pre-installed MLflow answers at all**, even with `--pre-install`, so the install stops before Helm rather than after it — see below |
 | `autobench-cli mlflow-health` | the gate. One authenticated `GET /mlflow/health` against the deployed Service |
 | `preflight.py` | calls that endpoint for both platforms; `--skip-mlflow-probe` opts out |

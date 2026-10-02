@@ -93,8 +93,13 @@ done
 
 [ -d "$HOME/.rd/bin" ] && PATH="$PATH:$HOME/.rd/bin"
 missing=()
-for t in kubectl helm jq python3; do command -v "$t" >/dev/null 2>&1 || missing+=("$t"); done
+for t in kubectl helm jq uv; do command -v "$t" >/dev/null 2>&1 || missing+=("$t"); done
 [ ${#missing[@]} -eq 0 ] || die "not on PATH: ${missing[*]}"
+# The workload teardown runs autobench-cli, which needs the package and Python >= 3.11: the repo's
+# uv environment, never the python3 on PATH (reference/pyrun.sh).
+# shellcheck source=reference/pyrun.sh
+. "$REFERENCE_DIR/pyrun.sh"
+repo_python "$REPO_DIR" || die "$REPO_PYTHON_HINT"
 
 case "$AB_PLATFORM" in
     openshift|kind) ;;
@@ -180,7 +185,7 @@ else
     [ -n "${BM_PASSWORD:-}" ] || unset BM_PASSWORD
     [ -n "${BM_PASSWORD_FILE:-}" ] || unset BM_PASSWORD_FILE
     log "    via $BM_BASE as $BM_USER (iss $BM_ISS)"
-    CLI=(env PYTHONPATH="$REPO_DIR/src" python3 -m autobench.cli)
+    CLI=("${PY[@]}" -m autobench.cli)
 
     for t in $TEAM_LIST; do
         # Agents before tools, so nothing is left calling an MCP that is already gone.

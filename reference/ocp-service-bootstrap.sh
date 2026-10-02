@@ -18,7 +18,7 @@
 # Service reads an experiment nothing was written to. Hence the precheck below, which asserts
 # each of these against the live cluster before the file is written.
 #
-# Uses curl + jq + kubectl/oc + python3 (stdlib only, for the S3 check). Safe to re-run. No secret is ever echoed — credentials are
+# Uses curl + jq + kubectl/oc + uv (the repo's Python, for the S3 check). Safe to re-run. No secret is ever echoed — credentials are
 # read from the environment or from the cluster and only ever hashed for display.
 set -euo pipefail
 set +x
@@ -129,7 +129,9 @@ sha8() { printf '%s' "$1" | shasum -a 256 | cut -c1-8; }
 
 command -v curl    >/dev/null || die "curl is required"
 command -v jq      >/dev/null || die "jq is required"
-command -v python3 >/dev/null || die "python3 is required (stdlib only — reference/s3check.py)"
+# shellcheck source=reference/pyrun.sh
+. "$(dirname "${BASH_SOURCE[0]}")/pyrun.sh"
+repo_python "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || die "$REPO_PYTHON_HINT"
 
 # Before ANY default below reads the environment: that ordering is what makes an --env-file beat the
 # shell while the flag loop still beats the file.
@@ -533,7 +535,7 @@ esac
 # S3: the declaration, the shape of every value, and a signed read-only request that proves the key
 # authenticates. Rows print in this script's own format; the exit status is the failure count.
 S3_FAILS=0
-python3 "$(dirname "${BASH_SOURCE[0]}")/s3check.py" || S3_FAILS=$?
+"${PY[@]}" "$(dirname "${BASH_SOURCE[0]}")/s3check.py" || S3_FAILS=$?
 PRECHECK_FAIL=$((PRECHECK_FAIL + S3_FAILS))
 
 # An MLflow credential is REQUIRED unless the installer declares there is none. This was a warning

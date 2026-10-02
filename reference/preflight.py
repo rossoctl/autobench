@@ -57,7 +57,10 @@ Env files, and S3
 `--env-file FILE` (repeatable) loads KEY=VALUE lines into the environment before anything is read,
 with the grammar and the precedence of reference/envfile.sh — the shell, then each file in order (a
 later line beats an earlier one), then flags — so the installer and this script read one file the same
-way. `KC_SERVICE_PASSWORD` there is how the benchmarker password reaches an unattended install.
+way. `KC_SERVICE_PASSWORD` there is how the benchmarker password reaches an unattended install. So is the
+target: `KUBE_CONTEXT`, `AB_PLATFORM`, `HELM_VALUES`, `NAMESPACE` and `TEAMS` stand in for the flags
+`--context`, `--platform`, `--values`, `--namespace` and `--teams`, as they do for the installer, and
+a flag beats them. With neither, the CURRENT kubectl context is audited.
 
 S3 is DECLARED, not discovered: `S3_ENABLED=true|false` has no default. Declared, it is checked
 by reference/s3check.py — shape, then a signed read-only request that proves the key authenticates.
@@ -1914,6 +1917,30 @@ def infer_platform(context: str | None) -> str:
     return "kind" if (context or "").startswith("kind-") else "openshift"
 
 
+# The flags that have an environment name, and that name — the ones autobench-install.sh reads, so one
+# env file points both scripts at the same cluster.
+ENV_FLAGS = (("context", "KUBE_CONTEXT"), ("platform", "AB_PLATFORM"), ("values", "HELM_VALUES"),
+             ("namespace", "NAMESPACE"), ("teams", "TEAMS"))
+
+
+def apply_env_defaults(args: argparse.Namespace) -> dict[str, str]:
+    """Fill each flag left unset from its environment name, then the built-in defaults.
+
+    Called after the --env-files are loaded, so the order is shell < files < flags. Without it an env
+    file's KUBE_CONTEXT was ignored and the CURRENT context was audited — possibly another cluster.
+    Returns {attr: VAR} for what the environment supplied, so the header can say so."""
+    from_env = {}
+    for attr, var in ENV_FLAGS:
+        if getattr(args, attr) is None and os.environ.get(var):
+            setattr(args, attr, os.environ[var])
+            from_env[attr] = var
+    if args.platform not in (None, "kind", "openshift"):
+        raise ValueError(f"AB_PLATFORM must be kind or openshift (got {args.platform!r})")
+    args.namespace = args.namespace or DEFAULT_NS
+    args.teams = args.teams or ",".join(DEFAULT_TEAMS)
+    return from_env
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -1921,24 +1948,27 @@ def main() -> int:
     ap.add_argument("--env-file", action="append", default=[], metavar="FILE",
                     help="KEY=VALUE lines (chmod 600) loaded into the environment first; repeatable, "
                          "and the last one wins. See reference/autobench.env.template")
-    ap.add_argument("--context", help="kubectl context for the SERVICE cluster (default: current)")
+    ap.add_argument("--context", help="kubectl context for the SERVICE cluster (default: "
+                                     "$KUBE_CONTEXT, else the current context)")
     ap.add_argument("--workload-context",
                     help="kubectl context for the cluster the agents run on, when it is a different "
                          "one (ykt3 drives ykt2). Default: the same cluster, unless the instance "
                          "config carries endpoint templates, in which case the workload checks are "
                          "skipped rather than run against the wrong cluster")
     ap.add_argument("--platform", choices=("kind", "openshift"),
-                    help="default: kind when the context starts with kind-, else openshift")
-    ap.add_argument("--namespace", default=DEFAULT_NS, help="Service namespace (default: %(default)s)")
-    ap.add_argument("--teams", default=",".join(DEFAULT_TEAMS),
+                    help="default: $AB_PLATFORM, else kind when the context starts with kind-, "
+                         "else openshift")
+    ap.add_argument("--namespace", help=f"Service namespace (default: $NAMESPACE, else {DEFAULT_NS})")
+    ap.add_argument("--teams",
                     help="comma-separated workload namespaces to check — the ones you deploy into "
-                         "(default: %(default)s; every run12 spec names team1)")
+                         f"(default: $TEAMS, else {','.join(DEFAULT_TEAMS)}; every run12 spec names "
+                         "team1)")
     ap.add_argument("--llm-profile", choices=("intranet", "internet"),
                     help="which LLM gateway this cluster must use (default: $LLM_PROFILE, or the "
                          "llmProfile in --values). Orthogonal to --platform: an OpenShift cluster on "
                          "the intranet uses `intranet`")
     ap.add_argument("--values", help="chart values file to read llmProfile from, e.g. "
-                                     "deploy/helm/values-kind.yaml")
+                                     "deploy/helm/values-kind.yaml (default: $HELM_VALUES)")
     ap.add_argument("--username", help="Keycloak user the Service logs in as (default: "
                                        "$KC_SERVICE_USERNAME, the instance Secret's, else benchmarker)")
     pw = ap.add_mutually_exclusive_group()
@@ -1997,6 +2027,12 @@ def main() -> int:
     global LLM_PROFILE_ENV_FILE
     LLM_PROFILE_ENV_FILE = os.environ.get("LLM_PROFILE_ENV_FILE", LLM_PROFILE_ENV_FILE)
 
+    try:
+        from_env = apply_env_defaults(args)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+
     context = args.context
     if not context:
         p = subprocess.run(["kubectl", "config", "current-context"], capture_output=True, text=True)
@@ -2010,8 +2046,12 @@ def main() -> int:
 
     rep = Report(quiet=args.json)
     if not args.json:
-        print(f"AutoBench preflight — platform={platform} context={context or '(current)'} "
-              f"namespace={args.namespace} llm-profile={llm_profile or '(undeclared)'}")
+        def src(attr):
+            return f" (${from_env[attr]})" if attr in from_env else ""
+        ctx_src = src("context") or ("" if args.context or not context else " (current)")
+        print(f"AutoBench preflight — platform={platform}{src('platform')} "
+              f"context={context or '(current)'}{ctx_src} "
+              f"namespace={args.namespace}{src('namespace')} llm-profile={llm_profile or '(undeclared)'}")
 
     cluster = Cluster(context)
     check_tooling(rep, platform, cluster)

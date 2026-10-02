@@ -11,7 +11,8 @@
 #
 # What it does, in order — and it stops at the first thing that is wrong:
 #
-#   1. tools        kubectl, helm, jq, python3, curl (~/.rd/bin is added to PATH)
+#   1. tools        kubectl, helm, jq, uv, curl (~/.rd/bin is added to PATH). Every Python step
+#                   runs in the repo's uv environment (reference/pyrun.sh), never the python3 on PATH
 #   2. inputs       platform, context, S3_ENABLED declared, the judge's inputs shaped right
 #   3. preflight    reference/preflight.py --pre-install must report 0 failures. What the release
 #                   itself creates counts as present, and the MLflow round trip is skipped (it goes
@@ -117,8 +118,11 @@ done
 # --- 1. tools ----------------------------------------------------------------------------------------
 [ -d "$HOME/.rd/bin" ] && PATH="$PATH:$HOME/.rd/bin"
 missing=()
-for t in kubectl helm jq python3 curl; do command -v "$t" >/dev/null 2>&1 || missing+=("$t"); done
+for t in kubectl helm jq uv curl; do command -v "$t" >/dev/null 2>&1 || missing+=("$t"); done
 [ ${#missing[@]} -eq 0 ] || die "not on PATH: ${missing[*]}"
+# shellcheck source=reference/pyrun.sh
+. "$REFERENCE_DIR/pyrun.sh"
+repo_python "$REPO_DIR" || die "$REPO_PYTHON_HINT"
 
 # --- 2. inputs ---------------------------------------------------------------------------------------
 case "$AB_PLATFORM" in
@@ -175,7 +179,7 @@ if [ "$IBAC_JUDGE" = true ]; then
     done
     # Shape, not presence — each of these passed a presence check while failing every judge call.
     IBAC_JUDGE_UPSTREAM_BASE="$IBAC_JUDGE_UPSTREAM_BASE" IBAC_JUDGE_MODEL="$IBAC_JUDGE_MODEL" \
-    python3 - "$REFERENCE_DIR" <<'PY' || exit 1
+    "${PY[@]}" - "$REFERENCE_DIR" <<'PY' || exit 1
 import os, sys, urllib.parse
 sys.path.insert(0, sys.argv[1])
 from preflight import LITELLM_PROVIDER_PREFIXES
@@ -221,7 +225,7 @@ else
          --values "$HELM_VALUES" --chart "$CHART" --pre-install --skip-mlflow-probe)
     [ "$IBAC_JUDGE" = true ] && PRE+=(--ibac-judge)
     [ "$MLFLOW_PLAN" = install ] && PRE+=(--kind-mlflow)
-    python3 "$REFERENCE_DIR/preflight.py" "${PRE[@]}" \
+    "${PY[@]}" "$REFERENCE_DIR/preflight.py" "${PRE[@]}" \
         || die "preflight reports failures — fix them, then re-run (nothing was written)"
 fi
 
@@ -341,7 +345,7 @@ log "==> post-install preflight (with the MLflow round trip, through the Service
 PF=(--platform "$AB_PLATFORM" --context "$KUBE_CONTEXT" --namespace "$NAMESPACE" --values "$HELM_VALUES"
     --chart "$CHART")
 [ "$IBAC_JUDGE" = true ] && PF+=(--plugin-legs)
-python3 "$REFERENCE_DIR/preflight.py" "${PF[@]}" \
+"${PY[@]}" "$REFERENCE_DIR/preflight.py" "${PF[@]}" \
     || die "installed, but the post-install preflight reports failures (see above)"
 
 log ""

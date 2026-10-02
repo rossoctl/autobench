@@ -88,9 +88,9 @@ plan() {
     esac
 }
 
-# kind-collector-mlflow.py edits the collector's config in place, so it needs PyYAML.
-# shellcheck source=reference/yamlpy.sh
-. "$REFERENCE_DIR/yamlpy.sh"
+# kind-collector-mlflow.py edits the collector's config in place: the repo's uv environment runs it.
+# shellcheck source=reference/pyrun.sh
+. "$REFERENCE_DIR/pyrun.sh"
 
 wait_reader() {
     "${K[@]}" rollout status deploy/mlflow-reader --timeout=300s >&2
@@ -118,7 +118,7 @@ do_install() {
     esac
     [ "$URL_SVC" = mlflow-reader ] && [ "$URL_NS" = "$NS" ] \
         || die "MLFLOW_URL names svc/$URL_SVC in $URL_NS, but $MANIFEST serves mlflow-reader in $NS — installing it would not make that URL answer"
-    yaml_python "$REPO_DIR" || die "$YAML_PYTHON_HINT"
+    repo_python "$REPO_DIR" || die "$REPO_PYTHON_HINT"
 
     local cur; cur="$("${K[@]}" get cm "$COLLECTOR_CM" -o json)" || die "no cm/$COLLECTOR_CM in $NS — is this a rossoctl-deps cluster?"
     if [ "$p" = owned ]; then

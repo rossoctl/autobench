@@ -146,7 +146,7 @@ def test_a_missing_file_is_an_error(tmp_path):
 # --- the installer: a flag beats a file --------------------------------------------------------------
 
 INSTALL = REF / "autobench-install.sh"
-_TOOLS = ("kubectl", "helm", "jq", "python3", "curl")
+_TOOLS = ("kubectl", "helm", "jq", "uv", "curl")
 _PATH = os.environ["PATH"] + os.pathsep + str(pathlib.Path.home() / ".rd" / "bin")
 needs_tools = pytest.mark.skipif(
     not all(shutil.which(t, path=_PATH) for t in _TOOLS),
@@ -215,3 +215,37 @@ def test_preflight_takes_the_same_file_variable(tmp_path, monkeypatch):
     monkeypatch.setenv("KC_SERVICE_PASSWORD", "abc")
     _, pw, _, err = preflight.resolve_service_credential(args, None)
     assert pw is None and "both" in err
+
+
+# --- preflight: the target comes from the env file too ------------------------------------------------
+
+
+def _ns(**kw):
+    base = dict(context=None, platform=None, values=None, namespace=None, teams=None)
+    return preflight.argparse.Namespace(**{**base, **kw})
+
+
+def test_preflight_takes_the_target_from_the_environment(tmp_path, monkeypatch):
+    f = _write(tmp_path / "a.env", "KUBE_CONTEXT=ctx-from-file\nAB_PLATFORM=openshift\nTEAMS=team1,team2\n")
+    for var in ("KUBE_CONTEXT", "AB_PLATFORM", "HELM_VALUES", "NAMESPACE", "TEAMS"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("KUBE_CONTEXT", "ctx-from-shell")
+    for k, v in preflight.load_env_file(str(f)).items():
+        monkeypatch.setenv(k, v)
+    args = _ns()
+    src = preflight.apply_env_defaults(args)
+    assert (args.context, args.platform, args.teams) == ("ctx-from-file", "openshift", "team1,team2")
+    assert args.namespace == preflight.DEFAULT_NS and args.values is None
+    assert src == {"context": "KUBE_CONTEXT", "platform": "AB_PLATFORM", "teams": "TEAMS"}
+
+
+def test_preflight_flag_beats_the_environment(monkeypatch):
+    monkeypatch.setenv("KUBE_CONTEXT", "ctx-from-file")
+    args = _ns(context="ctx-from-flag")
+    assert "context" not in preflight.apply_env_defaults(args) and args.context == "ctx-from-flag"
+
+
+def test_preflight_rejects_a_bad_platform_from_the_environment(monkeypatch):
+    monkeypatch.setenv("AB_PLATFORM", "bogus")
+    with pytest.raises(ValueError, match="AB_PLATFORM must be kind or openshift"):
+        preflight.apply_env_defaults(_ns())

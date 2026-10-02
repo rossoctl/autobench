@@ -84,7 +84,7 @@ MLflow on kind: the `mlflow` Deployment rossoctl-deps installs runs mlflow-oidc-
 refuses both the Service's read and the collector's write. deploy/kind/mlflow-reader.yaml serves
 the same postgres with no auth, and this script points the Service at it by default. Wire the
 collector to it too, or spans are dropped with a 401 and the run publishes zeros:
-  python3 reference/kind-collector-mlflow.py
+  uv run python reference/kind-collector-mlflow.py
 
 The Service authenticates to Rossoctl with ITS OWN per-instance credential
 (ROPC / password grant). In kind the login/JWKS URLs are taken from the Keycloak
@@ -120,7 +120,9 @@ die()  { printf 'Error: %s\n' "$*" >&2; exit 1; }
 # --- dependencies ---
 command -v curl    >/dev/null || die "curl is required"
 command -v jq      >/dev/null || die "jq is required"
-command -v python3 >/dev/null || die "python3 is required (stdlib only — reference/s3check.py)"
+# shellcheck source=reference/pyrun.sh
+. "$(dirname "${BASH_SOURCE[0]}")/pyrun.sh"
+repo_python "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || die "$REPO_PYTHON_HINT"
 
 # Before ANY default below reads the environment: that ordering is what makes an --env-file beat the
 # shell while still losing to a flag.
@@ -230,7 +232,7 @@ esac
 export S3_ENABLED S3_BUCKET S3_REGION S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_ENDPOINT_URL S3_PREFIX
 log "==> Checking the S3 declaration..."
 S3_FAILS=0
-python3 "$(dirname "${BASH_SOURCE[0]}")/s3check.py" ${SKIP_S3_CHECK:+--offline} || S3_FAILS=$?
+"${PY[@]}" "$(dirname "${BASH_SOURCE[0]}")/s3check.py" ${SKIP_S3_CHECK:+--offline} || S3_FAILS=$?
 [ "$S3_FAILS" -eq 0 ] || die "S3 is not usable as declared (see above) — fix the S3_* values, or declare S3_ENABLED=false"
 [ -z "$SKIP_S3_CHECK" ] || [ "$S3_ENABLED" != true ] || warn "SKIP_S3_CHECK=1 — the S3 key was NOT proven to authenticate"
 
@@ -333,12 +335,7 @@ fi
 # that cannot run is therefore fatal, not a default: it used to fall back to 0 with its stderr
 # discarded, which on a python3 without PyYAML meant every install guessed, silently.
 if [ -z "$MLFLOW_EXPERIMENT_ID" ]; then
-    BOOTSTRAP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    # shellcheck source=reference/yamlpy.sh
-    . "$BOOTSTRAP_DIR/yamlpy.sh"
-    yaml_python "$(dirname "$BOOTSTRAP_DIR")" \
-        || die "$YAML_PYTHON_HINT — or pass --experiment-id N (the collector's x-mlflow-experiment-id)"
-    MLFLOW_EXPERIMENT_ID="$("${PY[@]}" "$BOOTSTRAP_DIR/kind-collector-mlflow.py" \
+    MLFLOW_EXPERIMENT_ID="$("${PY[@]}" "$(dirname "${BASH_SOURCE[0]}")/kind-collector-mlflow.py" \
         --context "$KUBE_CONTEXT" --print-experiment-id)" \
         || die "could not read the collector's x-mlflow-experiment-id (above) — fix the collector, or pass --experiment-id N"
     [[ "$MLFLOW_EXPERIMENT_ID" =~ ^[0-9]+$ ]] \
