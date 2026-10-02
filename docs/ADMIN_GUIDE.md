@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-10-02T16:18:02Z
+**Last modified:** 2026-10-02T17:44:14Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -324,7 +324,7 @@ would blank a value your shell exported. `*.env` is gitignored.
 | `KC_ADMIN_PASSWORD` | `kind-post-setup.sh`, `preflight.py` | optional — read from the in-cluster `keycloak-initial-admin` Secret when unset. In `preflight.py` it enables the Admin-API tier of §3.6 |
 | `KC_ADMIN_USER` | `preflight.py` | optional, default `admin` — the master-realm admin the Admin-API tier logs in as |
 | `KC_ISS` | `preflight.py` | optional — the issuer to log in against, when neither `--iss` nor the instance file supplies one |
-| `LLM_PROFILE` | both bootstrap scripts, `kind-post-setup.sh`, `preflight.py` | `intranet` \| `internet` — selects one of the two gateway variable sets (§3.5) |
+| `LLM_PROFILE` | both bootstrap scripts, `kind-post-setup.sh`, `preflight.py`, `autobench-install.sh` | `intranet` \| `internet` — selects one of the two gateway variable sets (§3.5). Beats the values file's `llmProfile`, and `autobench-install.sh` passes it to the release, so a KinD cluster can run on the internet gateway without editing `values-kind.yaml` |
 | `INTRANET_LLM_*` / `INTERNET_LLM_*` | `reference/llm-profiles.sh`, read by all of the above | the profiles themselves: base, model, key file, optional bypass list (§3.5) |
 | `BM_WORKLOAD_LLM_KEY` | `kind-post-setup.sh` | the workload LLM key; falls back to the selected profile's key file, else `~/.rossoctl-kind/litellm.key` (`LLM_KEY_FILE`) |
 | `WORKLOAD_LLM_API_BASE`, `WORKLOAD_LLM_MODEL` | both bootstrap scripts | set by `LLM_PROFILE` when you use one; an explicit export wins. The gateway has **no default** on purpose: this repo is public |

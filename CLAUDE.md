@@ -19,7 +19,7 @@ non-obvious when *changing* it.
 ## Commands
 
 ```sh
-uv run pytest -q                      # 338 tests, ~40 s, no cluster required
+uv run pytest -q                      # 344 tests, ~40 s, no cluster required
 uv run autobench-service              # local service on :8000
 python3 reference/gen_toc.py <file>   # regenerate a doc's <!-- toc --> block after editing headings
 ```

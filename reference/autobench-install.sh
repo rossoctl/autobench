@@ -279,6 +279,9 @@ apply_secret_key "$INSTANCES_SECRET" "$INSTANCE_KEY" "$INSTANCE_FILE"
 
 HELM_SET=()
 [ -n "$IMAGE_TAG" ] && HELM_SET+=(--set-string "image.tag=$IMAGE_TAG")
+# The profile the bootstrap just wrote the instance file for — so the release declares the same one
+# even when $LLM_PROFILE overrode the values file's.
+[ -n "$LLM_PROFILE" ] && HELM_SET+=(--set-string "llmProfile=$LLM_PROFILE")
 if [ "$IBAC_JUDGE" = true ]; then
     # credfile's reader: mode-checked, trailing newline stripped — a newline in the key would ride
     # into every judge call's Authorization header.

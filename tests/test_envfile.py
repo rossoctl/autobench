@@ -245,6 +245,15 @@ def test_preflight_flag_beats_the_environment(monkeypatch):
     assert "context" not in preflight.apply_env_defaults(args) and args.context == "ctx-from-flag"
 
 
+def test_preflight_llm_profile_env_beats_the_values_file(tmp_path, monkeypatch):
+    values = _write(tmp_path / "values.yaml", "llmProfile: intranet\n")
+    monkeypatch.delenv("LLM_PROFILE", raising=False)
+    assert preflight.resolve_llm_profile(_ns(values=str(values), llm_profile=None)) == "intranet"
+    monkeypatch.setenv("LLM_PROFILE", "internet")
+    assert preflight.resolve_llm_profile(_ns(values=str(values), llm_profile=None)) == "internet"
+    assert preflight.resolve_llm_profile(_ns(values=str(values), llm_profile="intranet")) == "intranet"
+
+
 def test_preflight_rejects_a_bad_platform_from_the_environment(monkeypatch):
     monkeypatch.setenv("AB_PLATFORM", "bogus")
     with pytest.raises(ValueError, match="AB_PLATFORM must be kind or openshift"):

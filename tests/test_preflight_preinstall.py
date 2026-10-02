@@ -107,3 +107,40 @@ def test_after_an_install_the_judge_is_strict_again():
     rep = preflight.Report(quiet=True)
     preflight.check_ibac_judge(rep, FreshCluster(), "rossoctl-system", required=True)
     assert rep.count(preflight.FAIL) >= 3 and rep.count(preflight.OK) == 0
+
+
+class JudgedCluster(FreshCluster):
+    def __init__(self, model: str):
+        super().__init__()
+        self.model = model
+
+    def get_json(self, *args):
+        if "rossoctl-platform-config" in args:
+            return {"data": {"config.yaml":
+                             f'ibac:\n  judgeEndpoint: "http://ibac-judge.rossoctl-system:8080"\n'
+                             f'  judgeModel: "{self.model}"\n'}}
+        return super().get_json(*args)
+
+
+@pytest.mark.parametrize("model, expect", [
+    ("Azure/gpt-4.1", preflight.OK),            # ETE's catalogue id
+    ("azure/gpt-5.6-terra", preflight.OK),      # vpc-int's: its namespace segment is lowercase
+    ("openai/Azure/gpt-4.1", preflight.FAIL),   # a workload (litellm client) string — 403s
+])
+def test_the_judge_model_rejects_only_the_client_prefix(model, expect):
+    rep = preflight.Report(quiet=True)
+    preflight.check_ibac_judge(rep, JudgedCluster(model), "rossoctl-system", required=True)
+    assert _statuses(rep)["ibac.judgeModel"] == expect
+
+
+@pytest.mark.parametrize("rewriting, expect", [(False, preflight.FAIL), (True, preflight.OK)])
+def test_a_gateway_the_install_rewrites_is_not_a_failure_yet(monkeypatch, rewriting, expect):
+    # KinD repointed from the intranet gateway to the internet one (2026-10-02): the old instance
+    # file failed the pre-install run although the bootstrap was about to rewrite it.
+    monkeypatch.setattr(preflight, "llm_profile_base", lambda p: "https://gw-b.example.com")
+    inst = {"x.json": {"iss": "http://kc.example.com/realms/r",
+                       "workload_llm": {"api_base": "https://gw-a.example.com", "default_model": "openai/m"}}}
+    rep = preflight.Report(quiet=True)
+    preflight.check_instance_config(rep, FreshCluster(), "rossoctl-system", "kind", {}, inst,
+                                    llm_profile="internet", rewriting=rewriting)
+    assert _statuses(rep)["x.json: LLM gateway matches the internet profile"] == expect

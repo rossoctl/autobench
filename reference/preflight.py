@@ -138,6 +138,18 @@ def llm_profile_base(profile: str) -> str | None:
     return None
 
 
+def resolve_llm_profile(args) -> str | None:
+    """The flag, then $LLM_PROFILE (an --env-file lands there), then the values file's llmProfile.
+
+    The order autobench-install.sh resolves it in, so the instance file the bootstrap writes is
+    checked against the profile it was written for — values first failed a KinD repointed at the
+    internet gateway against values-kind.yaml's `intranet` (2026-10-02). Never inferred from the
+    platform — that is the mistake this replaced.
+    """
+    return (args.llm_profile or os.environ.get("LLM_PROFILE")
+            or (llm_profile_from_values(args.values) if args.values else None) or None)
+
+
 def llm_profile_from_values(path: str) -> str | None:
     """The `llmProfile:` declared in a chart values file, so one file is the source of truth."""
     try:
@@ -157,14 +169,12 @@ SERVICE_DEPLOY = "autobench-service"
 CHART_DIR = "deploy/helm/autobench"
 MIN_HELM = (3, 8)
 
-# litellm *client* provider prefixes, for the ibac.judgeModel shape check. Deliberately LOWERCASE
-# only and compared case-sensitively: litellm's prefixes are lowercase, while a gateway's own
-# deployment segment may legitimately be capitalised — `Azure/gpt-4.1` is a catalogue id and must
-# pass, `openai/Azure/gpt-4.1` is a client string and must not.
-LITELLM_PROVIDER_PREFIXES = frozenset((
-    "openai", "azure", "azure_ai", "anthropic", "bedrock", "vertex_ai", "gemini", "mistral",
-    "ollama", "openrouter", "together_ai", "watsonx", "groq", "cohere", "deepseek", "xai",
-))
+# The litellm *client* prefix, for the ibac.judgeModel shape check: the one segment a workload model
+# string carries that no gateway catalogue id does. Only `openai/` — a gateway's own namespace
+# segment is part of the id and must pass, in either case: `Azure/gpt-4.1` (ETE) and lowercase
+# `azure/gpt-5.6-terra` (vpc-int) are both catalogue ids, so a list of litellm provider names
+# rejected a valid vpc-int judge model (2026-10-02). `openai/Azure/gpt-4.1` must not pass.
+LITELLM_PROVIDER_PREFIXES = frozenset(("openai",))
 
 
 def sha8(value: str | bytes) -> str:
@@ -1128,8 +1138,10 @@ def check_instance_s3(rep: Report, name: str, s3: dict) -> None:
 
 def check_instance_config(
     rep: Report, cluster: Cluster, namespace: str, platform: str, collector: dict,
-    instances: dict[str, dict] | None, llm_profile: str | None = None,
+    instances: dict[str, dict] | None, llm_profile: str | None = None, rewriting: bool = False,
 ) -> None:
+    """`rewriting`: before an install, whose bootstrap rewrites the gateway from the profile — so a
+    file pointing elsewhere is the change being made, not a defect. The post-install run is strict."""
     rep.section(f"Instance config (Secret {INSTANCES_SECRET})")
     if instances is None:
         rep.warn(
@@ -1232,6 +1244,12 @@ def check_instance_config(
             if llm_profile and expect:
                 if base == expect:
                     rep.ok(f"{name}: LLM gateway matches the {llm_profile} profile")
+                elif rewriting:
+                    rep.ok(f"{name}: LLM gateway matches the {llm_profile} profile",
+                           f"not yet — points at {urllib.parse.urlsplit(base).netloc}; this install "
+                           f"rewrites it from the {llm_profile} profile, and the post-install "
+                           "preflight checks the result. openai-secret must hold a key from the "
+                           "same gateway")
                 else:
                     rep.fail(
                         f"{name}: LLM gateway matches the {llm_profile} profile",
@@ -2039,10 +2057,7 @@ def main() -> int:
         context = p.stdout.strip() or None
     platform = args.platform or infer_platform(context)
     teams = [t for t in args.teams.split(",") if t]
-    # Precedence: the flag, then a values file (one declaration shared with the release), then the
-    # environment. Never inferred from the platform — that is the mistake this replaced.
-    llm_profile = args.llm_profile or (llm_profile_from_values(args.values) if args.values else None) \
-        or os.environ.get("LLM_PROFILE") or None
+    llm_profile = resolve_llm_profile(args)
 
     rep = Report(quiet=args.json)
     if not args.json:
@@ -2101,7 +2116,7 @@ def main() -> int:
         check_ingress(rep, cluster, platform, args.namespace, args.gateway)
         check_s3_declaration(rep, instances)
         check_instance_config(rep, cluster, args.namespace, platform, collector, instances,
-                              llm_profile=llm_profile)
+                              llm_profile=llm_profile, rewriting=args.pre_install)
         iss_hint = next((cfg.get("iss") for cfg in (instances or {}).values() if cfg.get("iss")), None)
         check_identity(rep, cluster, instances, args, iss_hint)
         check_service_install(rep, cluster, args.namespace, args.image)
