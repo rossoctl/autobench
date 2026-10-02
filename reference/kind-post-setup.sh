@@ -360,7 +360,10 @@ fi
 # The collector must export to the MLflow the Service reads, whoever installed it — so the URL comes
 # from MLFLOW_URL rather than from this script's default, which is the same address anyway unless an
 # existing MLflow was named.
-python3 "$REFERENCE_DIR/kind-collector-mlflow.py" --context "$CTX" \
+# shellcheck source=reference/yamlpy.sh
+. "$REFERENCE_DIR/yamlpy.sh"
+yaml_python "$(dirname "$REFERENCE_DIR")" || { echo "Error: $YAML_PYTHON_HINT" >&2; exit 1; }
+"${PY[@]}" "$REFERENCE_DIR/kind-collector-mlflow.py" --context "$CTX" \
   --reader-url "${MLFLOW_URL%/}/v1/traces"
 
 # --- 3. generate per-instance config + (re)create the autobench-instances secret ---

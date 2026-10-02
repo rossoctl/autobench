@@ -87,6 +87,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -694,9 +695,11 @@ def check_collector(rep: Report, cluster: Cluster, namespace: str, *, repointing
 
 
 def check_mlflow(rep: Report, cluster: Cluster, platform: str, namespace: str, collector: dict,
-                 *, installing: bool = False) -> None:
+                 *, installing: bool = False, read_urls: list[str] | None = None) -> None:
     """`installing`: kind only — the install about to run creates mlflow-reader and repoints the
-    collector at it (reference/kind-mlflow.sh), so neither is expected to be there yet."""
+    collector at it (reference/kind-mlflow.sh), so neither is expected to be there yet.
+    `read_urls`: OpenShift — the tracking URL(s) the Service reads, probed beside the collector's."""
+    read_urls = read_urls or []
     rep.section("MLflow (the read half — this is what turns a run into a token report)")
     endpoint = collector.get("traces_endpoint", "")
     # .hostname, never netloc: rossoctl-deps' own target is `http://mlflow:5000/...`, and a port
@@ -781,11 +784,87 @@ def check_mlflow(rep: Report, cluster: Cluster, platform: str, namespace: str, c
                 "is pre-installed; the round-trip section is then the check that matters",
             )
     else:
-        rep.skip(
-            "MLflow content probe from inside the pod",
-            "OpenShift MLflow is SAR-gated and lives in another namespace, so there is no pod here "
-            "to exec into — the round-trip section probes it through the Service instead",
-        )
+        # OpenShift MLflow is pre-installed by someone else, so whether it is THERE is the question —
+        # and before an install there is no Service to ask. Both targets are probed: where the
+        # collector writes and where the Service will read; on ykt5 they are one and the same.
+        seen = set()
+        for role, url in [("collector writes", endpoint)] + [("Service reads", u) for u in read_urls]:
+            key = _in_cluster_service(url) or url
+            if url and key not in seen:
+                seen.add(key)
+                check_mlflow_answers(rep, cluster, role, url)
+
+
+# ocp-service-bootstrap.sh's MLFLOW_URL default — RHOAI's MLflow. Repeated, not parsed out of the
+# script, the same way the trace-writer names below are.
+OCP_DEFAULT_MLFLOW_URL = "https://mlflow.redhat-ods-applications.svc.cluster.local:8443"
+
+
+def _in_cluster_service(url: str) -> tuple[str, str, str, int] | None:
+    """(scheme, service, namespace, port) for an in-cluster Service URL, else None.
+
+    `<svc>.<ns>.svc[.cluster.local]` and `<svc>.<ns>` both name a Service; anything else with a dot is
+    an external host the API server cannot proxy to."""
+    if "://" not in url:
+        return None
+    parts = urllib.parse.urlsplit(url)
+    host = parts.hostname or ""
+    labels = host.split(".")
+    if len(labels) < 2 or (len(labels) > 2 and labels[2] != "svc"):
+        return None
+    try:
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+    except ValueError:
+        return None
+    return parts.scheme, labels[0], labels[1], port
+
+
+# What the API server says when IT cannot reach the Service, as opposed to passing on whatever the
+# Service answered. The two are told apart by text, because `kubectl get --raw` exits 1 for both:
+# the API server's own errors name the Service, and a backend's reply arrives as generic wording
+# ("could not find the requested resource", "asked for the client to provide credentials"). Measured
+# on ykt5, 2026-10-02.
+MLFLOW_PROXY_FAILURES = (
+    ('services "{name}" not found', "no such Service — MLflow is not installed at this URL"),
+    ("no endpoints available", "the Service exists but no pod behind it is Ready"),
+    ("no service port", "the Service has no such port — the URL's port is wrong"),
+    ("error trying to reach service", "the pod did not answer"),
+    ("timed out after", "no answer at all within 30 s"),
+)
+
+
+def check_mlflow_answers(rep: Report, cluster: Cluster, role: str, url: str) -> None:
+    """Whether the MLflow at `url` answers HTTP, asked through the API server's service proxy.
+
+    Read-only (a GET of `/`), and deliberately unauthenticated: the proxy does not pass a bearer on,
+    so the reply is usually MLflow's own 401 or 404 — which is exactly the proof wanted, that a server
+    is there and speaking HTTP. Whether the SERVICE's credential and network path work is the
+    round-trip section's question; that needs the Service running."""
+    label = f"MLflow answers ({role})"
+    svc = _in_cluster_service(url)
+    if svc is None:
+        rep.skip(label, f"{url} is not an in-cluster Service URL — only the round trip can reach it")
+        return
+    scheme, name, ns, port = svc
+    rc, _, err = cluster.run("get", "--raw", f"/api/v1/namespaces/{ns}/services/{scheme}:{name}:{port}/proxy/",
+                             timeout=30)
+    msg = " ".join(err.split())
+    if rc == 0:
+        rep.ok(label, f"{name}.{ns}:{port} answered")
+        return
+    if "forbidden" in msg and "services/proxy" in msg:
+        rep.warn(label, f"cannot tell: this kubeconfig may not `get services/proxy` in {ns}")
+        return
+    if "(Unauthorized)" in msg:
+        rep.warn(label, "cannot tell: the API server refused this kubeconfig")
+        return
+    for marker, meaning in MLFLOW_PROXY_FAILURES:
+        if marker.format(name=name) in msg:
+            rep.fail(label, f"{name}.{ns}:{port}: {meaning} ({msg[:160]}) — every run would pass and "
+                            "publish an empty token report")
+            return
+    # Anything else came from the backend: an HTTP reply of any status means a server is there.
+    rep.ok(label, f"{name}.{ns}:{port} answered ({msg[:80]})")
 
 
 # The identity the SERVICE authenticates to MLflow as, and the ClusterRole RHOAI MLflow authorizes
@@ -1801,11 +1880,31 @@ def check_chart(rep: Report, chart_dir: str, platform: str) -> None:
         rep.fail("helm lint", (p.stdout + p.stderr).strip().splitlines()[-1])
     parity = os.path.join("reference", "helm-parity-check.py")
     if os.path.exists(parity):
-        p = subprocess.run([sys.executable, parity], capture_output=True, text=True)
+        py = yaml_python()
+        if py is None:
+            rep.fail("chart/manifest parity", "helm-parity-check.py needs PyYAML: this python has none "
+                                              "and uv is not available — pip install pyyaml, or install uv")
+            return
+        p = subprocess.run([*py, parity], capture_output=True, text=True)
         if p.returncode == 0:
             rep.ok("chart/manifest parity", "the chart renders what deploy/*.yaml renders")
         else:
             rep.fail("chart/manifest parity", (p.stdout + p.stderr).strip().splitlines()[-1])
+
+
+def yaml_python() -> list[str] | None:
+    """An interpreter that can import yaml — this one, else the repo's uv environment (the twin of
+    reference/yamlpy.sh). preflight itself is stdlib-only; the scripts it runs are not, and a
+    workstation python3 often has no PyYAML."""
+    if importlib.util.find_spec("yaml") is not None:
+        return [sys.executable]
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    uv = [shutil.which("uv") or "uv", "run", "--project", repo, "--quiet", "python"]
+    try:
+        p = subprocess.run([*uv, "-c", "import yaml"], capture_output=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return uv if p.returncode == 0 else None
 
 
 # --- entry point -----------------------------------------------------------
@@ -1939,7 +2038,15 @@ def main() -> int:
                          installing=args.ibac_judge)
         mlflow_installing = args.kind_mlflow and platform == "kind"
         collector = check_collector(rep, cluster, args.namespace, repointing=mlflow_installing)
-        check_mlflow(rep, cluster, platform, args.namespace, collector, installing=mlflow_installing)
+        # Where the Service will read. Before an install the bootstrap is about to write it from
+        # MLFLOW_URL (or its default); afterwards it is whatever the instance config says.
+        if args.pre_install or not instances:
+            read_urls = [os.environ.get("MLFLOW_URL") or OCP_DEFAULT_MLFLOW_URL]
+        else:
+            read_urls = sorted({(c.get("mlflow") or {}).get("tracking_url") or ""
+                                for c in instances.values() if c} - {""})
+        check_mlflow(rep, cluster, platform, args.namespace, collector, installing=mlflow_installing,
+                     read_urls=read_urls)
         if mlflow_installing:
             # What the instance config is compared against is where the collector WILL write.
             collector["traces_endpoint"] = KIND_READER_TRACES.format(ns=args.namespace)

@@ -230,3 +230,71 @@ def test_a_collector_install_never_changed_is_not_restarted(cluster):
     assert p.returncode == 0, p.stderr
     assert "replaced" not in state and "rollouts" not in state
     assert not state["reader"]
+
+
+# --- OpenShift: is the pre-installed MLflow actually there? ------------------------------------------
+
+RHOAI = "https://mlflow.redhat-ods-applications.svc.cluster.local:8443"
+
+
+class ProxyCluster:
+    """A cluster whose API-server service proxy answers with one canned kubectl result."""
+
+    def __init__(self, rc: int, err: str):
+        self.rc, self.err, self.calls = rc, err, []
+
+    def run(self, *args, timeout=60):
+        self.calls.append(args)
+        return self.rc, "", self.err
+
+    def exists(self, *args):
+        return True
+
+
+def _answers(rc, err, url=RHOAI):
+    rep = preflight.Report(quiet=True)
+    cluster = ProxyCluster(rc, err)
+    preflight.check_mlflow_answers(rep, cluster, "Service reads", url)
+    return rep.rows[-1], cluster
+
+
+# The kubectl messages below are the ones measured on ykt5, 2026-10-02.
+@pytest.mark.parametrize("err, status", [
+    # MLflow's own replies: a server is there.
+    ("Error from server (NotFound): the server could not find the requested resource", preflight.OK),
+    ("error: You must be logged in to the server (the server has asked for the client to provide "
+     "credentials)", preflight.OK),
+    # The API server's: nothing answering.
+    ('Error from server (NotFound): services "mlflow" not found', preflight.FAIL),
+    ('Error from server (ServiceUnavailable): no endpoints available for service "mlflow"', preflight.FAIL),
+    ('Error from server (ServiceUnavailable): no service port 8443 found for service "mlflow"',
+     preflight.FAIL),
+    ("Error from server (ServiceUnavailable): error trying to reach service: EOF", preflight.FAIL),
+    ("timed out after 30s", preflight.FAIL),
+    # Cannot tell — never a pass, never a failure the cluster did not earn.
+    ('Error from server (Forbidden): services "mlflow" is forbidden: User "u" cannot get resource '
+     '"services/proxy"', preflight.WARN),
+    ("error: You must be logged in to the server (Unauthorized)", preflight.WARN),
+])
+def test_mlflow_answers_tells_the_api_server_from_mlflow(err, status):
+    row, cluster = _answers(1, err)
+    assert row["status"] == status, row
+    assert cluster.calls == [("get", "--raw",
+                              "/api/v1/namespaces/redhat-ods-applications/services/https:mlflow:8443/proxy/")]
+
+
+def test_mlflow_answers_skips_an_external_url():
+    row, cluster = _answers(0, "", url="https://mlflow.apps.example.com")
+    assert row["status"] == preflight.SKIP and not cluster.calls
+
+
+def test_openshift_probes_the_write_and_read_targets_once_each():
+    rep = preflight.Report(quiet=True)
+    cluster = ProxyCluster(1, "Error from server (NotFound): the server could not find the requested resource")
+    collector = {"traces_endpoint": RHOAI + "/v1/traces"}
+    preflight.check_mlflow(rep, cluster, "openshift", "rossoctl-system", collector,
+                           read_urls=[RHOAI, "http://other.mlflow-ns.svc:5000"])
+    probes = [c for c in cluster.calls if c[:2] == ("get", "--raw")]
+    # The collector's target and the first read URL are one Service: probed once.
+    assert len(probes) == 2
+    assert rep.count(preflight.FAIL) == 0

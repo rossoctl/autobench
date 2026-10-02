@@ -329,16 +329,21 @@ fi
 
 # The experiment id is READ from the collector's own exporter header, never chosen: an instance
 # config that names an experiment nothing writes to produces exactly the same zero-token report
-# as a refused write, so a guess here is indistinguishable from a broken telemetry chain.
+# as a refused write, so a guess here is indistinguishable from a broken telemetry chain. A lookup
+# that cannot run is therefore fatal, not a default: it used to fall back to 0 with its stderr
+# discarded, which on a python3 without PyYAML meant every install guessed, silently.
 if [ -z "$MLFLOW_EXPERIMENT_ID" ]; then
-    MLFLOW_EXPERIMENT_ID="$(python3 "$(dirname "${BASH_SOURCE[0]}")/kind-collector-mlflow.py" \
-        --context "$KUBE_CONTEXT" --print-experiment-id 2>/dev/null || true)"
-    if [ -n "$MLFLOW_EXPERIMENT_ID" ]; then
-        log "    experiment id ${MLFLOW_EXPERIMENT_ID} read from the collector's MLflow exporter"
-    else
-        MLFLOW_EXPERIMENT_ID="0"
-        warn "could not read the collector's x-mlflow-experiment-id; defaulting to 0"
-    fi
+    BOOTSTRAP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    # shellcheck source=reference/yamlpy.sh
+    . "$BOOTSTRAP_DIR/yamlpy.sh"
+    yaml_python "$(dirname "$BOOTSTRAP_DIR")" \
+        || die "$YAML_PYTHON_HINT — or pass --experiment-id N (the collector's x-mlflow-experiment-id)"
+    MLFLOW_EXPERIMENT_ID="$("${PY[@]}" "$BOOTSTRAP_DIR/kind-collector-mlflow.py" \
+        --context "$KUBE_CONTEXT" --print-experiment-id)" \
+        || die "could not read the collector's x-mlflow-experiment-id (above) — fix the collector, or pass --experiment-id N"
+    [[ "$MLFLOW_EXPERIMENT_ID" =~ ^[0-9]+$ ]] \
+        || die "the collector's x-mlflow-experiment-id is not a number — pass --experiment-id N"
+    log "    experiment id ${MLFLOW_EXPERIMENT_ID} read from the collector's MLflow exporter"
 fi
 
 # `workload_llm` is an environment fact this script cannot discover — which gateway issued the key in

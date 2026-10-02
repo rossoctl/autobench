@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-10-02T15:08:35Z
+**Last modified:** 2026-10-02T15:31:22Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -130,7 +130,7 @@ anything else.
 | `kubectl` (or `oc`) | everything | `oc` only for `Route` conveniences; `kubectl` can do it all |
 | `helm` ≥ 3.8 | §5 | 3.8 is the floor for the OCI/`--kube-context` behaviour used here |
 | `jq`, `curl` | the bootstrap scripts | secrets move through `jq` via the *environment*, never argv |
-| `python3` | `preflight.py`, `helm-parity-check.py`, `gen_toc.py` | `kind-collector-mlflow.py` also needs `pyyaml` |
+| `python3` | `preflight.py`, `helm-parity-check.py`, `gen_toc.py` | the two that parse YAML — `helm-parity-check.py` and `kind-collector-mlflow.py` — need `pyyaml`. A `python3` without it (macOS's has none) is fine if `uv` is installed: the scripts fall back to the repo's uv environment, and stop with a hint if neither works |
 | `kind` + a container engine | the KinD path only | the image is built locally and `kind load`ed |
 
 ### 2.3 Cluster-side checklist
@@ -193,6 +193,9 @@ On KinD, `--kind-mlflow` (only with `--pre-install`) does the same for the MLflo
 installer is about to create (§5.2): an absent `mlflow-reader` and a collector still pointed at the
 OIDC-gated `mlflow` are what that install fixes, so they are not failures, and the instance config is
 compared against where the collector *will* export.
+
+On OpenShift the MLflow is never installed by us, so `--pre-install` does not excuse its absence:
+the MLflow section asks whether it **answers**, before Helm runs (§3.7).
 
 Exit status is 0 when nothing FAILed; warnings do not fail the run. Thirteen sections, in the order
 a request travels: tooling, cluster reachability, Rossoctl version and CRDs, namespaces, workload
@@ -685,8 +688,43 @@ So the install path **checks** instead of assuming:
 | `autobench-install.sh --install-mlflow auto\|always\|never` (KinD) | the same three modes through `reference/kind-mlflow.sh`, plus an **ownership record**, so `autobench-uninstall.sh` removes the reader only when this installed it (§5.2) |
 | `kind-post-setup.sh --install-mlflow auto\|always\|never` | `auto` (the default) applies `deploy/kind/mlflow-reader.yaml` only when nothing is already serving `MLFLOW_URL`; it logs which way it went and why. `never` is for a cluster whose MLflow is external — the collector is still repointed at `MLFLOW_URL`, which is the half that actually matters |
 | `ocp-service-bootstrap.sh` | resolving to **no MLflow credential at all is a precheck failure**, not the warning it used to be. It previously wrote `bearer_token: ""` and let the install proceed |
+| `kind-service-bootstrap.sh` | reads the experiment id off the collector, and a lookup that **cannot run is fatal**. It used to fall back to `0` with its stderr discarded, so on a `python3` without PyYAML every install guessed, silently. It now uses the uv fallback of §2.2, or takes `--experiment-id N` |
+| `preflight.py` (OpenShift) | **asks whether the pre-installed MLflow answers at all**, even with `--pre-install`, so the install stops before Helm rather than after it — see below |
 | `autobench-cli mlflow-health` | the gate. One authenticated `GET /mlflow/health` against the deployed Service |
 | `preflight.py` | calls that endpoint for both platforms; `--skip-mlflow-probe` opts out |
+
+#### On OpenShift: is it there at all?
+
+"Normally pre-installed" is not "installed". The RHOAI component can be disabled, its pod can be
+unscheduled, or the URL the instance config names can be stale, and every one of those still lets a
+run **pass** — with an empty token report. So preflight checks, for the URL the collector writes to
+and each URL the Service will read from (the instance configs' `tracking_url`, or `MLFLOW_URL` / the
+RHOAI default with `--pre-install`), one target per distinct Service:
+
+```
+MLflow (the read half — this is what turns a run into a token report)
+  ok    MLflow answers (collector writes) — mlflow.redhat-ods-applications:8443 answered (...)
+```
+
+The probe is one `GET /` through the API server's service proxy
+(`kubectl get --raw /api/v1/namespaces/<ns>/services/https:<svc>:<port>/proxy/`). It makes no
+write, and it sends no MLflow credential on purpose: MLflow's own 401 or 404 is exactly the answer
+wanted, proof that a server is there and speaking HTTP. What the API server says *itself* is what
+fails the check:
+
+| API server reply | means | result |
+|---|---|---|
+| `services "mlflow" not found` | MLflow is not installed at this URL | FAIL |
+| `no endpoints available for service` | the Service exists, but no pod behind it is Ready | FAIL |
+| `no service port N found` | the URL's port is wrong | FAIL |
+| `error trying to reach service` | the pod did not answer | FAIL |
+| no reply within 30 s | nothing answered at all | FAIL |
+| `forbidden … services/proxy`, or `Unauthorized` | this kubeconfig cannot ask — log in again, or ask for `get services/proxy` | WARN |
+| anything else, any HTTP status | MLflow answered | ok |
+
+A URL outside the cluster (an external MLflow) is SKIPPED, since only the round trip can reach it.
+None of this proves the Service's credential or network path. That is still the round trip's job,
+which needs the Service running, so after the install `preflight.py` runs it as before.
 
 #### The credential is supplied, not discovered
 

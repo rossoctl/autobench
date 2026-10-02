@@ -88,19 +88,9 @@ plan() {
     esac
 }
 
-# A python that can import yaml: the collector's config is one embedded YAML document, and
-# kind-collector-mlflow.py edits it in place. The user's python3 often has no PyYAML; the repo's uv
-# environment does.
-yaml_python() {
-    if python3 -c 'import yaml' >/dev/null 2>&1; then
-        PY=(python3)
-    elif command -v uv >/dev/null 2>&1 \
-        && uv run --project "$REPO_DIR" --quiet python -c 'import yaml' >/dev/null 2>&1; then
-        PY=(uv run --project "$REPO_DIR" --quiet python)
-    else
-        die "repointing the collector needs PyYAML: python3 has none and uv is not available — pip install pyyaml, or install uv"
-    fi
-}
+# kind-collector-mlflow.py edits the collector's config in place, so it needs PyYAML.
+# shellcheck source=reference/yamlpy.sh
+. "$REFERENCE_DIR/yamlpy.sh"
 
 wait_reader() {
     "${K[@]}" rollout status deploy/mlflow-reader --timeout=300s >&2
@@ -128,7 +118,7 @@ do_install() {
     esac
     [ "$URL_SVC" = mlflow-reader ] && [ "$URL_NS" = "$NS" ] \
         || die "MLFLOW_URL names svc/$URL_SVC in $URL_NS, but $MANIFEST serves mlflow-reader in $NS — installing it would not make that URL answer"
-    yaml_python
+    yaml_python "$REPO_DIR" || die "$YAML_PYTHON_HINT"
 
     local cur; cur="$("${K[@]}" get cm "$COLLECTOR_CM" -o json)" || die "no cm/$COLLECTOR_CM in $NS — is this a rossoctl-deps cluster?"
     if [ "$p" = owned ]; then
