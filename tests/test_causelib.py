@@ -31,6 +31,20 @@ def test_no_scrubbed_value_ever_renders_as_a_raw_slug():
         assert label != category or category == "other", f"{category} rendered as its raw slug"
 
 
+def test_labels_lists_every_label_cause_can_return():
+    expected = {label for label, _ in CL._LEGACY} | set(CL._SLUG_LABELS.values())
+    assert set(CL.LABELS) == expected and len(CL.LABELS) == len(expected)
+    assert CL.LABELS[-1] == "other"
+
+
+def test_the_comparison_generator_explains_every_label():
+    """Its cause table looks each label up in a `_meaning` dict, so a missing entry is a KeyError
+    the first time a matrix produces that cause — the generator is a script, so this reads its text."""
+    src = (pathlib.Path(__file__).resolve().parent.parent / "reference/gen-12run-comparison.py").read_text()
+    missing = [label for label in CL.LABELS if f'"{label}":' not in src]
+    assert not missing, f"gen-12run-comparison.py has no _meaning entry for {missing}"
+
+
 @pytest.mark.parametrize(
     "verbatim,expected",
     [

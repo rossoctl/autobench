@@ -66,6 +66,12 @@ _SLUG_LABELS: dict[str, str] = {
     "other": "other",
 }
 
+# Every label `cause()` can return, in display order: the legacy buckets first (their published
+# order), then the labels only the scrubbed era can produce, `other` last. A generator iterates this
+# rather than keeping its own list, which is how gen-12run-comparison.py lost its table in 80df31d.
+LABELS: tuple[str, ...] = tuple(dict.fromkeys(
+    [label for label, _ in _LEGACY] + [v for v in _SLUG_LABELS.values() if v != "other"] + ["other"]))
+
 _SCRUBBED = re.compile(r"^([a-z_]+) \(shape ([0-9a-f]{8})\)$")
 
 

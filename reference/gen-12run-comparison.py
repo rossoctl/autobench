@@ -410,10 +410,21 @@ if _cx or _cy:
                                    "defect; the task never had a chance to be scored.",
         "wrong answer": "The agent ran, answered, and the answer was rejected. **The only bucket that "
                         "is a genuine statement about the model's ability.**",
+        # The rest only a scrubbed-era artifact can produce (see causelib); a legacy run never shows them.
+        "gateway budget / entitlement": "The gateway refused the call — budget spent, the key not "
+                                        "granted that model, a bad key, or a rate limit. **A "
+                                        "configuration fault, not the agent.**",
+        "MCP unreachable": "The agent could not reach the MCP server, or a tool call on it failed. "
+                           "Infrastructure on the benchmark side.",
+        "run-level timeout": "The whole run hit its deadline and took this task with it.",
+        "run interrupted": "The run was cancelled or the Service restarted under it.",
+        "session terminated": "The agent session ended before the task finished.",
+        "task timed out (unattributed)": "A timeout the classifier could not pin on the per-task "
+                                         "budget or the run deadline.",
         "other": "Unclassified — inspect the error text in `run.json`. A new failure mode lands here "
                  "rather than being folded into one of the buckets above.",
     }
-    for k in [c for c, _ in _CAUSES] + ["other"]:
+    for k in CL.LABELS:
         if _cx.get(k) or _cy.get(k):
             L.append(f"| {k} | {_cx.get(k, 0)} | {_cy.get(k, 0)} | {_meaning[k]} |")
     _legs = [(n, (X[n].get('causes') or {}).get('transport / gateway', 0),
