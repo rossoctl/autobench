@@ -1116,7 +1116,7 @@ Then the only check that means anything: **a 1-task gsm8k leg whose report carri
 token row.**
 
 ```bash
-uv run autobench-cli --base "$BASE" run gsm8k --max-tasks 1     # see DEVELOPER_GUIDE.md §7.1
+uv run autobench-cli --base "$BASE" all --benchmark gsm8k --tasks 1 --teardown   # DEVELOPER_GUIDE.md §7.1
 ```
 
 | what you look at | expected | what it proves |
