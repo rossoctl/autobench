@@ -142,7 +142,8 @@ case "${S3_ENABLED:-}" in
     *)  die "S3_ENABLED must be exactly true or false (got '${S3_ENABLED}')" ;;
 esac
 case "$IBAC_JUDGE" in ''|true|false) ;; *) die "IBAC_JUDGE must be true or false (got '$IBAC_JUDGE')" ;; esac
-export KUBE_CONTEXT CLUSTER S3_ENABLED
+# IBAC_JUDGE too: the bootstrap reports the judge's absence differently when this install creates it.
+export KUBE_CONTEXT CLUSTER S3_ENABLED IBAC_JUDGE
 
 K=(kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE")
 H=(--kube-context "$KUBE_CONTEXT" -n "$NAMESPACE")
@@ -320,4 +321,5 @@ python3 "$REFERENCE_DIR/preflight.py" "${PF[@]}" \
 
 log ""
 log "Installed. Only a 1-task leg with a non-zero token row proves the whole chain:"
-log "  BM_BASE=$BASE autobench-cli all --benchmark gsm8k --tasks 1 --teardown"
+log "  BM_BASE=$BASE BM_ISS=<the iss above> BM_USER=benchmarker BM_PASSWORD_FILE=<your password file> \\"
+log "    uv run autobench-cli all --benchmark gsm8k --tasks 1 --teardown"

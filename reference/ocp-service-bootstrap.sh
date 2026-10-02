@@ -481,8 +481,12 @@ fi
 # `helm uninstall` takes it away again: `--set ibacJudge.enabled=true --set ibacJudge.upstreamBase=...
 # --set ibacJudge.model=...`. This script runs BEFORE that install, to write the instance file, so
 # here the fields are simply reported. Warning, not failure, for the same reason as above.
+# Under autobench-install.sh --ibac-judge (IBAC_JUDGE=true) the Helm install that FOLLOWS creates the
+# judge and patches the fields, so their absence now is expected; its post-install preflight checks them live.
 IBAC_CFG="$(kc -n rossoctl-system get cm rossoctl-platform-config -o jsonpath='{.data.config\.yaml}' 2>/dev/null || true)"
-if [ -z "$IBAC_CFG" ]; then
+if [ "${IBAC_JUDGE:-}" = true ]; then
+    check "ibac judge — IBAC_JUDGE=true: the chart install that follows creates it and patches the fields" 0
+elif [ -z "$IBAC_CFG" ]; then
     warn "rossoctl-platform-config not readable in rossoctl-system: cannot tell whether an IBAC judge is configured"
 else
     J_EP="$(printf '%s\n' "$IBAC_CFG" | sed -n 's/^[[:space:]]*judgeEndpoint:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' | head -1)"

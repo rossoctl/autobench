@@ -1944,7 +1944,8 @@ def main() -> int:
                           "failures": failures, "warnings": warnings, "checks": rep.rows}, indent=2))
     else:
         print()
-        verdict = "ready to install" if not failures else "NOT ready — fix the failures above"
+        ready = "ready to install" if args.pre_install else "ready"
+        verdict = ready if not failures else "NOT ready — fix the failures above"
         print(f"{rep.count(OK)} ok, {warnings} warning(s), {failures} failure(s) — {verdict}")
         if not failures:
             print("A clean preflight is necessary, not sufficient: only a 1-task leg with a non-zero "
