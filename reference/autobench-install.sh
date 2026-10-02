@@ -16,6 +16,9 @@
 #   3. preflight    reference/preflight.py --pre-install must report 0 failures. What the release
 #                   itself creates counts as present, and the MLflow round trip is skipped (it goes
 #                   through the Service, which may not be installed yet) — step 8 checks both live
+#   3b. MLflow      kind only: reference/kind-mlflow.sh installs mlflow-reader and points the
+#                   collector at it — unless something already serves MLFLOW_URL (INSTALL_MLFLOW=auto)
+#                   — and RECORDS that it did, so autobench-uninstall.sh removes exactly that
 #   4. config       the platform's bootstrap script writes the instance file — it re-proves the
 #                   benchmarker login and the S3 key itself
 #   5. Secrets      autobench-instances gets that ONE key replaced (other keys are kept and named);
@@ -26,10 +29,11 @@
 #                   this time with the MLflow round trip, the one check that crosses the whole chain
 #
 # --dry-run runs 1-4 for real (they write nothing to the cluster; the instance file goes to a temp
-# dir) and prints 5-7 instead of running them.
+# dir) and prints 3b and 5-7 instead of running them.
 #
-# On a freshly rebuilt KinD cluster run reference/kind-post-setup.sh first: it seeds the realm user,
-# the team secrets and the collector, which this script checks but does not create.
+# On a freshly rebuilt KinD cluster run reference/kind-post-setup.sh first: it seeds the realm user
+# and the team secrets, which this script checks but does not create. The MLflow read path is the
+# exception — this script installs it (3b), and a reader kind-post-setup.sh made is reused, not owned.
 #
 # Secrets never pass through argv: Secret manifests are built by jq from the environment into a
 # chmod-600 temp file, and nothing prints a value — key ids appear as a sha8 at most.
@@ -58,6 +62,7 @@ Usage: reference/autobench-install.sh [--env-file FILE]... [flags]
   --ibac-judge        IBAC_JUDGE=true install the IBAC judge (plugin legs #5-#8 only); needs
                                       IBAC_JUDGE_KEY_FILE, IBAC_JUDGE_UPSTREAM_BASE, IBAC_JUDGE_MODEL
   --no-ibac-judge                     acknowledge REMOVING a judge the live release has
+  --install-mlflow M  INSTALL_MLFLOW  kind: auto (default) | always | never — see kind-mlflow.sh
   --dry-run                           checks for real, cluster writes printed instead of run
   --skip-preflight                    skip step 3 (the bootstrap's own checks still run)
   -h, --help
@@ -79,6 +84,7 @@ CLUSTER="${CLUSTER:-}"
 HELM_VALUES="${HELM_VALUES:-}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 IBAC_JUDGE="${IBAC_JUDGE:-}"
+INSTALL_MLFLOW="${INSTALL_MLFLOW:-auto}"
 NAMESPACE="${NAMESPACE:-rossoctl-system}"
 RELEASE="autobench"
 CHART="$REPO_DIR/deploy/helm/autobench"
@@ -100,6 +106,7 @@ while [ $# -gt 0 ]; do
         --image-tag)      IMAGE_TAG="${2:-}"; shift 2 ;;
         --ibac-judge)     IBAC_JUDGE=true; shift ;;
         --no-ibac-judge)  IBAC_JUDGE=false; DROP_JUDGE=1; shift ;;
+        --install-mlflow) INSTALL_MLFLOW="${2:-}"; shift 2 ;;
         --dry-run)        DRY_RUN=1; shift ;;
         --skip-preflight) SKIP_PREFLIGHT=1; shift ;;
         -h|--help)        usage; exit 0 ;;
@@ -143,7 +150,14 @@ case "${S3_ENABLED:-}" in
 esac
 case "$IBAC_JUDGE" in ''|true|false) ;; *) die "IBAC_JUDGE must be true or false (got '$IBAC_JUDGE')" ;; esac
 # IBAC_JUDGE too: the bootstrap reports the judge's absence differently when this install creates it.
-export KUBE_CONTEXT CLUSTER S3_ENABLED IBAC_JUDGE
+export KUBE_CONTEXT CLUSTER S3_ENABLED IBAC_JUDGE INSTALL_MLFLOW
+
+# kind: whether this install creates the MLflow read path — preflight must know before it judges it.
+MLFLOW_PLAN=""
+if [ "$AB_PLATFORM" = kind ]; then
+    MLFLOW_PLAN="$("$REFERENCE_DIR/kind-mlflow.sh" plan --context "$KUBE_CONTEXT")" \
+        || die "could not decide the MLflow plan (see above)"
+fi
 
 K=(kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE")
 H=(--kube-context "$KUBE_CONTEXT" -n "$NAMESPACE")
@@ -183,6 +197,7 @@ fi
 
 log "AutoBench install — platform=$AB_PLATFORM context=$KUBE_CONTEXT cluster=$CLUSTER namespace=$NAMESPACE"
 log "  values $HELM_VALUES   image tag ${IMAGE_TAG:-(chart appVersion)}   judge ${IBAC_JUDGE:-false}   s3 $S3_ENABLED"
+[ -n "$MLFLOW_PLAN" ] && log "  mlflow $MLFLOW_PLAN (INSTALL_MLFLOW=$INSTALL_MLFLOW)"
 [ -n "${ENVFILE_LOADED:-}" ] && log "  env files: $ENVFILE_LOADED"
 [ -n "$DRY_RUN" ] && log "  DRY RUN — checks run for real; cluster writes are printed, not run"
 
@@ -205,8 +220,18 @@ else
     PRE=(--platform "$AB_PLATFORM" --context "$KUBE_CONTEXT" --namespace "$NAMESPACE"
          --values "$HELM_VALUES" --chart "$CHART" --pre-install --skip-mlflow-probe)
     [ "$IBAC_JUDGE" = true ] && PRE+=(--ibac-judge)
+    [ "$MLFLOW_PLAN" = install ] && PRE+=(--kind-mlflow)
     python3 "$REFERENCE_DIR/preflight.py" "${PRE[@]}" \
         || die "preflight reports failures — fix them, then re-run (nothing was written)"
+fi
+
+# --- 3b. the MLflow read path (kind) -----------------------------------------------------------------
+# Before the bootstrap: it reads the collector's experiment id and warns when the reader is absent.
+if [ "$AB_PLATFORM" = kind ]; then
+    log ""
+    log "==> 3b. MLflow read path ($MLFLOW_PLAN)"
+    "$REFERENCE_DIR/kind-mlflow.sh" install --context "$KUBE_CONTEXT" ${DRY_RUN:+--dry-run} \
+        || die "the MLflow install failed (see above) — re-run; autobench-uninstall.sh undoes a partial one"
 fi
 
 # --- 4. the instance config --------------------------------------------------------------------------

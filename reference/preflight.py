@@ -146,6 +146,8 @@ def llm_profile_from_values(path: str) -> str | None:
     return None
 COLLECTOR_DEPLOY = "otel-collector"
 MLFLOW_EXPORTER = "otlphttp/mlflow"
+# Where reference/kind-mlflow.sh points the collector — deploy/kind/mlflow-reader.yaml's Service.
+KIND_READER_TRACES = "http://mlflow-reader.{ns}.svc.cluster.local:5000/v1/traces"
 INSTANCES_SECRET = "autobench-instances"
 SERVICE_DEPLOY = "autobench-service"
 CHART_DIR = "deploy/helm/autobench"
@@ -609,8 +611,11 @@ def check_ibac_judge(
                  "leave those fields as they are rather than guess")
 
 
-def check_collector(rep: Report, cluster: Cluster, namespace: str) -> dict:
-    """Returns what the collector actually does: {http_port, traces_endpoint, experiment_id, workspace}."""
+def check_collector(rep: Report, cluster: Cluster, namespace: str, *, repointing: bool = False) -> dict:
+    """Returns what the collector actually does: {http_port, traces_endpoint, experiment_id, workspace}.
+
+    `repointing`: the install about to run points the MLflow exporter at mlflow-reader itself
+    (reference/kind-mlflow.sh), so its current target and auth are reported, not judged."""
     rep.section("OTEL collector (the write half of the telemetry chain)")
     info: dict = {}
     rc, command, _ = cluster.run(
@@ -663,7 +668,8 @@ def check_collector(rep: Report, cluster: Cluster, namespace: str) -> dict:
     workspace = scalar("x-mlflow-workspace")
     if endpoint:
         info["traces_endpoint"] = endpoint
-        rep.ok("collector traces_endpoint", endpoint)
+        rep.ok("collector traces_endpoint", endpoint + ("  (this install repoints it at mlflow-reader)"
+                                                        if repointing else ""))
     else:
         rep.fail("collector traces_endpoint", "not set — spans are received and dropped")
     if exp:
@@ -674,7 +680,10 @@ def check_collector(rep: Report, cluster: Cluster, namespace: str) -> dict:
     if workspace:
         info["workspace"] = workspace
         rep.ok("collector x-mlflow-workspace", workspace)
-    if re.search(r"^\s+auth:", body, re.M):
+    if re.search(r"^\s+auth:", body, re.M) and repointing:
+        info["exporter_auth"] = True
+        rep.ok("collector MLflow export is authenticated", "this install drops it with the repoint")
+    elif re.search(r"^\s+auth:", body, re.M):
         info["exporter_auth"] = True
         rep.warn(
             "collector MLflow export is authenticated",
@@ -684,12 +693,24 @@ def check_collector(rep: Report, cluster: Cluster, namespace: str) -> dict:
     return info
 
 
-def check_mlflow(rep: Report, cluster: Cluster, platform: str, namespace: str, collector: dict) -> None:
+def check_mlflow(rep: Report, cluster: Cluster, platform: str, namespace: str, collector: dict,
+                 *, installing: bool = False) -> None:
+    """`installing`: kind only — the install about to run creates mlflow-reader and repoints the
+    collector at it (reference/kind-mlflow.sh), so neither is expected to be there yet."""
     rep.section("MLflow (the read half — this is what turns a run into a token report)")
     endpoint = collector.get("traces_endpoint", "")
-    host = urllib.parse.urlsplit(endpoint).netloc if "://" in endpoint else ""
+    # .hostname, never netloc: rossoctl-deps' own target is `http://mlflow:5000/...`, and a port
+    # left on the name looks up a Service called `mlflow:5000`, which never exists.
+    host = (urllib.parse.urlsplit(endpoint).hostname or "") if "://" in endpoint else ""
     svc = host.split(".")[0] if host else ""
     ns = host.split(".")[1] if host.count(".") >= 1 else namespace
+
+    if platform == "kind" and installing:
+        rep.ok("deploy/mlflow-reader", "this install creates it (reference/kind-mlflow.sh) and records "
+                                       "that it did, so uninstall removes it")
+        rep.ok("collector export target", f"{endpoint or '(unset)'} now — this install repoints it at "
+                                          "mlflow-reader; the post-install preflight probes both")
+        return
 
     if svc:
         if cluster.exists("-n", ns, "get", "svc", svc):
@@ -1849,6 +1870,9 @@ def main() -> int:
     ap.add_argument("--ibac-judge", action="store_true",
                     help="with --pre-install: the install enables the judge, so its Deployment, its "
                          "upstream Secret and the ibac fields are expected to be absent")
+    ap.add_argument("--kind-mlflow", action="store_true",
+                    help="with --pre-install, kind only: the install creates mlflow-reader and "
+                         "repoints the collector at it, so neither is expected yet")
     ap.add_argument("--skip-mlflow-probe", action="store_true",
                     help="skip GET /mlflow/health. That probe WRITES one synthetic trace (no LLM "
                          "call, and it cannot enter a report — its session id is a uuid), but it is "
@@ -1861,6 +1885,8 @@ def main() -> int:
     if args.ibac_judge and not args.pre_install:
         ap.error("--ibac-judge only means something with --pre-install; after an install, "
                  "--plugin-legs is the strict judge check")
+    if args.kind_mlflow and not args.pre_install:
+        ap.error("--kind-mlflow only means something with --pre-install")
     # Before anything reads the environment. A file beats the shell; flags were parsed above and are
     # read from `args`, so they still beat both.
     for path in args.env_file:
@@ -1911,8 +1937,12 @@ def main() -> int:
         check_workload_secrets(rep, workload, teams)
         check_ibac_judge(rep, cluster, args.namespace, required=args.plugin_legs,
                          installing=args.ibac_judge)
-        collector = check_collector(rep, cluster, args.namespace)
-        check_mlflow(rep, cluster, platform, args.namespace, collector)
+        mlflow_installing = args.kind_mlflow and platform == "kind"
+        collector = check_collector(rep, cluster, args.namespace, repointing=mlflow_installing)
+        check_mlflow(rep, cluster, platform, args.namespace, collector, installing=mlflow_installing)
+        if mlflow_installing:
+            # What the instance config is compared against is where the collector WILL write.
+            collector["traces_endpoint"] = KIND_READER_TRACES.format(ns=args.namespace)
         chart_binds = None
         if args.pre_install:
             chart_binds = chart_trace_writer_namespaces(args.chart, args.values, args.namespace)

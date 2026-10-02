@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-10-02T05:21:13Z
+**Last modified:** 2026-10-02T15:08:35Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -189,6 +189,10 @@ chart creates — the trace-writer RoleBinding first among them — when the rel
 `--pre-install` reads what the chart *will* create off `helm template` of `--chart` with `--values`
 and counts that as present. `--ibac-judge` adds the judge's pieces. `autobench-install.sh` passes
 `--pre-install` (and `--ibac-judge` when the judge is on) before Helm runs, and neither after it.
+On KinD, `--kind-mlflow` (only with `--pre-install`) does the same for the MLflow read path the
+installer is about to create (§5.2): an absent `mlflow-reader` and a collector still pointed at the
+OIDC-gated `mlflow` are what that install fixes, so they are not failures, and the instance config is
+compared against where the collector *will* export.
 
 Exit status is 0 when nothing FAILed; warnings do not fail the run. Thirteen sections, in the order
 a request travels: tooling, cluster reachability, Rossoctl version and CRDs, namespaces, workload
@@ -678,6 +682,7 @@ So the install path **checks** instead of assuming:
 
 | script | what it does now |
 |---|---|
+| `autobench-install.sh --install-mlflow auto\|always\|never` (KinD) | the same three modes through `reference/kind-mlflow.sh`, plus an **ownership record**, so `autobench-uninstall.sh` removes the reader only when this installed it (§5.2) |
 | `kind-post-setup.sh --install-mlflow auto\|always\|never` | `auto` (the default) applies `deploy/kind/mlflow-reader.yaml` only when nothing is already serving `MLFLOW_URL`; it logs which way it went and why. `never` is for a cluster whose MLflow is external — the collector is still repointed at `MLFLOW_URL`, which is the half that actually matters |
 | `ocp-service-bootstrap.sh` | resolving to **no MLflow credential at all is a precheck failure**, not the warning it used to be. It previously wrote `bearer_token: ""` and let the install proceed |
 | `autobench-cli mlflow-health` | the gate. One authenticated `GET /mlflow/health` against the deployed Service |
@@ -879,6 +884,7 @@ in order and stops at the first one that is wrong:
 3. `preflight.py --pre-install` (it must report 0 failures). What the release itself creates is not
    required to exist yet: the trace-writer RoleBinding, and with the judge its Deployment, its
    upstream Secret and the `ibac.*` fields;
+   - 3b. **KinD only: the MLflow read path** — `mlflow-reader` and the collector repoint (§5.2);
 4. the bootstrap script, which writes the instance file;
 5. the `autobench-instances` Secret, with only that one key replaced and the others kept and named;
 6. `helm upgrade --install --wait`;
@@ -891,7 +897,7 @@ reference/autobench-install.sh --env-file ~/.rossoctl-ykt5/autobench.env --dry-r
 reference/autobench-install.sh --env-file ~/.rossoctl-ykt5/autobench.env
 ```
 
-`--dry-run` runs steps 1–4 for real and prints steps 5–7 instead of running them. They are the only
+`--dry-run` runs steps 1–4 for real and prints 3b and 5–7 instead of running them. They are the only
 steps that write to the cluster. Inputs are §3.1's. A dry-run against a cluster that still has the
 release proves nothing about a *fresh* install, because the chart's own objects are still there: the
 first real install after an uninstall is the case that matters.
@@ -935,6 +941,31 @@ helm upgrade --install autobench deploy/helm/autobench \
   -n rossoctl-system --kube-context kind-rossoctl -f deploy/helm/values-kind.yaml
 curl -fsS http://autobench.localtest.me:8080/healthz                  # {"status":"ok"}
 ```
+
+**The installer owns KinD's MLflow read path.** The MLflow `rossoctl-deps` ships is OIDC-gated and
+refuses both the collector's export and the Service's read (§8), so on KinD
+`autobench-install.sh` (step 3b, via `reference/kind-mlflow.sh`) applies
+`deploy/kind/mlflow-reader.yaml`, waits for its traces API to answer, and repoints the collector at
+it. `INSTALL_MLFLOW` / `--install-mlflow` choose:
+
+| mode | does |
+|---|---|
+| `auto` (default) | installs unless a Service already serves `MLFLOW_URL`. One that does — say, a reader `kind-post-setup.sh` made — is **reused and never owned**: uninstall leaves it |
+| `always` | installs even then, and **takes ownership** |
+| `never` | touches nothing |
+
+Ownership is a record, not a guess: before changing anything the install writes
+`cm/autobench-mlflow-install` in `rossoctl-system`, holding the collector's config as it was and its
+sha8 (the config's credentials are `${env:…}` references, so the copy carries no secret).
+`autobench-uninstall.sh` acts only when that record exists:
+
+- the collector config is put back **only if it is still exactly what the install left**; if someone
+  changed it since, it is left alone and the recorded original is saved next to the uninstall's
+  manifest record instead;
+- then `mlflow-reader` is deleted and verified NotFound, and the record goes. The traces themselves
+  live in the platform's postgres and survive.
+
+`--keep-mlflow` on the uninstall skips all of it.
 
 `8080` there is the **host** port KinD publishes the istio gateway on; it is not this Service's
 port, and the two matching is a coincidence. Note also that `kind load docker-image` bypasses the
@@ -1104,6 +1135,8 @@ reference/autobench-uninstall.sh --env-file ~/.rossoctl-ykt5/autobench.env [--te
    - `rossoctl-platform-config` must no longer name the judge.
 5. **Report the two out-of-band Secrets**, `autobench-instances` and `ibac-judge-upstream`, by key
    name. They are kept unless you pass `--purge-secrets`.
+6. **KinD only: the MLflow read path**, if and only if `autobench-install.sh` installed it — the
+   collector restored, `mlflow-reader` removed (§5.2). `--keep-mlflow` skips this step.
 
 ## 6. Verifying the install
 
@@ -1192,8 +1225,9 @@ limit. Gate on a 200 from `/api/2.0/mlflow/traces` rather than on the pod going 
 installs run at container start — and pass `experiment_ids`, since that endpoint answers 400
 without it. Probe from **inside** the pod (MLflow 3.x rejects the API server's service proxy as a
 DNS-rebinding attempt) with `python`, not `curl`, which the image does not ship.
-`reference/kind-post-setup.sh` does all of this, including pointing the collector at the reader;
-by hand it is:
+`autobench-install.sh` does all of this on KinD, including pointing the collector at the reader,
+and records that it did so the uninstall can undo it (§5.2); `kind-post-setup.sh` does it too, but
+without the record. By hand it is:
 
 ```bash
 python3 reference/kind-collector-mlflow.py            # patch + restart; idempotent
