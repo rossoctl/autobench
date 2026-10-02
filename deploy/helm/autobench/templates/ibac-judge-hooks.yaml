@@ -154,6 +154,13 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             runAsNonRoot: true
+            {{- /* python:3.12-slim runs as root. OpenShift's SCC assigns a UID, so runAsNonRoot
+                   passes there; KinD assigns none and the kubelet refuses the container
+                   (CreateContainerConfigError) — the Service's own pod sets the same branch. */}}
+            {{- if ne (include "autobench.platform" $) "openshift" }}
+            runAsUser: {{ $.Values.podSecurityContext.runAsUser }}
+            runAsGroup: {{ $.Values.podSecurityContext.runAsGroup }}
+            {{- end }}
             capabilities:
               drop: ["ALL"]
             seccompProfile:

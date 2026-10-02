@@ -144,3 +144,28 @@ def test_a_gateway_the_install_rewrites_is_not_a_failure_yet(monkeypatch, rewrit
     preflight.check_instance_config(rep, FreshCluster(), "rossoctl-system", "kind", {}, inst,
                                     llm_profile="internet", rewriting=rewriting)
     assert _statuses(rep)["x.json: LLM gateway matches the internet profile"] == expect
+
+
+def _render_judge(platform: str) -> list[dict]:
+    import subprocess
+    import yaml
+    out = subprocess.run(
+        ["helm", "template", "t", CHART, "-f", str(ROOT / f"deploy/helm/values-{platform}.yaml"),
+         "--set", "ibacJudge.enabled=true", "--set-string", "ibacJudge.upstreamBase=https://llm.example.com",
+         "--set-string", "ibacJudge.model=m"],
+        capture_output=True, text=True, check=True, env={**os.environ, "PATH": _PATH}).stdout
+    return [d for d in yaml.safe_load_all(out)
+            if d and d["kind"] in ("Deployment", "Job") and "judge" in d["metadata"]["name"]]
+
+
+@needs_helm
+@pytest.mark.parametrize("platform, uid", [("kind", 10001), ("openshift", None)])
+def test_the_judge_runs_as_a_named_uid_off_openshift(platform, uid):
+    # python:3.12-slim runs as root: on KinD, runAsNonRoot with no runAsUser is a
+    # CreateContainerConfigError (2026-10-02). OpenShift's SCC assigns the UID, and must be let to.
+    objs = _render_judge(platform)
+    assert {o["kind"] for o in objs} == {"Deployment", "Job"}
+    for o in objs:
+        for c in o["spec"]["template"]["spec"]["containers"]:
+            assert c["securityContext"]["runAsNonRoot"] is True
+            assert c["securityContext"].get("runAsUser") == uid, o["metadata"]["name"]
