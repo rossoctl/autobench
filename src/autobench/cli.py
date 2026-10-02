@@ -23,6 +23,11 @@ as a single `all` command or step by step, so the same tool serves both "just ru
     autobench-cli artifacts --benchmark gsm8k --run <run_id> --mirror /tmp/autobench
     autobench-cli teardown  --benchmark gsm8k
 
+    # one AgentRuntime by its exact name — what reference/autobench-uninstall.sh uses, because
+    # `teardown` deletes the agent BEFORE the tool and stops at a missing agent, orphaning the MCP
+    autobench-cli delete-agent --namespace team1 --name exgentic-a2a-tool-calling-gsm8k
+    autobench-cli delete-tool  --namespace team1 --name exgentic-mcp-gsm8k
+
 Environment (flags of the same name override):
     BM_BASE          Service base URL
     BM_ISS           Keycloak realm URL (the instance's iss)
@@ -47,6 +52,8 @@ independently. That duplication is deliberate for now — the matrix driver prod
 results and is not worth destabilising to share code; consolidating the two behind this client is
 a follow-up.
 """
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -318,7 +325,8 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("command",
                    choices=["all", "whoami", "list", "deploy", "wait", "run", "poll",
-                            "report", "artifacts", "teardown", "mlflow-health"])
+                            "report", "artifacts", "teardown", "delete-agent", "delete-tool",
+                            "mlflow-health"])
     p.add_argument("--benchmark", default="gsm8k", help="gsm8k | tau2 | appworld")
     p.add_argument("--namespace", default="team1")
     p.add_argument("--agent", default="tool_calling")
@@ -332,6 +340,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--plugin", action="append", default=None, help="NAME:POLICY (repeatable)")
     p.add_argument("--on-error", default=None, help="chain-default policy")
     p.add_argument("--run", default=None, help="run_id, for poll/report/artifacts")
+    p.add_argument("--name", default=None, help="AgentRuntime name, for delete-agent/delete-tool")
     p.add_argument("--mirror", default=None, help="download artifacts under this directory")
     p.add_argument("--no-deploy", action="store_true", help="`all`: reuse the existing deployment")
     p.add_argument("--teardown", action="store_true", help="`all`: tear down when finished")
@@ -414,6 +423,13 @@ def main(argv=None) -> int:
         st, _ = c.api(f"/benchmarks/{a.benchmark}/deploy", None, "DELETE",
                       timeout=300, query=scope(a))
         log(f"DELETE -> {st}")
+        return 0 if st in (204, 404) else 6
+    if a.command in ("delete-agent", "delete-tool"):
+        if not a.name:
+            die(f"--name <AgentRuntime name> is required for `{a.command}`")
+        kind = "agents" if a.command == "delete-agent" else "tools"
+        st, _ = c.api(f"/{kind}/{a.namespace}/{a.name}", None, "DELETE", timeout=300)
+        log(f"DELETE {kind}/{a.namespace}/{a.name} -> {st}")
         return 0 if st in (204, 404) else 6
 
     if a.command in ("poll", "report", "artifacts"):

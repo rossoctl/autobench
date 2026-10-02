@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-10-01T03:50:23Z
+**Last modified:** 2026-10-02T00:50:33Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -42,7 +42,7 @@ install, §6 is the only verification that means anything.
   - [2.3 Cluster-side checklist](#23-cluster-side-checklist)
   - [2.4 The preflight script](#24-the-preflight-script)
 - [3. Environment variables](#3-environment-variables)
-  - [3.1 Install-time — your shell only, never a values file](#31-install-time--your-shell-only-never-a-values-file)
+  - [3.1 Install-time — your shell or an env file, never a values file](#31-install-time--your-shell-or-an-env-file-never-a-values-file)
   - [3.2 The Service pod](#32-the-service-pod)
   - [3.3 The workload pods — injected, not configured](#33-the-workload-pods--injected-not-configured)
   - [3.4 KinD and OpenShift differ — and the differences fail silently](#34-kind-and-openshift-differ--and-the-differences-fail-silently)
@@ -74,7 +74,7 @@ cluster operation server-side. Nothing here shells out to `kubectl` or `oc`.
 | Service | `autobench-service` | chart / `deploy/service.yaml` | ClusterIP `:8080`, port named `http` |
 | Route | `autobench` | chart (`platform: openshift`) | edge TLS; host generated as `autobench-<namespace>.apps.<cluster>` |
 | HTTPRoute | `autobench` | chart (`platform: kind`) | attaches to the shared istio gateway |
-| Secret | `autobench-instances` | **you, out-of-band** (§4) | ROPC credentials — never passes through Helm values |
+| Secret | `autobench-instances` | **out-of-band**: `autobench-install.sh`, or you by hand (§4) | ROPC credentials and S3 keys — never passes through Helm values |
 | RoleBinding | `autobench-service-mlflow-trace-writer` | chart (`mlflowTraceWriter.enabled`) | one per MLflow workspace namespace; lets the Service **write** its own spans. On by default in `values-openshift.yaml` — see the warning below |
 | Deployment + Service | `ibac-judge` | chart (`ibacJudge.enabled`, off by default) | needed only by the plugin legs #5–#8 (§5.4) |
 
@@ -246,15 +246,52 @@ There are three populations, and conflating them is how a key ends up in the wro
 are, in order: what you export **to run the installer**, what the **Service pod** reads, and what
 the operator injects into the **workload pods**.
 
-### 3.1 Install-time — your shell only, never a values file
+### 3.1 Install-time — your shell or an env file, never a values file
 
 Nothing in this table is a Helm value, a ConfigMap, or a committed file. Each is read by a script,
 used once, and hashed if it is reported at all.
 
+**Every one of them can come from an env file.** `reference/autobench.env.template` lists them all.
+Copy it outside the repo and fill it in:
+
+```bash
+umask 077; mkdir -p ~/.rossoctl-ykt5
+cp reference/autobench.env.template ~/.rossoctl-ykt5/autobench.env   # chmod 600 — looser is refused
+reference/autobench-install.sh --env-file ~/.rossoctl-ykt5/autobench.env
+```
+
+`--env-file` is accepted by `autobench-install.sh`, `autobench-uninstall.sh`, both bootstrap scripts,
+`kind-post-setup.sh` and `preflight.py`.
+
+It is repeatable, and **the last value wins**, lowest to highest:
+
+1. the shell environment;
+2. each `--env-file`, in command-line order (within one file, a later line beats an earlier one);
+3. an explicit flag.
+
+So a small per-run override file can be layered over a base file:
+`--env-file base.env --env-file override.env`.
+
+The grammar is smaller than a shell's on purpose:
+
+- `KEY=value`, with optional `export ` and one matching pair of quotes stripped.
+- Nothing is evaluated. `$VAR` and `$(…)` are stored exactly as written, so a password containing
+  `$` survives.
+- A bad line is reported by file and line number, never by its value.
+
+The template's value lines are commented out, because an uncommented `KEY=` *is* an assignment and
+would blank a value your shell exported. `*.env` is gitignored.
+
 | variable | used by | notes |
 |---|---|---|
+| `AB_PLATFORM`, `KUBE_CONTEXT` | `autobench-install.sh`, `autobench-uninstall.sh` | **required**: `openshift` \| `kind`, and the Service cluster's kubectl context. Never defaulted: the current context is not necessarily the cluster you mean. `--platform` / `--context` override |
+| `CLUSTER`, `HELM_VALUES`, `IMAGE_TAG` | `autobench-install.sh` | `CLUSTER` is required on OpenShift (it derives the apps and Keycloak hosts); `HELM_VALUES` defaults to `deploy/helm/values-<platform>.yaml`; `IMAGE_TAG` defaults to the chart's `appVersion` |
 | `KC_SERVICE_USERNAME` | both bootstrap scripts, `preflight.py` | the ROPC login the Service uses against Rossoctl (default `benchmarker`); `--username` overrides |
-| `KC_SERVICE_PASSWORD` | both bootstrap scripts, `preflight.py` | **required**; written into the instance file, never echoed. `--password-file` / `--password-stdin` / `--password` take precedence (§3.6) |
+| `KC_SERVICE_PASSWORD` / `KC_SERVICE_PASSWORD_FILE` | both bootstrap scripts, `preflight.py`, `autobench-uninstall.sh` | **required, exactly one of the two.** The `_FILE` form names a `600` file holding the password, which keeps it out of the env file; both set is an error. Written into the instance file, never echoed. `--password-file` / `--password-stdin` / `--password` take precedence (§3.6) |
+| `S3_ENABLED` | both bootstrap scripts, `autobench-install.sh`, `preflight.py` | **required, no default**: `true` publishes run artifacts, `false` publishes none and writes no `s3` block. Unset is a precheck failure — see §4 |
+| `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | same | **required when `S3_ENABLED=true`**, shape-checked, then the key is proven by a signed read-only request (`reference/s3check.py`). Only the key id's `sha8` is ever shown |
+| `S3_PREFIX`, `S3_ENDPOINT_URL` | same | optional: the prefix defaults to `<cluster>/` (OpenShift) or `kind/`; the endpoint is for S3-compatible stores only, a bare `https://host[:port]` |
+| `IBAC_JUDGE`, `IBAC_JUDGE_KEY_FILE`, `IBAC_JUDGE_UPSTREAM_BASE`, `IBAC_JUDGE_MODEL` | `autobench-install.sh` | the judge for the plugin legs (§5.4); `--ibac-judge` sets the first. The base is a **base** URL and the model takes **no** `openai/` prefix — both are shape-checked |
 | `KC_SERVICE_CLIENT_SECRET` | both bootstrap scripts | only if the Keycloak client is confidential |
 | `KC_USER_PASSWORD` | `kind-post-setup.sh` | the password to *seed*; the same three flags override it, and it falls back to `~/.rossoctl-kind/benchmarker.pass` (`KC_CRED_FILE`) |
 | `KC_ADMIN_PASSWORD` | `kind-post-setup.sh`, `preflight.py` | optional — read from the in-cluster `keycloak-initial-admin` Secret when unset. In `preflight.py` it enables the Admin-API tier of §3.6 |
@@ -263,7 +300,6 @@ used once, and hashed if it is reported at all.
 | `LLM_PROFILE` | both bootstrap scripts, `kind-post-setup.sh`, `preflight.py` | `intranet` \| `internet` — selects one of the two gateway variable sets (§3.5) |
 | `INTRANET_LLM_*` / `INTERNET_LLM_*` | `reference/llm-profiles.sh`, read by all of the above | the profiles themselves: base, model, key file, optional bypass list (§3.5) |
 | `BM_WORKLOAD_LLM_KEY` | `kind-post-setup.sh` | the workload LLM key; falls back to the selected profile's key file, else `~/.rossoctl-kind/litellm.key` (`LLM_KEY_FILE`) |
-| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | `ocp-service-bootstrap.sh` | override `--s3-from`, which otherwise copies them in-process from an existing instance file |
 | `WORKLOAD_LLM_API_BASE`, `WORKLOAD_LLM_MODEL` | both bootstrap scripts | set by `LLM_PROFILE` when you use one; an explicit export wins. The gateway has **no default** on purpose: this repo is public |
 | `MLFLOW_URL`, `MLFLOW_EXPERIMENT_ID`, `MLFLOW_WORKSPACE`, `MLFLOW_TOKEN_SECRET` | `ocp-service-bootstrap.sh` | the id and workspace default to what the collector exports |
 | `WORKLOAD_OTEL_ENDPOINT`, `WORKLOAD_OTEL_INSECURE`, `WORKLOAD_AGENT_RUNNER` | both bootstrap scripts | see §3.4 on the runner |
@@ -550,7 +586,7 @@ Every script that needs the password takes the same four, most explicit first:
 | `--password-file F` | `preflight.py`, both bootstrap scripts, `kind-post-setup.sh` | **preferred.** The value never reaches argv or an environment. The file must be `600` or `400` or it is refused |
 | `--password-stdin` | same | for a pipeline or a secret manager: `pass show … \| script --password-stdin` |
 | `--password P` | same | accepted, and warns every time: argv is world-readable through `ps` and `/proc/<pid>/cmdline`, and it lands in your shell history |
-| the environment | `KC_SERVICE_PASSWORD` (bootstrap, preflight), `KC_USER_PASSWORD` (`kind-post-setup.sh`) | the original route, unchanged |
+| the environment | `KC_SERVICE_PASSWORD` or `KC_SERVICE_PASSWORD_FILE` (bootstrap, preflight), `KC_USER_PASSWORD` (`kind-post-setup.sh`) | the original route, plus a `_FILE` spelling that names a `600` file — the form an env file (§3.1) wants. Setting both is an error, not a guess |
 
 Two conveniences on top: `kind-post-setup.sh` falls back to `~/.rossoctl-kind/benchmarker.pass`
 (`KC_CRED_FILE`), so on KinD no credential flag is ever needed; and `preflight.py` falls back to the
@@ -701,29 +737,67 @@ read-only check.
 
 ## 4. The instance-config Secret
 
-One JSON file per issuer, keyed by `iss`, mounted read-only at `/etc/service/instances`. **No
-install path creates it**: it carries the ROPC service credential and the S3 keys, so it is
+One JSON file per issuer, keyed by `iss`, mounted read-only at `/etc/service/instances`. **The
+chart never creates it**: it carries the ROPC service credential and the S3 keys, so it is
 generated out-of-band and must never pass through Helm values or a values file.
+`autobench-install.sh` (§5) generates it and writes the Secret for you. This section is what that
+script runs, and what to run by hand.
 
 One script per platform, so the file has reproducible provenance instead of being hand-assembled:
 
 ```bash
-# OpenShift — prechecks the whole chain (ten rows on a single-namespace cluster) before writing
+# OpenShift — prechecks the whole chain, S3 included, before writing
 reference/ocp-service-bootstrap.sh --cluster ykt5 --context <ctx> \
+  --env-file ~/.rossoctl-ykt5/autobench.env \
   --apps-domain apps.ykt5.example.com \
-  --password-file ~/.rossoctl-ykt5/benchmarker.pass \
   --llm-api-base https://<external-gateway>/v1 \
   --out-dir instances/
 
 # KinD — verifies the credential before writing it into the file
 reference/kind-service-bootstrap.sh --context kind-rossoctl \
-  --password-file ~/.rossoctl-kind/benchmarker.pass \
+  --env-file ~/.rossoctl-kind/autobench.env \
   --copy-from instances/keycloak.localtest.me_8080.json \
   --out-dir instances/
 ```
 
-Both also accept `--password-stdin`, `--password`, or `KC_SERVICE_PASSWORD` in the environment, and
-default the user to `benchmarker` (`--username` overrides) — see §3.6.
+Both take the password from `--password-file`, `--password-stdin`, `--password`, or
+`KC_SERVICE_PASSWORD[_FILE]` in the environment or the env file. Both default the user to
+`benchmarker` (`--username` overrides); see §3.6.
+
+**S3 is declared, never discovered.** Both scripts refuse to write a file until `S3_ENABLED` says
+which install this is:
+
+| `S3_ENABLED` | precheck | the file gets |
+|---|---|---|
+| unset | **FAIL** `s3 declared`, pointing at the template | nothing; the script stops |
+| `false` | ok, `s3 disabled by declaration` | **no** `s3` block, so the Service skips export by design |
+| `true`, a value missing or misshapen | **FAIL**, naming each such variable | nothing |
+| `true`, key rejected | **FAIL** with the S3 error code (`InvalidAccessKeyId`, `SignatureDoesNotMatch`, `NoSuchBucket`, `PermanentRedirect` for a wrong region) | nothing |
+| `true`, key valid | ok, with bucket, region and the key id's `sha8` | the full block |
+
+The proof is a SigV4-signed `ListObjectsV2` with `max-keys=0`, so it writes nothing.
+`AccessDenied` counts as success: AWS checks the signature before the policy, and a writer key
+with `PutObject` alone is exactly what this bucket should be given.
+
+This replaced the old behaviour, which looked for keys in three places, defaulted the bucket when
+it found none, and only *warned*. The Service gates export on the bucket alone, so that produced a
+cluster that scored runs, attempted every upload with empty keys, and logged `S3 export failed`
+where no installer looks (§7).
+
+`--s3-from` is gone: passing it now dies with the replacement spelled out. `--copy-from` now carries
+only `workload_llm`.
+
+To move an existing install's keys into an env file without printing them, run this. It reads
+from the live Secret, since on some clusters that is the only copy:
+
+```bash
+kubectl -n rossoctl-system get secret autobench-instances -o json \
+  | jq -r '.data["<encoded-iss-host>.json"]' | base64 -d \
+  | ( umask 077; jq -r '.s3 // error("no s3 block") | "S3_ENABLED=true", "S3_BUCKET=\(.bucket)",
+        "S3_REGION=\(.region)", "S3_ACCESS_KEY_ID=\(.access_key_id)",
+        "S3_SECRET_ACCESS_KEY=\(.secret_access_key)", (.prefix // empty | "S3_PREFIX=\(.)"),
+        (.endpoint_url // empty | "S3_ENDPOINT_URL=\(.)")' >> ~/.rossoctl-<cluster>/autobench.env )
+```
 
 Then, on either platform:
 
@@ -746,9 +820,10 @@ Four properties of these scripts are load-bearing:
   `/proc/<pid>/cmdline`); a process's environment is not.
 - **The file is created `600` by `umask`,** not `chmod`ed afterwards, so there is no window in
   which credentials sit world-readable on disk.
-- **`--copy-from` / `--s3-from` carry `s3` and `workload_llm` over** from an existing file. Those
-  two are environment facts a script cannot discover, and a cluster rebuild should reproduce them
-  rather than lose them — losing them is silent, and costs a run's artifacts.
+- **Facts a script cannot discover are carried or declared, never guessed.** `--copy-from` carries
+  `workload_llm` over from an existing file, so a cluster rebuild reproduces it instead of losing
+  it. `s3` is declared through `S3_*` (above) rather than copied. Losing either one is silent, and
+  losing `s3` costs every run its artifacts.
 - **A no-auth MLflow still needs a `bearer_token`,** which is not a contradiction: the Service
   mints a token *before* it reads, and with neither a bearer nor client-credentials the token
   helper raises, the route catches it, and the run fails soft into an empty token report. Both
@@ -787,6 +862,34 @@ It renders both platform shapes and diffs them against
 standard `app.kubernetes.io/*` labels are deliberately **absent**: the sole label and selector is
 `app: autobench-service`, because that is what the live Deployments select on, and a Deployment's
 selector is immutable. If the check fails, the chart is wrong — not the manifests.
+
+**`reference/autobench-install.sh` is the install, on either platform.** It runs every step below
+in order and stops at the first one that is wrong:
+
+1. tools;
+2. inputs;
+3. `preflight.py` (it must report 0 failures);
+4. the bootstrap script, which writes the instance file;
+5. the `autobench-instances` Secret, with only that one key replaced and the others kept and named;
+6. `helm upgrade --install --wait`;
+7. a `rollout restart`, if the Deployment already existed;
+8. verification: `/healthz`, the `s3` block read back from the live Secret, and `preflight.py`
+   again, this time with the MLflow round trip.
+
+```bash
+reference/autobench-install.sh --env-file ~/.rossoctl-ykt5/autobench.env --dry-run   # checks only
+reference/autobench-install.sh --env-file ~/.rossoctl-ykt5/autobench.env
+```
+
+`--dry-run` runs steps 1–4 for real and prints steps 5–7 instead of running them. They are the only
+steps that write to the cluster. Inputs are §3.1's.
+
+If the live release runs the IBAC judge, an install that does not ask for the judge refuses to run.
+Pass `--ibac-judge` to keep it, or `--no-ibac-judge` to remove it. Losing the judge on an upgrade
+is otherwise silent until the plugin legs fail.
+
+The subsections below are the manual equivalent: what the script runs, for when you need a single
+step.
 
 ### 5.1 OpenShift
 
@@ -863,6 +966,16 @@ The judge is AutoBench's, not the platform's. Rossoctl ships none — `rossoctl-
 arrives with every `ibac.*` field empty — and a cluster with no benchmark workloads never needs one.
 So the chart installs it and `helm uninstall` removes it, which is the whole point: no leftover
 Deployment for the next person to find and wonder about.
+
+With `autobench-install.sh` this is `--ibac-judge` plus three variables:
+
+- `IBAC_JUDGE_KEY_FILE`, which becomes the Secret below;
+- `IBAC_JUDGE_UPSTREAM_BASE`;
+- `IBAC_JUDGE_MODEL`.
+
+The script shape-checks the last two before it writes anything, because each has already failed
+every judge call while passing a presence check. The base must be a **base** URL (the plugin appends
+`/v1/chat/completions`), and the model takes **no** `openai/` prefix. By hand:
 
 ```bash
 # The upstream key first. It is a credential, so the chart references it and never creates it — and
@@ -952,6 +1065,34 @@ credential the chart never created.
 `ibacJudge.enabled` boundary is the one case worth avoiding — roll forward with an explicit
 `helm upgrade` instead, so the apply hook reconciles the fields.
 
+**`reference/autobench-uninstall.sh` is the uninstall.** It takes the same env file, and it does
+the parts that a bare `helm uninstall` leaves to you:
+
+```bash
+reference/autobench-uninstall.sh --env-file ~/.rossoctl-ykt5/autobench.env --dry-run   # lists only
+reference/autobench-uninstall.sh --env-file ~/.rossoctl-ykt5/autobench.env [--teams team1,team2]
+```
+
+1. **Workloads first, through the Service.**
+   - Every `exgentic-*` AgentRuntime in the team namespaces is deleted by exact name: agents
+     before tools, with `autobench-cli delete-agent` / `delete-tool`. These log in as `benchmarker`,
+     with `KC_SERVICE_PASSWORD[_FILE]`.
+   - The script then re-lists until none remain, and does **not** uninstall if any survive.
+   - Anything not named `exgentic-*` is never touched.
+   - Why not `autobench-cli teardown`: `DELETE /benchmarks/{b}/deploy` defaults
+     `experiment=default`, and for a named experiment it returns 204 having deleted nothing. It also
+     stops at a missing agent before it reaches that agent's MCP tool.
+2. **Record** `helm get manifest` and `helm get hooks` under `/tmp/autobench-uninstall-<ctx>-<ts>/`.
+   This is the authority on what the release owns, and the only list left once the release is gone.
+3. **`helm uninstall --wait`.** If the judge's pre-delete hook fails, the script stops and names
+   the Job's log. It never reaches for `--no-hooks`.
+4. **Verify.**
+   - Every object in the saved manifest must be NotFound. One of them, the trace-writer
+     RoleBinding, lives in the MLflow namespace and not in `rossoctl-system`.
+   - `rossoctl-platform-config` must no longer name the judge.
+5. **Report the two out-of-band Secrets**, `autobench-instances` and `ibac-judge-upstream`, by key
+   name. They are kept unless you pass `--purge-secrets`.
+
 ## 6. Verifying the install
 
 `/healthz` proves the pod runs. It proves nothing about the chain the pod exists to drive, and
@@ -998,6 +1139,7 @@ not emit spans for. Preflight separates the first three; only a run separates th
 | run passes `pass_rate 1.0`, and `report.ndjson`/`token_report.ndjson` are **zero bytes** — only 4 of the 8 artifacts carry anything | the Service's *own* span export failed, so MLflow never got the root `Agent.Session` span and the trace was dropped. On OpenShift, one of the two halves in §3.4: no service-CA trust anchor (TLS) or no trace-writer RoleBinding (403) | `autobench-cli mlflow-health` (§3.7) — its `write` stage names the cause where the run named nothing, and it is the only check that reproduces this without a run. `preflight.py` reports both halves separately as well |
 | reports empty, or every token count 0, **right after someone set `insecure_tls: false` to harden the install** | the MLflow **read** client has no trust anchor — only the OTLP write path does. `false` leaves it on the system trust store, which lacks the service CA | `autobench-cli mlflow-health`: `write` stays ok while `read`/`round_trip` FAIL with `CERTIFICATE_VERIFY_FAILED`. That split is the signature. §3.4 |
 | the same zero-byte report, but **only after you used `PUT /config`**, and the TLS anchor and RoleBinding both check out | on `v1.30` and earlier the merge rewrote every field with a non-`null` default, so a `PUT` of *one* field also reset `mlflow.experiment_id` to `"0"` — the Service then wrote spans to one experiment and read the report from another. `s3.public_read` was reset to `true` the same way, which re-enables public ACLs on a bucket someone made private | `GET /config` right after the `PUT` and compare every field, not just the one you sent — the response body is the effective config. Fixed in `v1.31`; §5 of the developer guide |
+| runs score normally, `artifacts` is empty, and the Service logs `S3 export failed` | the instance file names a bucket with **empty or wrong keys**: the Service gates export on the bucket alone, so it attempts every upload. The old bootstrap scripts wrote exactly that when they found no keys, defaulting the bucket and only warning | read the block back as lengths, never values: §4's `get secret … \| base64 -d` piped into `jq '.s3 \| map_values(length)'` — a `0` beside a key is the cause. Regenerate with `S3_ENABLED` declared; the bootstrap now proves the key before writing, and `S3_ENABLED=false` writes no block at all |
 | the run publishes **no artifacts at all**, `botocore … SSLError: unable to get local issuer certificate` | `REQUESTS_CA_BUNDLE` was used for the service CA instead of `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`; botocore honours it too and the S3 client can no longer validate AWS's cert | §3.4 |
 | a task's `error` in the **published** `run.json` reads `other (shape 7b2e…)` and says nothing about what failed | the S3 artifacts classify error text to a closed category set rather than publishing it (the bucket is anonymously listable); `other` means the message matched no known category | the verbatim text was never discarded — `GET /benchmarks/<b>/runs/<id>` on the authenticated API still returns it, and the Service logs it at **WARNING** beside the same shape id. Section 6.6 of the developer guide; add a category to `public_errors._CAUSES` once you know the cause |
 | one task errors `A2A task ended in state 'failed': Error: timed out` at ~30 s, with `llm_count: 0` | the LLM gateway accepted the connection and never answered. The agent's `service` runner caps a single `react` at a hard-coded **30 s** with no retry (`docker` and `venv` allow 600 s), so a stalled completion becomes a failed task | probe the gateway from inside the agent pod: a stall is a *read* timeout after TLS succeeds, and it also hits the unauthenticated `GET /public/litellm_model_cost_map`, which proves it is not the model |

@@ -152,6 +152,9 @@ activemq-data/
 
 # Environments
 .env
+# A filled-in copy of reference/autobench.env.template holds install credentials. The template itself
+# ends in .template and so stays tracked.
+*.env
 .envrc
 .venv
 env/

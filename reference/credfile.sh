@@ -18,7 +18,8 @@
 #   --password        accepted because it is the obvious thing to reach for, but argv is
 #                     world-readable (`ps`, /proc/<pid>/cmdline) and lands in shell history, so it
 #                     warns every time.
-#   the environment   the original path, still supported unchanged.
+#   the environment   the original path: the value in <VAR>, or a chmod-600 file named by <VAR>_FILE
+#                     (e.g. KC_SERVICE_PASSWORD_FILE) — the form an --env-file should use.
 #
 # Precedence is that order, most explicit first. The resolved value is exported under the name the
 # caller asks for, because these scripts hand values to `jq` through the environment rather than
@@ -61,8 +62,21 @@ cred_resolve_password() {  # $1=variable name, e.g. KC_SERVICE_PASSWORD
         printf '         /proc/<pid>/cmdline) and it lands in your shell history — prefer\n' >&2
         printf '         --password-file <chmod-600 file> or --password-stdin\n' >&2
     else
-        val="${!var:-}"
-        [ -n "$val" ] && CRED_PASSWORD_SOURCE="env ${var}"
+        # The environment, in either of two spellings: the value itself, or <VAR>_FILE naming a
+        # chmod-600 file that holds it — the form an --env-file wants, since it keeps the password
+        # out of that file. Both at once is ambiguous, so it is an error rather than a guess.
+        local fvar="${var}_FILE"
+        if [ -n "${!fvar:-}" ] && [ -n "${!var:-}" ]; then
+            printf 'Error: both %s and %s are set — set one (an --env-file line `%s=` clears the other)\n' \
+                "$var" "$fvar" "$var" >&2
+            return 1
+        elif [ -n "${!fvar:-}" ]; then
+            val="$(cred_read_file "${!fvar}")" || return 1
+            CRED_PASSWORD_SOURCE="file ${!fvar} (${fvar})"
+        else
+            val="${!var:-}"
+            [ -n "$val" ] && CRED_PASSWORD_SOURCE="env ${var}"
+        fi
     fi
     [ -n "$val" ] || return 2
     eval "$var=\$val"

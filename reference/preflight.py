@@ -31,6 +31,7 @@ Usage
     python3 reference/preflight.py --platform kind  --context kind-rossoctl
     python3 reference/preflight.py --platform openshift --context <ctx>
     python3 reference/preflight.py --json                           # machine-readable
+    python3 reference/preflight.py --env-file ~/.rossoctl-ykt5/autobench.env   # values from a file
 
 Exit status is 0 when nothing FAILed (warnings do not fail the run), 1 otherwise.
 
@@ -47,6 +48,18 @@ password is supplied *and* the Secret holds one, a mismatch is a FAILURE — oth
 preflight can sit next to a Service that 502s on every deploy.
 
     python3 reference/preflight.py --password-file ~/.rossoctl-kind/benchmarker.pass
+
+Env files, and S3
+-----------------
+`--env-file FILE` (repeatable) loads KEY=VALUE lines into the environment before anything is read,
+with the grammar and the precedence of reference/envfile.sh — the shell, then each file in order (a
+later line beats an earlier one), then flags — so the installer and this script read one file the same
+way. `KC_SERVICE_PASSWORD` there is how the benchmarker password reaches an unattended install.
+
+S3 is DECLARED, not discovered: `S3_ENABLED=true|false` has no default. Declared, it is checked
+by reference/s3check.py — shape, then a signed read-only request that proves the key authenticates.
+Undeclared before an install (no instance Secret yet) is a FAILURE; undeclared afterwards, the
+installed `s3` block is audited on its own, because then it is the Secret that says what happens.
 
 The one thing this script asks the Service to do
 -----------------------------------------------
@@ -80,6 +93,9 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import s3check  # noqa: E402  (a sibling in reference/, not a package)
 
 OK, FAIL, WARN, SKIP = "ok", "FAIL", "warn", "skip"
 _ICON = {OK: "ok   ", FAIL: "FAIL ", WARN: "warn ", SKIP: "skip "}
@@ -145,6 +161,44 @@ LITELLM_PROVIDER_PREFIXES = frozenset((
 def sha8(value: str | bytes) -> str:
     raw = value.encode() if isinstance(value, str) else value
     return hashlib.sha256(raw).hexdigest()[:8]
+
+
+ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_ENV_BLANKS = " \t\r\v\f"  # bash's [[:space:]] once the newline is gone
+
+
+def load_env_file(path: str) -> dict[str, str]:
+    """Parse one --env-file with reference/envfile.sh's grammar. Raises ValueError naming file:line.
+
+    KEY=VALUE, `#` comments and blank lines skipped, an optional `export ` prefix, one matching pair
+    of quotes around the whole value removed, surrounding blanks trimmed — and nothing evaluated. The
+    file holds credentials, so it is refused unless chmod 600 or 400, and no message carries a value.
+    tests/test_envfile.py holds this and the shell twin to the same answers.
+    """
+    if not os.path.isfile(path):
+        raise ValueError(f"--env-file: no such file: {path}")
+    mode = os.stat(path).st_mode & 0o777
+    if mode not in (0o600, 0o400):
+        raise ValueError(f"refusing --env-file {path}: it holds credentials, so it must be chmod 600 "
+                         f"(is {mode:o})")
+    out: dict[str, str] = {}
+    with open(path, encoding="utf-8", newline="") as fh:
+        for n, raw in enumerate(fh, 1):
+            line = raw.rstrip("\n").removesuffix("\r").lstrip(_ENV_BLANKS)
+            if not line or line.startswith("#"):
+                continue
+            if re.match(r"export[ \t\r\v\f]", line):
+                line = line[len("export"):].lstrip(_ENV_BLANKS)
+            if "=" not in line:
+                raise ValueError(f"{path}:{n}: expected KEY=VALUE")
+            key, val = line.split("=", 1)
+            key, val = key.rstrip(_ENV_BLANKS), val.strip(_ENV_BLANKS)
+            if not ENV_KEY_RE.match(key):
+                raise ValueError(f"{path}:{n}: invalid variable name '{key}'")
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+                val = val[1:-1]
+            out[key] = val
+    return out
 
 
 class Report:
@@ -846,6 +900,60 @@ def read_instances(cluster: Cluster, namespace: str) -> dict[str, dict] | None:
     return out
 
 
+def _add_s3_rows(rep: Report, rows: list, prefix: str = "") -> None:
+    for status, label, detail in rows:
+        {"ok": rep.ok, "fail": rep.fail, "warn": rep.warn}[status](prefix + label, detail)
+
+
+def check_s3_declaration(rep: Report, instances: dict[str, dict] | None) -> None:
+    """S3_ENABLED in the environment: declared, well-formed, and a key that authenticates."""
+    rep.section("S3 — declared by the installer, not discovered")
+    if os.environ.get("S3_ENABLED", "") == "" and instances is not None:
+        rep.skip("s3 declared", "S3_ENABLED unset here — auditing the installed s3 block below instead")
+        return
+    rows, _ = s3check.check_env(dict(os.environ))
+    _add_s3_rows(rep, rows)
+
+
+def check_instance_s3(rep: Report, name: str, s3: dict) -> None:
+    """An installed s3 block: absent is a deliberate opt-out; a bucket means every key must work.
+
+    The Service attempts an export whenever the BUCKET is set, so a bucket with empty or stale keys
+    is not "publishing off" — it is a failed upload after every run, logged and swallowed.
+    """
+    declared = os.environ.get("S3_ENABLED", "")
+    if not s3.get("bucket"):
+        rep.ok(f"{name}: s3", "no s3 block — publishing is off, runs score but publish no artifacts")
+        if declared == "true":
+            rep.warn(f"{name}: s3 matches the declaration",
+                     "S3_ENABLED=true here but the installed file has no s3 block — re-run the install")
+        return
+    cfg = s3check.instance_env(s3)
+    shape = s3check.shape_rows(cfg)
+    if any(st == "fail" for st, _, _ in shape):
+        for _, label, detail in shape:
+            rep.fail(f"{name}: {label}",
+                     f"the s3 block names a bucket, so every run attempts an upload: {detail}")
+        return
+    rep.ok(f"{name}: s3", f"bucket {cfg['S3_BUCKET']} prefix {cfg['S3_PREFIX'] or '(none)'} "
+                          f"key sha8 {sha8(cfg['S3_ACCESS_KEY_ID'])}")
+    status, label, detail = s3check.probe(cfg)
+    {"ok": rep.ok, "fail": rep.fail}[status](f"{name}: {label}", detail)
+    if declared == "false":
+        rep.warn(f"{name}: s3 matches the declaration",
+                 "S3_ENABLED=false here but the installed file publishes — re-run the install")
+    elif declared == "true" and os.environ.get("S3_ACCESS_KEY_ID"):
+        want = sha8(os.environ["S3_ACCESS_KEY_ID"])
+        got = sha8(cfg["S3_ACCESS_KEY_ID"])
+        if want == got and os.environ.get("S3_BUCKET") == cfg["S3_BUCKET"]:
+            rep.ok(f"{name}: s3 matches the declaration")
+        else:
+            rep.warn(f"{name}: s3 matches the declaration",
+                     f"installed bucket {cfg['S3_BUCKET']} key sha8 {got}, declared "
+                     f"{os.environ.get('S3_BUCKET') or '(unset)'} key sha8 {want} — expected before "
+                     "an upgrade, a stale Secret after one")
+
+
 def check_instance_config(
     rep: Report, cluster: Cluster, namespace: str, platform: str, collector: dict,
     instances: dict[str, dict] | None, llm_profile: str | None = None,
@@ -975,15 +1083,7 @@ def check_instance_config(
         else:
             rep.warn(f"{name}: workload_llm.api_base", "unset — the agent uses the image default")
 
-        s3 = cfg.get("s3") or {}
-        if s3.get("bucket") and s3.get("access_key_id"):
-            rep.ok(
-                f"{name}: s3",
-                f"bucket {s3['bucket']} prefix {s3.get('prefix') or '(none)'} "
-                f"key sha8 {sha8(s3['access_key_id'])}",
-            )
-        else:
-            rep.warn(f"{name}: s3", "no bucket/credentials — the run scores but publishes no artifacts")
+        check_instance_s3(rep, name, cfg.get("s3") or {})
 
 
 def _check_otel_endpoint(
@@ -1158,6 +1258,15 @@ def resolve_service_credential(
         return user, pw or None, "stdin", None if pw else "nothing on stdin"
     if args.password:
         return user, args.password, "--password (argv)", None
+    env_file = os.environ.get("KC_SERVICE_PASSWORD_FILE")
+    if env_file and os.environ.get("KC_SERVICE_PASSWORD"):
+        return user, None, "env", ("both KC_SERVICE_PASSWORD and KC_SERVICE_PASSWORD_FILE are set — "
+                                   "set one")
+    if env_file:  # the reference/credfile.sh spelling, so one --env-file serves every script
+        try:
+            return user, read_password_file(env_file), f"file {env_file} (KC_SERVICE_PASSWORD_FILE)", None
+        except OSError as exc:
+            return user, None, f"file {env_file}", str(exc)
     if os.environ.get("KC_SERVICE_PASSWORD"):
         return user, os.environ["KC_SERVICE_PASSWORD"], "env KC_SERVICE_PASSWORD", None
     for name, cfg in sorted((instances or {}).items()):
@@ -1291,9 +1400,9 @@ def check_identity(
     if not password:
         rep.fail(
             "benchmarker password available",
-            "not supplied and not in the instance Secret. Give it to this script one of four ways: "
-            "--password-file <chmod-600 file> (preferred), --password-stdin, --password <value> "
-            "(visible in `ps`), or export KC_SERVICE_PASSWORD",
+            "not supplied and not in the instance Secret. Give it to this script one of five ways: "
+            "KC_SERVICE_PASSWORD in an --env-file, --password-file <chmod-600 file>, "
+            "--password-stdin, --password <value> (visible in `ps`), or export KC_SERVICE_PASSWORD",
         )
         return
     rep.ok(f"benchmarker password from {source}", f"user {user}, sha8 {sha8(password)}")
@@ -1620,6 +1729,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
+    ap.add_argument("--env-file", action="append", default=[], metavar="FILE",
+                    help="KEY=VALUE lines (chmod 600) loaded into the environment first; repeatable, "
+                         "and the last one wins. See reference/autobench.env.template")
     ap.add_argument("--context", help="kubectl context for the SERVICE cluster (default: current)")
     ap.add_argument("--workload-context",
                     help="kubectl context for the cluster the agents run on, when it is a different "
@@ -1669,6 +1781,16 @@ def main() -> int:
     ap.add_argument("--skip-chart", action="store_true", help="skip the local lint/parity checks")
     ap.add_argument("--json", action="store_true", help="emit results as JSON on stdout")
     args = ap.parse_args()
+    # Before anything reads the environment. A file beats the shell; flags were parsed above and are
+    # read from `args`, so they still beat both.
+    for path in args.env_file:
+        try:
+            os.environ.update(load_env_file(path))
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
+    global LLM_PROFILE_ENV_FILE
+    LLM_PROFILE_ENV_FILE = os.environ.get("LLM_PROFILE_ENV_FILE", LLM_PROFILE_ENV_FILE)
 
     context = args.context
     if not context:
@@ -1713,6 +1835,7 @@ def main() -> int:
         check_mlflow_write_grant(rep, cluster, platform, args.namespace,
                                  mlflow_workspaces(instances, teams))
         check_ingress(rep, cluster, platform, args.namespace, args.gateway)
+        check_s3_declaration(rep, instances)
         check_instance_config(rep, cluster, args.namespace, platform, collector, instances,
                               llm_profile=llm_profile)
         iss_hint = next((cfg.get("iss") for cfg in (instances or {}).values() if cfg.get("iss")), None)

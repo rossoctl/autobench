@@ -18,7 +18,7 @@
 # Service reads an experiment nothing was written to. Hence the precheck below, which asserts
 # each of these against the live cluster before the file is written.
 #
-# Uses curl + jq + kubectl/oc only. Safe to re-run. No secret is ever echoed — credentials are
+# Uses curl + jq + kubectl/oc + python3 (stdlib only, for the S3 check). Safe to re-run. No secret is ever echoed — credentials are
 # read from the environment or from the cluster and only ever hashed for display.
 set -euo pipefail
 set +x
@@ -33,6 +33,11 @@ settings it references. Mount the result into the Service pod as the `autobench-
 Required:
   --cluster NAME        cluster short name, e.g. ykt5 — used to build the apps/keycloak hosts
                         unless --apps-domain / --keycloak-host override them
+  S3_ENABLED=true|false in the environment or an --env-file — whether runs publish artifacts.
+                        No default, see "S3" below.
+
+  --env-file FILE       KEY=VALUE lines (chmod 600), repeatable; see reference/autobench.env.template.
+                        Precedence, last wins: the shell, then each --env-file in order, then flags.
 
 Flags (each also has an env fallback):
   --context NAME        KUBE_CONTEXT       kubectl context (default: current)
@@ -91,19 +96,25 @@ here rather than quietly reverting to the Secret and installing a credential nob
   --password P          the password on the command line. Accepted, but argv is world-readable —
                         use --password-file unless you are in a throwaway shell.
   --s3-prefix P         S3_PREFIX          (default: <cluster>/)
-  --s3-from FILE        S3_FROM            existing instance JSON to copy s3 credentials from,
-                        read in-process (default: the last <out-dir>/*.json in glob order that has
-                        s3 creds — so a non-default --out-dir usually finds none)
   --out-dir DIR         OUT_DIR            (default: ./instances)
+  --print-out-file                         print only the written file's path on stdout, instead of
+                                           the next steps (what autobench-install.sh reads)
   --skip-precheck       SKIP_PRECHECK=1    write the file even if a check fails
   -h, --help
+
+S3 — environment only (an --env-file is the intended carrier), never argv, never copied from a file:
+  S3_ENABLED            true|false, REQUIRED. false writes no s3 block: runs score, publish nothing.
+  S3_BUCKET, S3_REGION, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
+                        all required when S3_ENABLED=true; the key is proven by a signed read-only
+                        request (reference/s3check.py) before the file is written
+  S3_ENDPOINT_URL       optional, an S3-compatible store's http(s)://host[:port]
 
 Secrets:
   KC_SERVICE_USERNAME   login username (required; --username overrides)
   KC_SERVICE_PASSWORD   login password (required unless --password-file/-stdin/--password is given;
                         those take precedence, in that order)
   KC_SERVICE_CLIENT_SECRET  client secret, if confidential (optional)
-  S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY  override --s3-from
+  S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY  see "S3" above
 
 The password is load-bearing per RUN, not just per install: every /deploy the Service makes is a
 ROPC login as this user, so a stale or unset one does not degrade the install — it makes every
@@ -116,8 +127,15 @@ warn() { printf 'WARNING: %s\n' "$*" >&2; }
 die()  { printf 'Error: %s\n' "$*" >&2; exit 1; }
 sha8() { printf '%s' "$1" | shasum -a 256 | cut -c1-8; }
 
-command -v curl >/dev/null || die "curl is required"
-command -v jq   >/dev/null || die "jq is required"
+command -v curl    >/dev/null || die "curl is required"
+command -v jq      >/dev/null || die "jq is required"
+command -v python3 >/dev/null || die "python3 is required (stdlib only — reference/s3check.py)"
+
+# Before ANY default below reads the environment: that ordering is what makes an --env-file beat the
+# shell while the flag loop still beats the file.
+# shellcheck source=reference/envfile.sh
+. "$(dirname "${BASH_SOURCE[0]}")/envfile.sh"
+envfile_prescan "$@" || exit 1
 
 CLUSTER="${CLUSTER:-}"
 KUBE_CONTEXT="${KUBE_CONTEXT:-}"
@@ -159,7 +177,8 @@ WORKLOAD_OTEL_INSECURE="${WORKLOAD_OTEL_INSECURE:-}"
 WORKLOAD_AGENT_RUNNER="${WORKLOAD_AGENT_RUNNER:-service}"
 ENDPOINT_TEMPLATE="${ENDPOINT_TEMPLATE:-}"
 S3_PREFIX="${S3_PREFIX:-}"
-S3_FROM="${S3_FROM:-}"
+S3_ENABLED="${S3_ENABLED:-}"
+PRINT_OUT_FILE=""
 OUT_DIR="${OUT_DIR:-./instances}"
 SKIP_PRECHECK="${SKIP_PRECHECK:-}"
 KUBECTL_BIN="${KUBECTL_BIN:-kubectl}"
@@ -202,7 +221,10 @@ while [ $# -gt 0 ]; do
         --password-stdin)     CRED_PASSWORD_STDIN=1; shift ;;
         --password)           CRED_PASSWORD_ARGV="$2"; shift 2 ;;
         --s3-prefix)          S3_PREFIX="$2"; shift 2 ;;
-        --s3-from)            S3_FROM="$2"; shift 2 ;;
+        --s3-from)            die "--s3-from was removed: S3 now comes from the environment only — put S3_ENABLED and the S3_* values in an --env-file (see reference/autobench.env.template)" ;;
+        --env-file)           shift 2 ;;   # already loaded by envfile_prescan
+        --env-file=*)         shift ;;
+        --print-out-file)     PRINT_OUT_FILE=1; shift ;;
         --out-dir)            OUT_DIR="$2"; shift 2 ;;
         --skip-precheck)      SKIP_PRECHECK=1; shift ;;
         -h|--help)            usage; exit 0 ;;
@@ -339,26 +361,14 @@ MLFLOW_EXPERIMENT_ID="${MLFLOW_EXPERIMENT_ID:-1}"
 MLFLOW_WORKSPACE="${MLFLOW_WORKSPACE:-team1}"
 log "    MLflow experiment_id=${MLFLOW_EXPERIMENT_ID} workspace=${MLFLOW_WORKSPACE}"
 
-# --- 4. S3 credentials, copied in-process from an existing instance file ---
-if [ -z "${S3_ACCESS_KEY_ID:-}" ] || [ -z "${S3_SECRET_ACCESS_KEY:-}" ]; then
-    if [ -z "$S3_FROM" ]; then
-        for f in "${OUT_DIR%/}"/*.json; do
-            [ -f "$f" ] || continue
-            if [ "$(jq -r '.s3.access_key_id // empty' "$f" 2>/dev/null)" != "" ]; then S3_FROM="$f"; fi
-        done
-    fi
-    if [ -n "$S3_FROM" ] && [ -f "$S3_FROM" ]; then
-        S3_ACCESS_KEY_ID="$(jq -r '.s3.access_key_id // empty' "$S3_FROM")"
-        S3_SECRET_ACCESS_KEY="$(jq -r '.s3.secret_access_key // empty' "$S3_FROM")"
-        S3_BUCKET="${S3_BUCKET:-$(jq -r '.s3.bucket // empty' "$S3_FROM")}"
-        S3_REGION="${S3_REGION:-$(jq -r '.s3.region // empty' "$S3_FROM")}"
-        log "==> S3 credentials copied from ${S3_FROM} (sha8 $(sha8 "${S3_ACCESS_KEY_ID:-}"))"
-    else
-        warn "no S3 credentials found — the run will score but publish no artifacts"
-    fi
-fi
-S3_BUCKET="${S3_BUCKET:-rossoctl-benchmarking}"
-S3_REGION="${S3_REGION:-us-east-1}"
+# --- 4. S3: declared, not discovered ---
+# Whether runs publish is the installer's decision, so it is asked rather than inferred. This used to
+# take the env pair, else --s3-from, else the LAST instances/*.json with keys in glob order — and with
+# none of those it warned, defaulted the bucket anyway and wrote empty keys. The Service gates export
+# on the bucket alone, so every run then attempted an upload that could not authenticate: a cluster
+# that scores and publishes nothing, with the only trace an `S3 export failed` log line. Now
+# S3_ENABLED is required and the precheck below proves the key (reference/s3check.py).
+case "$S3_ENABLED" in true) log "==> S3 publishing declared ON" ;; false) log "==> S3 publishing declared OFF" ;; esac
 
 # --- 5. precheck the settings against the live cluster ---
 # Each of these failing produces a run that looks fine and reports nothing useful, which is why
@@ -516,6 +526,12 @@ case "$COLLECTOR_CFG" in
             "the collector's traces_endpoint does not contain ${MLFLOW_HOSTPORT}" ;;
 esac
 
+# S3: the declaration, the shape of every value, and a signed read-only request that proves the key
+# authenticates. Rows print in this script's own format; the exit status is the failure count.
+S3_FAILS=0
+python3 "$(dirname "${BASH_SOURCE[0]}")/s3check.py" || S3_FAILS=$?
+PRECHECK_FAIL=$((PRECHECK_FAIL + S3_FAILS))
+
 # An MLflow credential is REQUIRED unless the installer declares there is none. This was a warning
 # until 2026-09-30, and the file was written with `bearer_token: ""` regardless — which produces the
 # worst failure shape we have: the Service reads 403, every per-task token count reads 0, and the run
@@ -554,7 +570,7 @@ export ISS ROSSOCTL_BASE_URL KC_SERVICE_CLIENT_ID KC_SERVICE_CLIENT_SECRET \
        MLFLOW_URL MLFLOW_BEARER MLFLOW_USERNAME MLFLOW_PASSWORD MLFLOW_OAUTH_URL \
        MLFLOW_CLIENT_ID MLFLOW_CLIENT_SECRET MLFLOW_TOKEN_URL \
        MLFLOW_EXPERIMENT_ID MLFLOW_WORKSPACE MLFLOW_INSECURE_TLS MLFLOW_NO_AUTH \
-       S3_BUCKET S3_REGION S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_PREFIX \
+       S3_ENABLED S3_BUCKET S3_REGION S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_ENDPOINT_URL S3_PREFIX \
        ENDPOINT_TEMPLATE WORKLOAD_LLM_API_BASE WORKLOAD_LLM_MODEL NO_PROXY_HOSTS \
        WORKLOAD_OTEL_ENDPOINT WORKLOAD_OTEL_INSECURE WORKLOAD_AGENT_RUNNER
 (
@@ -594,12 +610,6 @@ jq -n '
                    { bearer_token: "unused-no-auth-reader" }
                else {} end)
         ),
-        s3: {
-            bucket: env.S3_BUCKET, region: env.S3_REGION,
-            access_key_id: (env.S3_ACCESS_KEY_ID // ""),
-            secret_access_key: (env.S3_SECRET_ACCESS_KEY // ""),
-            prefix: env.S3_PREFIX
-        },
         workload_llm: {
             api_base: env.WORKLOAD_LLM_API_BASE,
             default_model: env.WORKLOAD_LLM_MODEL,
@@ -611,6 +621,16 @@ jq -n '
         },
         workload_agent_runner: env.WORKLOAD_AGENT_RUNNER
       }
+      # No s3 key at all unless S3 is declared on: the Service then skips export by design
+      # (bucket unset), instead of attempting one with empty keys and logging the failure.
+      + (if env.S3_ENABLED == "true" then
+            { s3: ({ bucket: env.S3_BUCKET, region: env.S3_REGION,
+                     access_key_id: env.S3_ACCESS_KEY_ID,
+                     secret_access_key: env.S3_SECRET_ACCESS_KEY,
+                     prefix: env.S3_PREFIX }
+                   + (if (env.S3_ENDPOINT_URL // "") != ""
+                      then { endpoint_url: env.S3_ENDPOINT_URL } else {} end)) }
+         else {} end)
       # Only set for a cross-cluster split (Service here, workloads there); when unset the Service
       # dials the co-located svc.cluster.local address.
       + (if (env.ENDPOINT_TEMPLATE // "") == "" then {}
@@ -621,6 +641,15 @@ jq -n '
 chmod 600 "$OUT_FILE"
 log ""
 log "==> Wrote ${OUT_FILE}"
+if [ "$S3_ENABLED" = "true" ]; then
+    log "    s3: bucket ${S3_BUCKET:-} prefix ${S3_PREFIX} key sha8 $(sha8 "${S3_ACCESS_KEY_ID:-}")"
+else
+    log "    s3: none written — runs will publish no artifacts"
+fi
+if [ -n "$PRINT_OUT_FILE" ]; then
+    printf '%s\n' "$OUT_FILE"
+    exit 0
+fi
 
 log ""
 log "==> Next: create the Secret the chart mounts, then install the chart:"

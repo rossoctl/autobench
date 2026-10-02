@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-10-01T03:50:23Z
+**Last modified:** 2026-10-02T00:50:33Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -1534,6 +1534,7 @@ tool serves "just run it" and "show me one HTTP call".
 | `list` | `GET /benchmarks` |
 | `mlflow-health` | `GET /mlflow/health` (§5.1) — run this **before** trusting a report. Exits `8` when any stage failed, so a bring-up script can gate on `$?`; `--no-round-trip` reads only |
 | `deploy` / `teardown` | create / delete the MCP tool + A2A agent |
+| `delete-agent` / `delete-tool` | `DELETE /agents/{ns}/{name}` / `/tools/{ns}/{name}` — one AgentRuntime by its exact `--name`; `404` counts as gone. `teardown` addresses a benchmark and experiment, and stops at a missing agent without reaching its MCP tool; these clean up what that leaves behind |
 | `wait` | block on the readiness-stability and agent-card gates |
 | `run` | `POST …/runs`, prints the `run_id` |
 | `poll` | follow one run to a terminal status |

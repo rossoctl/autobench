@@ -29,7 +29,14 @@ Generates instances/<iss-host>.json for the local kind Rossoctl instance, to be
 mounted into the in-cluster AutoBench Service pod as a Secret/ConfigMap.
 DEV/TEST ONLY — kind is not a production platform.
 
+Required, from the environment or an --env-file (never a flag — see "S3" below):
+  S3_ENABLED=true|false  whether runs publish artifacts. There is no default.
+
 Flags (each also has an env fallback):
+  --env-file FILE      KEY=VALUE lines (chmod 600), repeatable; see reference/autobench.env.template.
+                                          Precedence, last wins: the shell, then each --env-file in
+                                          order, then flags.
+  --print-out-file     print only the written file's path on stdout (for autobench-install.sh)
   --cluster NAME       KIND_CLUSTER_NAME  kind cluster name        (default: rossoctl)
   --context NAME       KUBE_CONTEXT       kubectl context          (default: kind-<cluster>)
   --realm NAME         KC_REALM           Keycloak realm           (default: rossoctl)
@@ -48,10 +55,10 @@ Flags (each also has an env fallback):
                                           ocp-service-bootstrap.sh takes. Without it, auth is
                                           INFERRED from the URL (a *mlflow-reader* URL is treated
                                           as no-auth) and the inference is logged.
-  --copy-from FILE     COPY_FROM          existing instance JSON to carry `s3` and `workload_llm`
-                                          over from. Those two are environment facts this script
-                                          cannot discover, and a cluster rebuild should reproduce
-                                          them rather than lose them.
+  --copy-from FILE     COPY_FROM          existing instance JSON to carry `workload_llm` over from —
+                                          an environment fact this script cannot discover, which a
+                                          cluster rebuild should reproduce rather than lose. Its
+                                          `s3` block is NOT carried: S3 is declared (see below).
   --llm-profile P      LLM_PROFILE        intranet|internet — selects the INTRANET_LLM_* or
                                           INTERNET_LLM_* variable set (see llm-profiles.sh). The
                                           gateway follows the cluster's NETWORK, not its platform.
@@ -61,7 +68,7 @@ Flags (each also has an env fallback):
   --otel-endpoint URL  WORKLOAD_OTEL_ENDPOINT  (default: the in-cluster collector on :8335)
   --agent-runner R     WORKLOAD_AGENT_RUNNER   (default: service — `direct` emits no agent spans,
                                           so every token count reads 0)
-  --s3-prefix P        S3_PREFIX          (default: kind/)
+  --s3-prefix P        S3_PREFIX          (default: kind/; used only when S3_ENABLED=true)
   --out-dir DIR        OUT_DIR            where to write the config (default: ./instances)
   --kubectl BIN        KUBECTL_BIN        kubectl binary            (default: kubectl)
   --client ID          KC_SERVICE_CLIENT_ID  client the Service logs in through (default: rossoctl)
@@ -91,6 +98,14 @@ therefore carries it:
   KC_SERVICE_CLIENT_SECRET   client secret, if confidential (optional)
 No cluster credential is written — Rossoctl performs cluster ops server-side.
 
+S3 — environment only (an --env-file is the intended carrier), never argv, never copied from a file:
+  S3_ENABLED            true|false, REQUIRED. false writes no s3 block: runs score, publish nothing.
+  S3_BUCKET, S3_REGION, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
+                        all required when S3_ENABLED=true; the key is proven by a signed read-only
+                        request (reference/s3check.py) before the file is written
+  S3_ENDPOINT_URL       optional, an S3-compatible store's http(s)://host[:port]
+SKIP_S3_CHECK=1 skips only that live request; the declaration and the shape are always checked.
+
 Because the generated file BAKES that password in, the script logs in with it before writing:
 every /deploy the Service makes is a ROPC login as this user, so a wrong one produces an install
 that looks healthy and a 502 wrapping a 403 on every single run. Set SKIP_CRED_CHECK=1 to write
@@ -105,6 +120,13 @@ die()  { printf 'Error: %s\n' "$*" >&2; exit 1; }
 # --- dependencies ---
 command -v curl    >/dev/null || die "curl is required"
 command -v jq      >/dev/null || die "jq is required"
+command -v python3 >/dev/null || die "python3 is required (stdlib only — reference/s3check.py)"
+
+# Before ANY default below reads the environment: that ordering is what makes an --env-file beat the
+# shell while still losing to a flag.
+# shellcheck source=reference/envfile.sh
+. "$(dirname "${BASH_SOURCE[0]}")/envfile.sh"
+envfile_prescan "$@" || exit 1
 
 # --- defaults / env fallbacks ---
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-rossoctl}"
@@ -129,6 +151,9 @@ WORKLOAD_LLM_MODEL="${WORKLOAD_LLM_MODEL:-}"
 WORKLOAD_OTEL_ENDPOINT="${WORKLOAD_OTEL_ENDPOINT:-http://otel-collector.rossoctl-system.svc.cluster.local:8335}"
 WORKLOAD_AGENT_RUNNER="${WORKLOAD_AGENT_RUNNER:-service}"
 S3_PREFIX="${S3_PREFIX:-kind/}"
+S3_ENABLED="${S3_ENABLED:-}"
+SKIP_S3_CHECK="${SKIP_S3_CHECK:-}"
+PRINT_OUT_FILE=""
 OUT_DIR="${OUT_DIR:-./instances}"
 KUBECTL_BIN="${KUBECTL_BIN:-kubectl}"
 KC_SERVICE_CLIENT_ID="${KC_SERVICE_CLIENT_ID:-rossoctl}"
@@ -160,6 +185,9 @@ while [ $# -gt 0 ]; do
         --otel-endpoint)    WORKLOAD_OTEL_ENDPOINT="$2"; shift 2 ;;
         --agent-runner)     WORKLOAD_AGENT_RUNNER="$2"; shift 2 ;;
         --s3-prefix)        S3_PREFIX="$2"; shift 2 ;;
+        --env-file)         shift 2 ;;   # already loaded by envfile_prescan
+        --env-file=*)       shift ;;
+        --print-out-file)   PRINT_OUT_FILE=1; shift ;;
         --out-dir)          OUT_DIR="$2"; shift 2 ;;
         --kubectl)          KUBECTL_BIN="$2"; shift 2 ;;
         --client)           KC_SERVICE_CLIENT_ID="$2"; shift 2 ;;
@@ -194,6 +222,17 @@ case "$CRED_RC" in
     *) exit 1 ;;   # cred_read_file already said why
 esac
 [ -n "$KUBE_CONTEXT" ] || KUBE_CONTEXT="kind-${KIND_CLUSTER_NAME}"
+
+# --- 0. S3: declared, not discovered ---
+# Publishing is optional, but forgetting it and opting out used to look the same: the s3 block rode in
+# on --copy-from or was absent, and either way nothing failed. Now S3_ENABLED must be said out loud,
+# and `true` must come with a key that authenticates. First, so a missing declaration costs nothing.
+export S3_ENABLED S3_BUCKET S3_REGION S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_ENDPOINT_URL S3_PREFIX
+log "==> Checking the S3 declaration..."
+S3_FAILS=0
+python3 "$(dirname "${BASH_SOURCE[0]}")/s3check.py" ${SKIP_S3_CHECK:+--offline} || S3_FAILS=$?
+[ "$S3_FAILS" -eq 0 ] || die "S3 is not usable as declared (see above) — fix the S3_* values, or declare S3_ENABLED=false"
+[ -z "$SKIP_S3_CHECK" ] || [ "$S3_ENABLED" != true ] || warn "SKIP_S3_CHECK=1 — the S3 key was NOT proven to authenticate"
 
 kc() { "$KUBECTL_BIN" --context "$KUBE_CONTEXT" "$@"; }
 
@@ -302,16 +341,16 @@ if [ -z "$MLFLOW_EXPERIMENT_ID" ]; then
     fi
 fi
 
-# `s3` and `workload_llm` are environment facts this script cannot discover — which gateway issued
-# the key in openai-secret, and which bucket credentials to publish with. Carry them over from an
-# existing instance file so a cluster rebuild reproduces them instead of silently dropping them.
-S3_JSON="null"; LLM_JSON="null"
+# `workload_llm` is an environment fact this script cannot discover — which gateway issued the key in
+# openai-secret. Carry it over from an existing instance file so a cluster rebuild reproduces it
+# instead of silently dropping it. The file's `s3` block is deliberately NOT carried: S3 is declared
+# (step 0), and a block inherited from whichever file happened to be there is how a cluster ended up
+# publishing with a key nobody chose — or with none.
+LLM_JSON="null"
 if [ -n "$COPY_FROM" ]; then
     [ -f "$COPY_FROM" ] || { echo "--copy-from: no such file: $COPY_FROM" >&2; exit 1; }
     # Values move through jq only; nothing is echoed.
-    S3_JSON="$(jq -c --arg p "$S3_PREFIX" '(.s3 // null) | if . then .prefix = $p else . end' "$COPY_FROM")"
     LLM_JSON="$(jq -c '.workload_llm // null' "$COPY_FROM")"
-    [ "$S3_JSON"  = null ] && warn "--copy-from has no .s3 — artifacts will not be published"
     [ "$LLM_JSON" = null ] && warn "--copy-from has no .workload_llm — runs will use the benchmark default model"
 fi
 if [ -n "$WORKLOAD_LLM_API_BASE" ] || [ -n "$WORKLOAD_LLM_MODEL" ]; then
@@ -385,11 +424,10 @@ fi
 export ISS KC_BACKCHANNEL_URL ROSSOCTL_BASE_URL \
        KC_SERVICE_CLIENT_ID KC_SERVICE_CLIENT_SECRET KC_SERVICE_USERNAME KC_SERVICE_PASSWORD \
        MLFLOW_URL MLFLOW_CLIENT_ID MLFLOW_CLIENT_SECRET MLFLOW_TOKEN_URL MLFLOW_EXPERIMENT_ID \
-       MLFLOW_NO_AUTH S3_JSON LLM_JSON WORKLOAD_OTEL_ENDPOINT WORKLOAD_AGENT_RUNNER
+       MLFLOW_NO_AUTH LLM_JSON WORKLOAD_OTEL_ENDPOINT WORKLOAD_AGENT_RUNNER
 (
 umask 077
 jq -n '
-    (env.S3_JSON  // "null" | fromjson) as $s3  |
     (env.LLM_JSON // "null" | fromjson) as $llm |
     {
         iss: env.ISS,
@@ -417,11 +455,29 @@ jq -n '
         },
         workload_agent_runner: env.WORKLOAD_AGENT_RUNNER
     }
-    + (if $s3  then { s3: $s3 }            else {} end)
+    # S3_ENABLED=false writes NO s3 key: the Service then has bucket=None and skips export by design,
+    # rather than attempting an upload that cannot authenticate.
+    + (if env.S3_ENABLED == "true" then
+          { s3: ({ bucket: env.S3_BUCKET, region: env.S3_REGION,
+                   access_key_id: env.S3_ACCESS_KEY_ID,
+                   secret_access_key: env.S3_SECRET_ACCESS_KEY,
+                   prefix: env.S3_PREFIX }
+                 + (if (env.S3_ENDPOINT_URL // "") != ""
+                    then { endpoint_url: env.S3_ENDPOINT_URL } else {} end)) }
+       else {} end)
     + (if $llm then { workload_llm: $llm } else {} end)' > "$OUT_FILE"
 )
 chmod 600 "$OUT_FILE"
 log "==> Wrote ${OUT_FILE}"
+if [ "$S3_ENABLED" = "true" ]; then
+    log "    s3: bucket ${S3_BUCKET:-} prefix ${S3_PREFIX} key sha8 $(printf '%s' "${S3_ACCESS_KEY_ID:-}" | shasum -a 256 | cut -c1-8)"
+else
+    log "    s3: none written (S3_ENABLED=false) — runs will publish no artifacts"
+fi
+if [ -n "$PRINT_OUT_FILE" ]; then
+    printf '%s\n' "$OUT_FILE"
+    exit 0
+fi
 
 # --- 4. next steps: mount into the in-cluster Service pod ---
 # The Service is deployed IN-CLUSTER for kind (see SERVICE_DESIGN_DECISIONS.md).

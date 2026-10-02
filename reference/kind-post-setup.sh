@@ -53,6 +53,11 @@ set +x  # never trace: keeps secrets out of the terminal
 
 # --- config (env-overridable) ---
 REFERENCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Every --env-file is loaded BEFORE the defaults below read the environment, so a file beats the shell
+# and a flag beats a file. The values are exported, so kind-service-bootstrap.sh inherits them.
+# shellcheck source=reference/envfile.sh
+. "$REFERENCE_DIR/envfile.sh"
+envfile_prescan "$@" || exit 1
 BENCH_REPO="${BENCH_REPO:-$(cd "$REFERENCE_DIR/.." && pwd)}"
 IMAGE="${IMAGE:-ghcr.io/rossoctl/autobench:v1.32}"
 CLUSTER="${CLUSTER:-rossoctl}"
@@ -61,7 +66,11 @@ REALM="${REALM:-rossoctl}"
 CLIENT="${CLIENT:-rossoctl}"
 KC_HOST="${KC_HOST:-keycloak.localtest.me:8080}"
 KC_SERVER="${KC_SERVER:-http://${KC_HOST}}"
-BENCH_USER="${BENCH_USER:-benchmarker}"
+# KC_SERVICE_USERNAME / KC_SERVICE_PASSWORD are the names kind-service-bootstrap.sh and the env-file
+# template use, so one file serves both scripts; BENCH_USER / KC_USER_PASSWORD still win when set.
+BENCH_USER="${BENCH_USER:-${KC_SERVICE_USERNAME:-benchmarker}}"
+KC_USER_PASSWORD="${KC_USER_PASSWORD:-${KC_SERVICE_PASSWORD:-}}"
+KC_USER_PASSWORD_FILE="${KC_USER_PASSWORD_FILE:-${KC_SERVICE_PASSWORD_FILE:-}}"
 BENCH_EMAIL="${BENCH_EMAIL:-benchmarker@localtest.me}"
 TEAM_NAMESPACES="${TEAM_NAMESPACES:-team1}"
 KC_CRED_FILE="${KC_CRED_FILE:-$HOME/.rossoctl-kind/benchmarker.pass}"
@@ -82,7 +91,12 @@ Usage: kind-post-setup.sh [flags]
 
 Stands the AutoBench Service back up on a freshly recreated local kind cluster.
 
+Required, from the environment or an --env-file: S3_ENABLED=true|false, and when true the S3_*
+values (see reference/autobench.env.template). Checked before anything is built or applied.
+
 Flags:
+  --env-file FILE     KEY=VALUE lines (chmod 600), repeatable. Precedence, last wins: the shell,
+                      then each --env-file in order, then flags.
   --username U        the Keycloak user to seed        (default: ${BENCH_USER}; env BENCH_USER)
   --password-file F   its password, from a chmod-600 file. The default is ${KC_CRED_FILE},
                       so with that file in place no credential flag is needed at all.
@@ -101,7 +115,7 @@ Flags:
   -h, --help
 
 Everything else is environment-only: IMAGE, CLUSTER, KUBE_CONTEXT, REALM, CLIENT, KC_HOST,
-TEAM_NAMESPACES, KC_ADMIN_PASSWORD, LLM_PROFILE, LLM_KEY_FILE, BM_WORKLOAD_LLM_KEY, MLFLOW_URL
+TEAM_NAMESPACES, KC_ADMIN_PASSWORD, S3_*, LLM_PROFILE, LLM_KEY_FILE, BM_WORKLOAD_LLM_KEY, MLFLOW_URL
 (the tracking URL the instance config names — also what --install-mlflow auto looks for).
 EOF
 }
@@ -115,6 +129,8 @@ while [ $# -gt 0 ]; do
     --password-stdin) CRED_PASSWORD_STDIN=1; shift ;;
     --password)       CRED_PASSWORD_ARGV="$2"; shift 2 ;;
     --install-mlflow) INSTALL_MLFLOW="$2"; shift 2 ;;
+    --env-file)       shift 2 ;;   # already loaded by envfile_prescan
+    --env-file=*)     shift ;;
     -h|--help)        usage; exit 0 ;;
     *)                usage; echo "Error: unknown argument '$1'" >&2; exit 1 ;;
   esac
@@ -123,6 +139,12 @@ case "$INSTALL_MLFLOW" in
   auto|always|never) ;;
   *) echo "Error: --install-mlflow must be auto, always or never (got '$INSTALL_MLFLOW')" >&2; exit 1 ;;
 esac
+
+# S3 is declared, and checked here — before the image build and the Keycloak seeding — rather than only
+# in kind-service-bootstrap.sh, which runs after both and would fail with the cluster half set up.
+export S3_ENABLED S3_BUCKET S3_REGION S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_ENDPOINT_URL S3_PREFIX
+python3 "$REFERENCE_DIR/s3check.py" ${SKIP_S3_CHECK:+--offline} \
+  || { echo "Error: S3 is not usable as declared (see above) — fix the S3_* values, or declare S3_ENABLED=false" >&2; exit 1; }
 
 # --- secrets (flags, else env, else chmod-600 file; admin pw falls back to the cluster secret) ---
 # shellcheck source=reference/credfile.sh
@@ -135,7 +157,8 @@ CRED_N=0
 # The default credentials file is the last resort, so a flag or an export always wins over it — and
 # it is only reached for when it EXISTS, so an absent one falls through to the message below that
 # names all four routes rather than complaining about one path you never asked for.
-[ "$CRED_N" != 0 ] || [ -n "${KC_USER_PASSWORD:-}" ] || [ ! -f "$KC_CRED_FILE" ] \
+[ "$CRED_N" != 0 ] || [ -n "${KC_USER_PASSWORD:-}" ] || [ -n "${KC_USER_PASSWORD_FILE:-}" ] \
+  || [ ! -f "$KC_CRED_FILE" ] \
   || CRED_PASSWORD_FILE="$KC_CRED_FILE"
 CRED_RC=0; cred_resolve_password KC_USER_PASSWORD || CRED_RC=$?   # `; rc=$?` would trip set -e first
 case "$CRED_RC" in
@@ -343,19 +366,19 @@ python3 "$REFERENCE_DIR/kind-collector-mlflow.py" --context "$CTX" \
 # --- 3. generate per-instance config + (re)create the autobench-instances secret ---
 echo "==> generating instance config + secret"
 export KC_SERVICE_USERNAME="$BENCH_USER" KC_SERVICE_PASSWORD="$KC_USER_PASSWORD"
+unset KC_SERVICE_PASSWORD_FILE   # resolved above; left set, the bootstrap would see two sources
 OUT_DIR="$(mktemp -d)"; trap 'rm -rf "$OUT_DIR"' EXIT
-# `s3` and `workload_llm` cannot be discovered from a cluster — which bucket credentials to publish
-# with, and which gateway issued the key in openai-secret. Carry them over from the last generated
-# file (instances/ is gitignored and survives a cluster rebuild), or they are dropped silently and
-# the run publishes nothing.
+# `workload_llm` cannot be discovered from a cluster — which gateway issued the key in openai-secret.
+# Carry it over from the last generated file (instances/ is gitignored and survives a cluster
+# rebuild), or it is dropped silently. S3 is NOT carried: it comes from the S3_* declaration above.
 COPY_FROM="${COPY_FROM:-$BENCH_REPO/instances/keycloak.localtest.me_8080.json}"
 COPY_ARGS=()
 if [ -f "$COPY_FROM" ]; then
   COPY_ARGS=(--copy-from "$COPY_FROM")
-  echo "==> carrying s3 + workload_llm over from $(basename "$COPY_FROM")"
+  echo "==> carrying workload_llm over from $(basename "$COPY_FROM")"
 else
-  echo "NOTE: no previous instance file at $COPY_FROM — the generated config will have no s3" >&2
-  echo "      (artifacts unpublished) and no workload_llm (the agent uses the image default)." >&2
+  echo "NOTE: no previous instance file at $COPY_FROM — the generated config will have no" >&2
+  echo "      workload_llm (the agent uses the image default)." >&2
   echo "      Pass COPY_FROM=<file>, or --llm-base/--llm-model to kind-service-bootstrap.sh." >&2
 fi
 "$REFERENCE_DIR/kind-service-bootstrap.sh" \
