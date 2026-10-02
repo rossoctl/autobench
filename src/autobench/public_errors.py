@@ -76,6 +76,10 @@ _CAUSES: tuple[tuple[str, tuple[str, ...]], ...] = (
                       "No action with is_message=True")),
     ("tool_choice_unsupported", ('"auto" tool choice',)),
     ("session_terminated", ("Session terminated",)),
+    # --- the AuthBridge IBAC plugin could not get a verdict. It surfaces as "Error executing
+    # submit: llmclient: HTTP <code>", so it must precede wrong_answer, which matches that prefix;
+    # a 403 "team not allowed" or a 429 is already claimed by the entitlement buckets above. -----
+    ("judge_call_failed", ("llmclient: HTTP",)),
     # --- the benchmark scored it wrong (a real result, not an infrastructure failure) ----------
     ("wrong_answer", ("Error executing submit", "does not match")),
     # --- generic, last: 'timed out' appears inside several of the above, so it must not win ----

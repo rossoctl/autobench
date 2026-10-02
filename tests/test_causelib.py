@@ -55,13 +55,27 @@ def test_the_comparison_generator_explains_every_label():
         ("missing assistant content", "agent (upstream defect)"),
         ("Error executing submit", "wrong answer"),
         ("answer does not match", "wrong answer"),
-        # Legacy had no bucket for these; it must still say `other`, as the published reports do.
+        # Added after 80df31d: each was `other`, or (the judge) misfiled as a wrong answer.
+        ("Error executing submit: llmclient: HTTP 502: {\"error\":\"upstream: URLError\"}",
+         "IBAC judge call failed"),
+        ("A2A task ended in state 'failed': Error: cannot pickle '_asyncio.Task' object",
+         "agent (upstream defect)"),
+        ("A2A task ended in state 'failed': Error: timed out", "task timed out (unattributed)"),
+        # Legacy has no entitlement bucket; it must still say `other`, as the published reports do.
         ("Budget has been exceeded! Current cost: 30001.65", "other"),
-        ("A2A task ended in state 'failed': Error: timed out", "other"),
     ],
 )
-def test_legacy_classification_is_unchanged(verbatim, expected):
+def test_legacy_classification(verbatim, expected):
     assert CL.cause(verbatim) == expected
+
+
+@pytest.mark.parametrize("verbatim", [
+    "Error executing submit: llmclient: HTTP 404: {\"detail\":\"Not Found\"}",
+    "A2A task ended in state 'failed': Error: cannot pickle '_asyncio.Task' object",
+    "A2A task ended in state 'failed': Error: timed out",
+])
+def test_the_added_legacy_entries_agree_with_the_scrubbed_era(verbatim):
+    assert CL.cause(verbatim) == CL.cause(pe.public_error(verbatim))
 
 
 def test_scrubbed_classification_is_finer_than_legacy():

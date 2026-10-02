@@ -13,12 +13,16 @@ verbatim strings were publishing internal hostnames, a team UUID and the org's s
 So:
 
 * a **scrubbed** value is parsed — the category is authoritative, no guessing needed;
-* a **verbatim** value falls through to `_LEGACY`, whose patterns and labels are kept byte-identical
-  to what `gen-12run-comparison.py` carried inline, so re-running a generator over a pre-scrub
-  landmark run reproduces exactly the table it published. Do not "tidy" that table.
+* a **verbatim** value falls through to `_LEGACY`, the 5 buckets `gen-12run-comparison.py` carried
+  inline plus three later entries for messages that table filed wrongly or not at all: the IBAC
+  judge failing (it shares `wrong_answer`'s "Error executing submit" prefix, so it read as the
+  model answering wrong), the agent's `cannot pickle` race, and the agent's own `timed out`. Each
+  mirrors a `public_errors` bucket, so the two eras agree on them. A pre-scrub landmark run must
+  still regenerate the table it published — re-check `docs/results/` before touching this table.
 
-The scrubbed era classifies more finely than the legacy patterns could — `public_errors` has 20
-buckets drawn from a survey of all 1,056 strings in the bucket, where the inline table had 5. Labels
+The scrubbed era classifies more finely than the legacy patterns could — `public_errors` has 21
+buckets — 20 drawn from a survey of all 1,056 strings in the bucket, plus `judge_call_failed`, found
+later — where the inline table had 5. Labels
 below therefore agree with the legacy ones where the bucket means the same thing, and introduce new
 labels only where the legacy answer would have been `other`. A cross-era comparison is the one place
 to be careful; a comparison *within* one 12-run (which is what the generators do) is unaffected.
@@ -28,15 +32,18 @@ from __future__ import annotations
 
 import re
 
-# Byte-identical to the table that lived in gen-12run-comparison.py. Ordered: first match wins, so
-# the specific infrastructure signatures are tested before the generic ones.
+# The table that lived in gen-12run-comparison.py, plus the judge, pickle and `timed out` entries
+# (see the module docstring). Ordered: first match wins, so the specific infrastructure signatures
+# are tested before the generic ones — the judge before `wrong answer`, bare `timed out` last.
 _LEGACY: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("health probe (Bug 3)", ("/v1/models",)),
     ("transport / gateway", ("peer closed connection", "incomplete chunked", "503",
                              "Network communication error")),
     ("per-task timeout", ("per-task timeout",)),
-    ("agent (upstream defect)", ("missing assistant content",)),
+    ("agent (upstream defect)", ("missing assistant content", "cannot pickle")),
+    ("IBAC judge call failed", ("llmclient: HTTP",)),
     ("wrong answer", ("Error executing submit", "does not match")),
+    ("task timed out (unattributed)", ("timed out",)),
 )
 
 # `public_errors` category -> display label. Every category that module can emit must appear here, or
@@ -49,6 +56,7 @@ _SLUG_LABELS: dict[str, str] = {
     "task_timeout": "per-task timeout",
     "agent_defect": "agent (upstream defect)",
     "tool_choice_unsupported": "agent (upstream defect)",
+    "judge_call_failed": "IBAC judge call failed",
     "wrong_answer": "wrong answer",
     # finer than the legacy table could express; legacy would have said "other" for all of these
     "budget_exceeded": "gateway budget / entitlement",

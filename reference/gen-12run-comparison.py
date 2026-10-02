@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Compare two 12-run result sets (e.g. OCP vs KinD) from the artifacts run-12.py mirrored.
 
-Usage: gen-12run-comparison.py <A.json> <A-label> <B.json> <B-label> <version> [out.md]
+Usage: gen-12run-comparison.py [--gateway same|different] <A.json> <A-label> <B.json> <B-label>
+                              <version> [out.md]
+
+`--gateway` declares whether the two sides sent their model calls to the same LLM gateway. It is a
+declaration because nothing in the artifacts records the gateway, and it decides what the report may
+say about the completion cache: two gateways cache independently, one gateway is one shared cache.
+Omitted, the report says it was not told rather than assuming either.
 
 Every number is derived from the mirrored report.ndjson files, nothing transcribed.
 """
@@ -18,8 +24,15 @@ import shortlistlib as SL  # noqa: E402
 import causelib as CL  # noqa: E402
 from causelib import cause  # noqa: E402
 
-A, ALAB, B, BLAB, VERSION = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
-OUT = pathlib.Path(sys.argv[6]) if len(sys.argv) > 6 else None
+_argv = sys.argv[1:]
+GATEWAY = None
+if _argv and _argv[0].startswith("--gateway"):
+    GATEWAY = _argv[0].split("=", 1)[1] if "=" in _argv[0] else _argv[1]
+    _argv = _argv[1:] if "=" in _argv[0] else _argv[2:]
+    if GATEWAY not in ("same", "different"):
+        sys.exit(f"--gateway must be same or different (got {GATEWAY!r})")
+A, ALAB, B, BLAB, VERSION = _argv[0], _argv[1], _argv[2], _argv[3], _argv[4]
+OUT = pathlib.Path(_argv[5]) if len(_argv) > 5 else None
 
 
 def _stats(vals):
@@ -89,10 +102,13 @@ def load(path):
         # row at all (appworld timeouts do). See Bug 3 in docs/exgentic-agent-bug-report-*.md.
         probe = 0
         causes = {}
+        span = (None, None)
         if md:
             rp = pathlib.Path(md) / "run.json"
             if rp.exists():
-                res = json.loads(rp.read_text()).get("results", [])
+                rj = json.loads(rp.read_text())
+                res = rj.get("results", [])
+                span = (rj.get("started_at"), rj.get("finished_at"))
                 probe = sum(1 for x in res if CL.is_probe_failure(x.get("error")))
                 for x in res:
                     if x.get("error"):
@@ -130,6 +146,7 @@ def load(path):
             i=sum(iv), o=sum(ov), imed=imed, imean=imean, icv=icv,
             omed=omed, omean=omean, ocv=ocv,
             par=(r.get("run_request") or {}).get("max_parallel_sessions"),
+            started=span[0], finished=span[1],
             keys=([a["key"] for a in man.get("artifacts", [])]
                   + [man["prefix"].rstrip("/") + "/manifest.json"]) if man else [],
             urlroot=next((a["url"][: -len(a["key"])] for a in (man or {}).get("artifacts", [])
@@ -288,6 +305,48 @@ def s3_section(sets):
     return "\n".join(o)
 
 
+def _matrix_span(S):
+    """(earliest start, latest finish) over a matrix's legs, from run.json; None if unrecorded."""
+    st = [v["started"] for v in S.values() if v.get("started")]
+    fi = [v["finished"] for v in S.values() if v.get("finished")]
+    return (min(st), max(fi)) if st and fi else None
+
+
+# Measured on the internal gateway (survival curve: hit at 9 min, miss at 11); the driver's
+# BM_CACHE_GAP default of 900 s keeps the same margin.
+_CACHE_TTL_S = 600
+
+
+def _gateway_sentence():
+    """What the completion cache means for *this* pair, from --gateway — never assumed."""
+    if GATEWAY == "different":
+        return ("It does not undermine the comparison, because the two clusters front *different* "
+                "gateways with independent caches: a figure the two sides agree on is agreement "
+                "between two independently cached (or uncached) measurements, not one measurement "
+                "counted twice.")
+    if GATEWAY == "same":
+        a, b = _matrix_span(X), _matrix_span(Y)
+        if not (a and b):
+            return ("**Both sides used the same gateway, so they share one cache**, and the run "
+                    "records do not carry the timestamps needed to show the two matrices were far "
+                    "enough apart for neither to replay the other — treat output tokens and latency "
+                    "on legs the sides share as possibly one measurement counted twice.")
+        first, second = sorted([a, b])
+        gap = second[0] - first[1]
+        if gap >= _CACHE_TTL_S:
+            return (f"**Both sides used the same gateway, so they share one cache** — but the later "
+                    f"matrix started {gap / 3600:.1f} h after the earlier one finished, past the "
+                    f"~{_CACHE_TTL_S // 60} min TTL, so neither side can have replayed the other: a "
+                    f"figure the two agree on is still two measurements, not one counted twice.")
+        return (f"**Both sides used the same gateway, so they share one cache, and the matrices "
+                f"were only {max(gap, 0) / 60:.0f} min apart** (overlapping if 0) — inside the "
+                f"~{_CACHE_TTL_S // 60} min TTL, so a leg on one side may have replayed the other's "
+                f"completions. Do not read agreement on output tokens or latency as independent.")
+    return ("Whether that also couples the two sides depends on whether they shared a gateway, "
+            "which this report was not told (`--gateway same|different`) — so it makes no claim "
+            "that agreement on output tokens or latency is two independent measurements.")
+
+
 X, _ = load(A)   # load() still returns the Service base; deliberately discarded, see the header below
 Y, _ = load(B)
 GENERATED = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -406,8 +465,13 @@ if _cx or _cy:
         "per-task timeout": "The task exceeded its `task_timeout_seconds`. On appworld this is the "
                             "dominant failure mode and is an upstream agent behaviour, not a resource "
                             "limit — see the appworld notes in the per-platform reports.",
-        "agent (upstream defect)": "The agent returned a malformed or empty completion. An upstream "
-                                   "defect; the task never had a chance to be scored.",
+        "agent (upstream defect)": "The agent failed on its own — a malformed or empty completion, "
+                                   "or its cloudpickle `_asyncio.Task` race. An upstream defect; the "
+                                   "task never had a chance to be scored.",
+        "IBAC judge call failed": "The AuthBridge IBAC plugin could not get a verdict from its judge "
+                                  "— the judge endpoint, its key, or the gateway behind it. "
+                                  "**Infrastructure, not the model**, though it reads as `Error "
+                                  "executing submit`, the same prefix a wrong answer carries.",
         "wrong answer": "The agent ran, answered, and the answer was rejected. **The only bucket that "
                         "is a genuine statement about the model's ability.**",
         # The rest only a scrubbed-era artifact can produce (see causelib); a legacy run never shows them.
@@ -427,20 +491,33 @@ if _cx or _cy:
     for k in CL.LABELS:
         if _cx.get(k) or _cy.get(k):
             L.append(f"| {k} | {_cx.get(k, 0)} | {_cy.get(k, 0)} | {_meaning[k]} |")
-    _legs = [(n, (X[n].get('causes') or {}).get('transport / gateway', 0),
-              (Y.get(n, {}).get('causes') or {}).get('transport / gateway', 0))
-             for n in sorted(X)]
+    # Every bucket that is a fault in the plumbing rather than in the agent, the model or the
+    # benchmark. A judge failure belongs here even though it reads as `Error executing submit`.
+    _infra = ("transport / gateway", "IBAC judge call failed", "gateway budget / entitlement",
+              "MCP unreachable")
+
+    def _n_infra(S, n):
+        return sum((S.get(n, {}).get("causes") or {}).get(k, 0) for k in _infra)
+    _legs = [(n, _n_infra(X, n), _n_infra(Y, n)) for n in sorted(X)]
     _legs = [(n, a, b) for n, a, b in _legs if a or b]
+    _seen = [k for k in _infra if _cx.get(k) or _cy.get(k)]
     L += [""]
     if _legs:
-        L.append("**Transport failures fall on specific legs**: "
+        # Named for what occurred: "Transport" when that is the only bucket, so the sentence says no
+        # more than the table does.
+        _what = "Transport" if _seen == ["transport / gateway"] else "Infrastructure"
+        L.append(f"**{_what} failures fall on specific legs**: "
                  + ", ".join(f"#{n} ({ALAB} {a}, {BLAB} {b})" for n, a, b in _legs)
-                 + ". Where such a leg also shows a pass-rate delta, that part of the delta is the "
-                   "network, not the platform's ability to run the benchmark — subtract it before "
-                   "drawing a conclusion.")
+                 + (". Where such a leg also shows a pass-rate delta, that part of the delta is the "
+                    "network, not the platform's ability to run the benchmark — subtract it before "
+                    "drawing a conclusion." if _what == "Transport" else
+                    f" ({', '.join(_seen)}). Where such a leg also shows a pass-rate delta, that "
+                    "part of the delta is the plumbing, not the platform's ability to run the "
+                    "benchmark — subtract it before drawing a conclusion."))
     else:
-        L.append("**No task on either side was lost to a transport or gateway failure**, so every "
-                 "pass-rate delta below is attributable to the agent, the model or the benchmark.")
+        L.append("**No task on either side was lost to an infrastructure failure** (transport, "
+                 "gateway, judge or MCP), so every pass-rate delta below is attributable to the "
+                 "agent, the model or the benchmark.")
 
 L += ["", "## Token distribution per task", "",
       "For each direction: `median` (robust centre), then `mean`, then `CV` (population sigma / "
@@ -663,11 +740,8 @@ L += ["",
       "earlier leg's task on the same model can be handed back the stored response — same response",
       "`id`, same `usage`. Task selection is deterministic, so within one side the legs sharing a",
       "benchmark do repeat tasks; each side's own report names them. That makes per-call latency and",
-      "output tokens non-independent **within** a side. It does not undermine the comparison, because",
-      "the two clusters front *different* gateways with independent caches: a figure the two sides",
-      "agree on is agreement between two independently cached (or uncached) measurements, not one",
-      "measurement counted twice. Latency is not a hit detector either — a measured replay took 3.0 s,",
-      "the same as a miss."]
+      "output tokens non-independent **within** a side. " + _gateway_sentence() + " Latency is not a",
+      "hit detector either — a measured replay took 3.0 s, the same as a miss."]
 
 # The exact command that produced this file. docs/results/README.md promises every report carries
 # one, and without it a reader who doubts a number cannot re-derive it. Only argv is echoed — the run

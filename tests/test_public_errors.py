@@ -71,6 +71,23 @@ _OBSERVED: list[tuple[str, str]] = [
     ("per-task timeout after 600s", "task_timeout"),
     ("httpx.RemoteProtocolError: peer closed connection without sending complete message", "transport_gateway"),
     ("Error executing submit: answer does not match", "wrong_answer"),
+    # The IBAC judge failing, which shares wrong_answer's "Error executing submit" prefix: a path
+    # sent twice (404), and the judge proxy's upstream dropping (502). The 403 is entitlement.
+    (
+        'A2A task ended in state \'failed\': Error executing submit: llmclient: HTTP 404: '
+        '{"detail":"Not Found"}',
+        "judge_call_failed",
+    ),
+    (
+        'A2A task ended in state \'failed\': Error executing submit: llmclient: HTTP 502: '
+        '{"error":"upstream: URLError"}',
+        "judge_call_failed",
+    ),
+    (
+        'A2A task ended in state \'failed\': Error executing submit: llmclient: HTTP 403: '
+        '{"error":{"message":"team not allowed to access model"}}',
+        "model_not_granted",
+    ),
     ("agent returned missing assistant content", "agent_defect"),
     (
         "Model endpoint https://gw.example.com/v1/models is unreachable",

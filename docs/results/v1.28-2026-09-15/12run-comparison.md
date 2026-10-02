@@ -1,6 +1,6 @@
 # 12-Run Comparison — OpenShift (ykt3 Service, ykt2 workloads) vs KinD (single-node local), both Service v1.28
 
-**Report generated:** 2026-09-22T04:22:44Z
+**Report generated:** 2026-10-02T21:06:55Z
 
 **Platforms compared:** OpenShift (ykt3 Service, ykt2 workloads) vs KinD (single-node local)
 
@@ -81,7 +81,7 @@ killed by a per-task timeout leaves no `report.ndjson` row at all.
 |---|---:|---:|---|
 | transport / gateway | 1 | 0 | The connection to the agent or the gateway failed mid-request. **Infrastructure, not the agent** — it says nothing about the model or the benchmark, and it is the one bucket that should not be read as a capability difference. |
 | per-task timeout | 4 | 11 | The task exceeded its `task_timeout_seconds`. On appworld this is the dominant failure mode and is an upstream agent behaviour, not a resource limit — see the appworld notes in the per-platform reports. |
-| agent (upstream defect) | 1 | 0 | The agent returned a malformed or empty completion. An upstream defect; the task never had a chance to be scored. |
+| agent (upstream defect) | 1 | 0 | The agent failed on its own — a malformed or empty completion, or its cloudpickle `_asyncio.Task` race. An upstream defect; the task never had a chance to be scored. |
 | wrong answer | 2 | 1 | The agent ran, answered, and the answer was rejected. **The only bucket that is a genuine statement about the model's ability.** |
 
 **Transport failures fall on specific legs**: #6 (OpenShift (ykt3 Service, ykt2 workloads) 1, KinD (single-node local) 0). Where such a leg also shows a pass-rate delta, that part of the delta is the network, not the platform's ability to run the benchmark — subtract it before drawing a conclusion.
@@ -176,17 +176,14 @@ One more, and it bears on the *output* token and latency columns rather than the
 earlier leg's task on the same model can be handed back the stored response — same response
 `id`, same `usage`. Task selection is deterministic, so within one side the legs sharing a
 benchmark do repeat tasks; each side's own report names them. That makes per-call latency and
-output tokens non-independent **within** a side. It does not undermine the comparison, because
-the two clusters front *different* gateways with independent caches: a figure the two sides
-agree on is agreement between two independently cached (or uncached) measurements, not one
-measurement counted twice. Latency is not a hit detector either — a measured replay took 3.0 s,
-the same as a miss.
+output tokens non-independent **within** a side. It does not undermine the comparison, because the two clusters front *different* gateways with independent caches: a figure the two sides agree on is agreement between two independently cached (or uncached) measurements, not one measurement counted twice. Latency is not a
+hit detector either — a measured replay took 3.0 s, the same as a miss.
 
 ## Reproducing this report
 
 ```sh
 python3 reference/gen-12run-comparison.py \
-  /tmp/autobench/run12-ocp-dev146.json "OpenShift (ykt3 Service, ykt2 workloads)" /tmp/autobench/run12-kind-dev146.json "KinD (single-node local)" v1.28 docs/results/v1.28-2026-09-15/12run-comparison.md
+  --gateway different /tmp/autobench/run12-ocp-dev146.json "OpenShift (ykt3 Service, ykt2 workloads)" /tmp/autobench/run12-kind-dev146.json "KinD (single-node local)" v1.28 docs/results/v1.28-2026-09-15/12run-comparison.md
 ```
 
 Both run JSONs and the mirrored artifacts they point at come from `reference/run-12.py`. If
