@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-10-02T00:50:33Z
+**Last modified:** 2026-10-02T05:21:13Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -180,7 +180,15 @@ python3 reference/preflight.py --platform openshift --context <ykt5-ctx>
 python3 reference/preflight.py --platform openshift --context <ykt3-ctx> \
                               --workload-context <ykt2-ctx>          # split shape
 python3 reference/preflight.py --json                                # machine-readable
+python3 reference/preflight.py --pre-install [--ibac-judge] \
+                              --values deploy/helm/values-openshift.yaml   # before an install
 ```
+
+Without `--pre-install` the script audits an install that already exists, so it FAILS on objects the
+chart creates — the trace-writer RoleBinding first among them — when the release is absent.
+`--pre-install` reads what the chart *will* create off `helm template` of `--chart` with `--values`
+and counts that as present. `--ibac-judge` adds the judge's pieces. `autobench-install.sh` passes
+`--pre-install` (and `--ibac-judge` when the judge is on) before Helm runs, and neither after it.
 
 Exit status is 0 when nothing FAILed; warnings do not fail the run. Thirteen sections, in the order
 a request travels: tooling, cluster reachability, Rossoctl version and CRDs, namespaces, workload
@@ -868,7 +876,9 @@ in order and stops at the first one that is wrong:
 
 1. tools;
 2. inputs;
-3. `preflight.py` (it must report 0 failures);
+3. `preflight.py --pre-install` (it must report 0 failures). What the release itself creates is not
+   required to exist yet: the trace-writer RoleBinding, and with the judge its Deployment, its
+   upstream Secret and the `ibac.*` fields;
 4. the bootstrap script, which writes the instance file;
 5. the `autobench-instances` Secret, with only that one key replaced and the others kept and named;
 6. `helm upgrade --install --wait`;
@@ -882,7 +892,9 @@ reference/autobench-install.sh --env-file ~/.rossoctl-ykt5/autobench.env
 ```
 
 `--dry-run` runs steps 1–4 for real and prints steps 5–7 instead of running them. They are the only
-steps that write to the cluster. Inputs are §3.1's.
+steps that write to the cluster. Inputs are §3.1's. A dry-run against a cluster that still has the
+release proves nothing about a *fresh* install, because the chart's own objects are still there: the
+first real install after an uninstall is the case that matters.
 
 If the live release runs the IBAC judge, an install that does not ask for the judge refuses to run.
 Pass `--ibac-judge` to keep it, or `--no-ibac-judge` to remove it. Losing the judge on an upgrade

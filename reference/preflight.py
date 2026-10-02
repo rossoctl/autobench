@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Preflight an AutoBench install — no cluster writes, no secret values printed.
 
-Run this BEFORE `helm upgrade --install` (and again after, as a post-install audit). Every check
+Run this BEFORE `helm upgrade --install` with `--pre-install` (and again after without it, as a
+post-install audit). `--pre-install` is what lets a FRESH install pass: the objects the chart
+itself creates are absent until it runs, and only the post-install audit can demand them. Every check
 here corresponds to a failure we have actually shipped, and the reason there is a script at all is
 that most of those failures do not look like misconfiguration:
 
@@ -30,6 +32,7 @@ Usage
     python3 reference/preflight.py                                  # infer platform from context
     python3 reference/preflight.py --platform kind  --context kind-rossoctl
     python3 reference/preflight.py --platform openshift --context <ctx>
+    python3 reference/preflight.py --pre-install --values deploy/helm/values-openshift.yaml
     python3 reference/preflight.py --json                           # machine-readable
     python3 reference/preflight.py --env-file ~/.rossoctl-ykt5/autobench.env   # values from a file
 
@@ -459,7 +462,9 @@ def check_workload_secrets(rep: Report, cluster: Cluster | None, teams: list[str
             )
 
 
-def check_ibac_judge(rep: Report, cluster: Cluster, namespace: str, *, required: bool) -> None:
+def check_ibac_judge(
+    rep: Report, cluster: Cluster, namespace: str, *, required: bool, installing: bool = False
+) -> None:
     """The IBAC judge: AutoBench-owned, and silent when missing — which is why this check exists.
 
     The judge is AutoBench's. Rossoctl ships no judge — `rossoctl-platform-config` arrives with every
@@ -481,6 +486,11 @@ def check_ibac_judge(rep: Report, cluster: Cluster, namespace: str, *, required:
 
     `required` is the caller saying plugin legs are in scope; otherwise a missing judge is a warning,
     because legs #1-#4 and #9-#12 neither use nor need one.
+
+    `installing` is the caller saying the install about to run ENABLES the judge (--pre-install
+    --ibac-judge). Then every piece that install creates — the Deployment, the upstream Secret, the
+    two fields its hook patches — is expected to be absent, and only what survives it is checked.
+    autobench-install.sh shape-checks the inputs those pieces are made from before it gets here.
     """
     rep.section("IBAC judge (needed only by the plugin legs, #5-#8)")
     note = rep.fail if required else rep.warn
@@ -507,6 +517,20 @@ def check_ibac_judge(rep: Report, cluster: Cluster, namespace: str, *, required:
         return
 
     endpoint, model = ibac.get("judgeEndpoint", ""), ibac.get("judgeModel", "")
+    if installing:
+        rep.ok("ibac.judgeEndpoint / judgeModel",
+               "patched by this install's post-install hook, which records the current pair "
+               f"({'both empty' if not endpoint and not model else 'set'}) for the uninstall to restore")
+        if ibac.get("judgeBearer"):
+            rep.warn("ibac.judgeBearer is set", "a ConfigMap is cleartext — use the Secret-backed proxy instead")
+        if cluster.secret_data(namespace, "ibac-judge-upstream") is None:
+            rep.ok(f"{namespace}/ibac-judge-upstream", "absent — this install writes it from IBAC_JUDGE_KEY_FILE")
+        else:
+            rep.ok(f"{namespace}/ibac-judge-upstream", "present — this install replaces it from IBAC_JUDGE_KEY_FILE")
+        present = cluster.exists("get", "deploy", "ibac-judge", "-n", namespace)
+        rep.ok("ibac-judge Deployment", "present — this release upgrades it" if present
+               else "absent — this release creates it")
+        return
     if not endpoint and not model:
         note("ibac.judgeEndpoint / judgeModel",
              "both EMPTY — the ibac plugin loads and does nothing. Legs #5-#8 would complete and "
@@ -767,8 +791,44 @@ def mlflow_workspaces(instances: dict[str, dict] | None, teams: list[str]) -> li
     return sorted(set(found)) or teams
 
 
+def chart_trace_writer_namespaces(chart_dir: str, values: str | None, namespace: str) -> set[str] | None:
+    """The namespaces the chart WILL bind for the trace writer, read off `helm template`.
+
+    For --pre-install only. Before a fresh install the binding is absent by construction — the chart
+    creates it, and an uninstall removes it — so the live check alone fails every first install. The
+    rendered chart is the authority on what the install will create, and rendering it rather than
+    parsing the values file also picks up the chart's own default `namespaces` list, which a values
+    file usually leaves alone. Matched on the same grant as the live check, never on the name.
+
+    None when the chart cannot be rendered, so the caller falls back to the live verdict.
+    """
+    argv = ["helm", "template", "autobench", chart_dir, "-n", namespace]
+    if values:
+        argv += ["-f", values]
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if p.returncode != 0:
+        return None
+    # Deliberately not a YAML parse (no yaml dependency): helm's output is its own canonical layout,
+    # metadata fields two spaces in and each subject's fields four.
+    bound: set[str] = set()
+    for doc in p.stdout.split("\n---"):
+        lines = doc.splitlines()
+        if "kind: RoleBinding" not in lines:
+            continue
+        if f"  name: {TRACE_WRITER_CLUSTERROLE}" not in lines or f"    name: {TRACE_WRITER_SA}" not in lines:
+            continue
+        ns = next((ln.split(":", 1)[1].strip() for ln in lines if ln.startswith("  namespace:")), None)
+        if ns:
+            bound.add(ns)
+    return bound
+
+
 def check_mlflow_write_grant(
-    rep: Report, cluster: Cluster, platform: str, namespace: str, workspaces: list[str]
+    rep: Report, cluster: Cluster, platform: str, namespace: str, workspaces: list[str],
+    chart_binds: set[str] | None = None,
 ) -> None:
     """The write half of MLflow: can the Service's identity POST its own spans?
 
@@ -788,6 +848,9 @@ def check_mlflow_write_grant(
     Matched on the GRANT, never on an object name: the first cluster to run the matrix got its binding
     by hand as `mlflow-trace-writers`, the chart renders `autobench-service-mlflow-trace-writer`, and
     both satisfy the requirement. Checking for a name would fail the working cluster.
+
+    `chart_binds` is set only before an install (--pre-install): the namespaces the release about to
+    be installed binds itself, which count as granted when no live binding exists yet.
     """
     rep.section("MLflow (the write half — without this a passing run publishes an EMPTY report)")
     if platform == "kind":
@@ -813,6 +876,12 @@ def check_mlflow_write_grant(
             rep.ok(
                 f"{ns}: {TRACE_WRITER_SA} may write traces",
                 f"via RoleBinding/{holders[0]}" + (f" (+{len(holders) - 1} more)" if len(holders) > 1 else ""),
+            )
+        elif chart_binds is not None and ns in chart_binds:
+            rep.ok(
+                f"{ns}: {TRACE_WRITER_SA} may write traces",
+                f"no RoleBinding yet — the chart creates one granting ClusterRole/"
+                f"{TRACE_WRITER_CLUSTERROLE} in {ns} (the post-install preflight checks it is live)",
             )
         else:
             rep.fail(
@@ -1772,6 +1841,14 @@ def main() -> int:
                     help="the plugin legs (#5-#8) are in scope, so a missing or half-configured "
                          "IBAC judge is a FAILURE rather than a warning. Without a judge those legs "
                          "still pass — with the ibac plugin inert and nothing measured")
+    ap.add_argument("--pre-install", action="store_true",
+                    help="audit the cluster an install is ABOUT to run on: what the chart itself "
+                         "creates (the trace-writer RoleBinding, read off `helm template` of --chart "
+                         "with --values) counts as present. Without it, a fresh install fails on "
+                         "objects only the install can create")
+    ap.add_argument("--ibac-judge", action="store_true",
+                    help="with --pre-install: the install enables the judge, so its Deployment, its "
+                         "upstream Secret and the ibac fields are expected to be absent")
     ap.add_argument("--skip-mlflow-probe", action="store_true",
                     help="skip GET /mlflow/health. That probe WRITES one synthetic trace (no LLM "
                          "call, and it cannot enter a report — its session id is a uuid), but it is "
@@ -1781,6 +1858,9 @@ def main() -> int:
     ap.add_argument("--skip-chart", action="store_true", help="skip the local lint/parity checks")
     ap.add_argument("--json", action="store_true", help="emit results as JSON on stdout")
     args = ap.parse_args()
+    if args.ibac_judge and not args.pre_install:
+        ap.error("--ibac-judge only means something with --pre-install; after an install, "
+                 "--plugin-legs is the strict judge check")
     # Before anything reads the environment. A file beats the shell; flags were parsed above and are
     # read from `args`, so they still beat both.
     for path in args.env_file:
@@ -1829,11 +1909,18 @@ def main() -> int:
         check_rossoctl(rep, cluster, args.namespace)
         check_namespaces(rep, cluster, args.namespace, teams, workload)
         check_workload_secrets(rep, workload, teams)
-        check_ibac_judge(rep, cluster, args.namespace, required=args.plugin_legs)
+        check_ibac_judge(rep, cluster, args.namespace, required=args.plugin_legs,
+                         installing=args.ibac_judge)
         collector = check_collector(rep, cluster, args.namespace)
         check_mlflow(rep, cluster, platform, args.namespace, collector)
+        chart_binds = None
+        if args.pre_install:
+            chart_binds = chart_trace_writer_namespaces(args.chart, args.values, args.namespace)
+            if chart_binds is None and not args.json:
+                print(f"  (could not render {args.chart} — the trace-writer check reads the live "
+                      "cluster only)")
         check_mlflow_write_grant(rep, cluster, platform, args.namespace,
-                                 mlflow_workspaces(instances, teams))
+                                 mlflow_workspaces(instances, teams), chart_binds)
         check_ingress(rep, cluster, platform, args.namespace, args.gateway)
         check_s3_declaration(rep, instances)
         check_instance_config(rep, cluster, args.namespace, platform, collector, instances,

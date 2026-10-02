@@ -13,8 +13,9 @@
 #
 #   1. tools        kubectl, helm, jq, python3, curl (~/.rd/bin is added to PATH)
 #   2. inputs       platform, context, S3_ENABLED declared, the judge's inputs shaped right
-#   3. preflight    reference/preflight.py must report 0 failures (the MLflow round trip is skipped:
-#                   it goes through the Service, which may not be installed yet)
+#   3. preflight    reference/preflight.py --pre-install must report 0 failures. What the release
+#                   itself creates counts as present, and the MLflow round trip is skipped (it goes
+#                   through the Service, which may not be installed yet) — step 8 checks both live
 #   4. config       the platform's bootstrap script writes the instance file — it re-proves the
 #                   benchmarker login and the S3 key itself
 #   5. Secrets      autobench-instances gets that ONE key replaced (other keys are kept and named);
@@ -198,8 +199,12 @@ if [ -n "$SKIP_PREFLIGHT" ]; then
 else
     log ""
     log "==> 3. preflight (pre-install)"
-    python3 "$REFERENCE_DIR/preflight.py" --platform "$AB_PLATFORM" --context "$KUBE_CONTEXT" \
-        --namespace "$NAMESPACE" --values "$HELM_VALUES" --skip-mlflow-probe \
+    # --pre-install: what this release creates (the trace-writer RoleBinding; with the judge, its
+    # Deployment, Secret and fields) is absent before a fresh install, so it is checked AFTER, below.
+    PRE=(--platform "$AB_PLATFORM" --context "$KUBE_CONTEXT" --namespace "$NAMESPACE"
+         --values "$HELM_VALUES" --chart "$CHART" --pre-install --skip-mlflow-probe)
+    [ "$IBAC_JUDGE" = true ] && PRE+=(--ibac-judge)
+    python3 "$REFERENCE_DIR/preflight.py" "${PRE[@]}" \
         || die "preflight reports failures — fix them, then re-run (nothing was written)"
 fi
 
@@ -307,7 +312,8 @@ fi
 
 log ""
 log "==> post-install preflight (with the MLflow round trip, through the Service)"
-PF=(--platform "$AB_PLATFORM" --context "$KUBE_CONTEXT" --namespace "$NAMESPACE" --values "$HELM_VALUES")
+PF=(--platform "$AB_PLATFORM" --context "$KUBE_CONTEXT" --namespace "$NAMESPACE" --values "$HELM_VALUES"
+    --chart "$CHART")
 [ "$IBAC_JUDGE" = true ] && PF+=(--plugin-legs)
 python3 "$REFERENCE_DIR/preflight.py" "${PF[@]}" \
     || die "installed, but the post-install preflight reports failures (see above)"
