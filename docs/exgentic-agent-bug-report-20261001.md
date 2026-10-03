@@ -20,7 +20,7 @@ report row with no tokens, no duration and no pass result.
 | `pydantic` | `2.12.5` |
 | `cloudpickle` | `3.1.2` |
 | `a2a-sdk` | `0.3.26` |
-| Runner | `EXGENTIC_DEFAULT_RUNNER=service` (**required** — see "Why we cannot work around it") |
+| Runner | `EXGENTIC_DEFAULT_RUNNER=service` (we have since moved off it; see "Workaround, and a correction") |
 | Agent | `tool_calling`; seen on benchmarks `gsm8k` and `appworld` |
 | Model | via an OpenAI-compatible LiteLLM gateway |
 | Platform | OpenShift, amd64 |
@@ -213,12 +213,33 @@ Not recommended: holding `_background_tasks` as a `WeakSet` or moving it off `se
 instance by accident while leaving the frame capture in place, so the next unpicklable attribute
 reintroduces the bug.
 
-## Why we cannot work around it
+## Workaround, and a correction
+
+**Correction (2026-10-03).** This section first said we could not work around the defect, because
+only `service` produced the OTEL spans our token telemetry is built from. **That was wrong for this
+image.** We had not re-measured it on dev146.
+
+**`direct` emits complete, correctly parented spans, and it is now our runner.** A controlled A/B on
+kind: gsm8k, 10 tasks, `max_parallel_sessions: 4`, this image, only `EXGENTIC_DEFAULT_RUNNER` changed.
+- **`direct`:** 10 of 10 `chat` spans landed in their own task's trace.
+- **`service`:** only 7 arrived, and 6 of those were parented to the wrong session.
+
+That is a second defect, on the same runner:
+- **What happens.** `service` hosts the agent behind server threads that inherit no ContextVar, so
+  `TraceLogger._get_parent_context` falls back to `_SUBPROCESS_CONTEXT`.
+- **Why it misattributes.** `a2a_executor.py` overwrites that fallback at the start of every request,
+  bare at :222 and with the session at :371. So under concurrency, a span is parented to whichever
+  session started last.
+- **Why spans go missing.** A just-started session's bare context has no `otel_context`, so the span
+  becomes an orphan trace with no session root.
+- **Why `direct` is clean.** The `contextvars.copy_context()` / `ctx.run` handoff at ~:384 already
+  gives each executor thread the right context, and `direct` calls the agent on those threads.
+
+The pickling fix above still matters upstream: exgentic's own default runner is `venv`, which pickles
+too.
 
 - **The `direct` and `thread` runners are immune** (they never pickle; only `service`, `process`,
-  `docker` and the `venv` transport do) — but we are pinned to `service`, because it is the runner
-  that produces the OTEL spans our token telemetry is assembled from. Switching runners to dodge this
-  defect means giving up per-task token attribution entirely.
+  `docker` and the `venv` transport do).
 - **`max_parallel_sessions: 1` only reduces the rate**, since the same-session emit at line 330 races
   the encode regardless — and it multiplies wall-clock time for every leg.
 - **Retrying the task** would work, but it changes what the benchmark measures: a retried task is no

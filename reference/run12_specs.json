@@ -165,7 +165,7 @@
     "n": 9,
     "bench": "tau2",
     "title": "9 \u2014 tau2 --max-tasks 10 \u2014 multi-turn (adds user-simulator LLM)",
-    "deploy": "(force teardown \u2192 fresh tau2 deploy, so agent re-renders with `EXGENTIC_DEFAULT_RUNNER=service`)",
+    "deploy": "(force teardown \u2192 fresh tau2 deploy, so the agent re-renders with the instance's `EXGENTIC_DEFAULT_RUNNER`)",
     "deploy_body": {
       "agent": "tool_calling",
       "namespace": "team1"

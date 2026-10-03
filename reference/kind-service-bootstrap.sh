@@ -66,8 +66,8 @@ Flags (each also has an env fallback):
                                           (--llm-base is the old name for this flag)
   --llm-model M        WORKLOAD_LLM_MODEL default model, e.g. openai/<gateway model id>
   --otel-endpoint URL  WORKLOAD_OTEL_ENDPOINT  (default: the in-cluster collector on :8335)
-  --agent-runner R     WORKLOAD_AGENT_RUNNER   (default: service — `direct` emits no agent spans,
-                                          so every token count reads 0)
+  --agent-runner R     WORKLOAD_AGENT_RUNNER   direct|service (default: direct — `service` puts
+                                          token spans on the wrong task at p > 1)
   --s3-prefix P        S3_PREFIX          (default: kind/; used only when S3_ENABLED=true)
   --out-dir DIR        OUT_DIR            where to write the config (default: ./instances)
   --kubectl BIN        KUBECTL_BIN        kubectl binary            (default: kubectl)
@@ -151,7 +151,8 @@ COPY_FROM="${COPY_FROM:-}"
 WORKLOAD_LLM_API_BASE="${WORKLOAD_LLM_API_BASE:-${WORKLOAD_LLM_BASE:-}}"
 WORKLOAD_LLM_MODEL="${WORKLOAD_LLM_MODEL:-}"
 WORKLOAD_OTEL_ENDPOINT="${WORKLOAD_OTEL_ENDPOINT:-http://otel-collector.rossoctl-system.svc.cluster.local:8335}"
-WORKLOAD_AGENT_RUNNER="${WORKLOAD_AGENT_RUNNER:-service}"
+# `direct`: see the same default in ocp-service-bootstrap.sh for the measurement behind it.
+WORKLOAD_AGENT_RUNNER="${WORKLOAD_AGENT_RUNNER:-direct}"
 S3_PREFIX="${S3_PREFIX:-kind/}"
 S3_ENABLED="${S3_ENABLED:-}"
 SKIP_S3_CHECK="${SKIP_S3_CHECK:-}"

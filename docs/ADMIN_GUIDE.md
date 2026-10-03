@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-10-02T17:44:14Z
+**Last modified:** 2026-10-03T04:19:38Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -459,11 +459,25 @@ real gap and a small one; it stays open deliberately, and the trigger to close i
 that starts crossing a cluster boundary or an edge Route, where the same `verify=False` would stop
 being an in-cluster concern.
 
-**`workload_agent_runner` deserves its own warning.** The correct value tracks an agent image
-pinned to `:latest`, and it has flipped between `direct` and `service` across rebuilds of that tag.
-With the current image, `service` is what emits agent spans; `direct` yields a clean run with
-**zero-token rows**, which is exactly what a broken MLflow looks like. Do not infer it — detect it,
-by looking for a non-zero token row in `report.ndjson` (§6).
+**`workload_agent_runner` deserves its own warning.** Use `direct`, the default.
+
+- **Why not `service`.** It hosts the agent behind its own server threads, and those read a trace
+  context shared by the whole process and owned by whichever session started last.
+- **What that does at `max_parallel_sessions` > 1.** A task's `chat` spans land on *another* task's
+  row, or on none. The run passes and the pass rate is right, but the per-task tokens are wrong.
+- **Measured.** A controlled A/B on kind on 2026-10-03: gsm8k, 10 tasks, p=4, one agent image, only
+  the runner changed.
+  - `direct` put all 10 spans on their own task.
+  - `service` lost 3 tasks' spans and put 6 of the other 7 on the wrong task.
+- **Two more failures `service` carries:** the agent's `cannot pickle '_asyncio.Task'` race, and a
+  30 s cap on each agent step (§7).
+- **The installer default was `service` from 2026-09-29 until this fix.** p>1 legs run in that
+  window have unreliable per-task tokens.
+- **The value can still change.** The agent image is pinned to `:latest`, so an upstream rebuild
+  could change which runner attributes correctly.
+
+Detect a wrong value by **fingerprint, not by zeros**: a gsm8k task's input-token count is the same
+in every run, so a row carrying a count that belongs to a different task is the tell (§6).
 
 ### 3.5 The LLM gateway: two named profiles
 
@@ -1223,21 +1237,23 @@ uv run autobench-cli --base "$BASE" all --benchmark gsm8k --tasks 1 --teardown  
 
 A zero-token row is the single most informative failure in this system, because it is the shared
 signature of four unrelated causes: a refused MLflow read, an experiment-id mismatch, a collector
-that cannot be reached, and `workload_agent_runner` set to the value the current agent image does
-not emit spans for. Preflight separates the first three; only a run separates the fourth.
+that cannot be reached, and `workload_agent_runner: service` on a leg run at `max_parallel_sessions`
+> 1 (§3.4). Preflight separates the first three and warns on the fourth. Only a run confirms the
+fourth, and only in part: it zeroes some rows and moves other rows' tokens onto the wrong task.
 
 ## 7. Symptoms that lie
 
 | symptom | actual cause | how to confirm |
 |---|---|---|
-| run passes, every token count 0, `model: "unknown"` | refused MLflow read, wrong experiment id, unreachable collector, or the wrong `workload_agent_runner` | §2.4, then §6 |
+| run passes, every token count 0, `model: "unknown"` | refused MLflow read, wrong experiment id, unreachable collector | §2.4, then §6 |
+| a p>1 leg passes, but **some** rows show `llm_count 0` and others carry a token count that belongs to a different task | `workload_agent_runner: service`. Its threads read a process-wide trace context owned by the last-started session, so spans are parented to the wrong task or orphaned. p=1 legs are unaffected, which is what makes it look intermittent | the instance's `workload_agent_runner` (`preflight.py` warns on it). On gsm8k compare per-task input tokens with an earlier run: they are per-task constants. §3.4 |
 | run passes `pass_rate 1.0`, and `report.ndjson`/`token_report.ndjson` are **zero bytes** — only 4 of the 8 artifacts carry anything | the Service's *own* span export failed, so MLflow never got the root `Agent.Session` span and the trace was dropped. On OpenShift, one of the two halves in §3.4: no service-CA trust anchor (TLS) or no trace-writer RoleBinding (403) | `autobench-cli mlflow-health` (§3.7) — its `write` stage names the cause where the run named nothing, and it is the only check that reproduces this without a run. `preflight.py` reports both halves separately as well |
 | reports empty, or every token count 0, **right after someone set `insecure_tls: false` to harden the install** | the MLflow **read** client has no trust anchor — only the OTLP write path does. `false` leaves it on the system trust store, which lacks the service CA | `autobench-cli mlflow-health`: `write` stays ok while `read`/`round_trip` FAIL with `CERTIFICATE_VERIFY_FAILED`. That split is the signature. §3.4 |
 | the same zero-byte report, but **only after you used `PUT /config`**, and the TLS anchor and RoleBinding both check out | on `v1.30` and earlier the merge rewrote every field with a non-`null` default, so a `PUT` of *one* field also reset `mlflow.experiment_id` to `"0"` — the Service then wrote spans to one experiment and read the report from another. `s3.public_read` was reset to `true` the same way, which re-enables public ACLs on a bucket someone made private | `GET /config` right after the `PUT` and compare every field, not just the one you sent — the response body is the effective config. Fixed in `v1.31`; §5 of the developer guide |
 | runs score normally, `artifacts` is empty, and the Service logs `S3 export failed` | the instance file names a bucket with **empty or wrong keys**: the Service gates export on the bucket alone, so it attempts every upload. The old bootstrap scripts wrote exactly that when they found no keys, defaulting the bucket and only warning | read the block back as lengths, never values: §4's `get secret … \| base64 -d` piped into `jq '.s3 \| map_values(length)'` — a `0` beside a key is the cause. Regenerate with `S3_ENABLED` declared; the bootstrap now proves the key before writing, and `S3_ENABLED=false` writes no block at all |
 | the run publishes **no artifacts at all**, `botocore … SSLError: unable to get local issuer certificate` | `REQUESTS_CA_BUNDLE` was used for the service CA instead of `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`; botocore honours it too and the S3 client can no longer validate AWS's cert | §3.4 |
 | a task's `error` in the **published** `run.json` reads `other (shape 7b2e…)` and says nothing about what failed | the S3 artifacts classify error text to a closed category set rather than publishing it (the bucket is anonymously listable); `other` means the message matched no known category | the verbatim text was never discarded — `GET /benchmarks/<b>/runs/<id>` on the authenticated API still returns it, and the Service logs it at **WARNING** beside the same shape id. Section 6.6 of the developer guide; add a category to `public_errors._CAUSES` once you know the cause |
-| one task errors `A2A task ended in state 'failed': Error: timed out` at ~30 s, with `llm_count: 0` | the LLM gateway accepted the connection and never answered. The agent's `service` runner caps a single `react` at a hard-coded **30 s** with no retry (`docker` and `venv` allow 600 s), so a stalled completion becomes a failed task | probe the gateway from inside the agent pod: a stall is a *read* timeout after TLS succeeds, and it also hits the unauthenticated `GET /public/litellm_model_cost_map`, which proves it is not the model |
+| one task errors `A2A task ended in state 'failed': Error: timed out` at ~30 s, with `llm_count: 0` | the LLM gateway accepted the connection and never answered, **and** the instance runs `workload_agent_runner: service`. That runner caps a single `react` at a hard-coded **30 s** with no retry (`docker` and `venv` allow 600 s), so a stalled completion becomes a failed task. Under the default `direct` there is no RPC hop: litellm's own timeout fires and the agent retries, so a stall costs time rather than the task. On appworld this was 12–16 of 20 tasks a leg under `service` | the instance's runner first; then probe the gateway from inside the agent pod: a stall is a *read* timeout after TLS succeeds, and it also hits the unauthenticated `GET /public/litellm_model_cost_map`, which proves it is not the model | probe the gateway from inside the agent pod: a stall is a *read* timeout after TLS succeeds, and it also hits the unauthenticated `GET /public/litellm_model_cost_map`, which proves it is not the model |
 | `/deploy` returns **502** | Keycloak or the operator returned 403 — the service credential no longer logs in, or the user lacks the `rossoctl-operator` realm role. The install itself looks healthy: the password is only used per deploy | `preflight.py --password-file …` (§3.6); then the role mapping in the realm |
 | `/deploy` returns **424**, agent `CrashLoopBackOff` | collector endpoint on 4318, or `hf-secret` missing so the MCP pod never started | the collector's `command`; `get secret hf-secret` |
 | token request 400 `Account is not fully set up` | the realm requires `firstName`/`lastName` for ROPC | the user's profile |

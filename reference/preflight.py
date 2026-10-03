@@ -1218,13 +1218,16 @@ def check_instance_config(
         else:
             _check_otel_endpoint(rep, cluster, namespace, name, otel.get("endpoint") or "", collector)
 
-        # The runner: `direct` emits no agent-side spans at all, which looks exactly like a broken
-        # collector — a passing run, model "unknown", every token count 0.
+        # The runner: `service` reads a process-wide trace context that the last-started session
+        # owns, so at max_parallel_sessions > 1 a task's `chat` spans land on another task's row or
+        # on none — a passing run whose per-task tokens are quietly wrong (registry.py,
+        # `_AGENT_RUNNER_ENV`). It also carries the agent's cloudpickle race and a 30 s RPC cap.
         runner = cfg.get("workload_agent_runner")
-        if runner == "direct":
+        if runner == "service":
             rep.warn(
-                f"{name}: workload_agent_runner=direct",
-                "no agent spans are emitted; use `service` if you want token reports",
+                f"{name}: workload_agent_runner=service",
+                "token spans are misattributed at p>1 and tasks can fail on the cloudpickle "
+                "race or the 30 s RPC cap; use `direct`",
             )
         elif runner:
             rep.ok(f"{name}: workload_agent_runner", runner)

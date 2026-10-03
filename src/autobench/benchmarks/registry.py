@@ -61,6 +61,22 @@ def _secret_env(name: str, secret: str, key: str) -> EnvVar:
     return EnvVar(name=name, value_from=EnvVarSource(secret_key_ref=SecretKeyRef(name=secret, key=key)))
 
 
+# `direct`, not `service`. The A2A executor hands each session's ContextVar snapshot to its worker
+# threads (`ctx.run`, a2a_executor.py ~384), and `direct` calls the agent on exactly those threads,
+# so every litellm callback finds its own session. `service` re-hosts the agent behind a uvicorn
+# server whose request threads inherit no ContextVar, so the TraceLogger falls back to the
+# process-wide `_SUBPROCESS_CONTEXT` — which every request overwrites (`set_context_fallback`,
+# a2a_executor.py :222 and :371). At max_parallel_sessions > 1 a `chat` span is then parented to
+# whichever session started last, or orphaned outright, and an orphan trace has no Agent.Session
+# root so it never reaches the report. Controlled A/B on kind 2026-10-03, gsm8k 10 tasks p=4, same
+# image (dev146), only this value changed: `direct` 10/10 chats on their own task; `service` 7/10
+# chats, 6 of them on the WRONG task, 3 tasks with none. `service` is also the only runner that
+# cloudpickles start()'s kwargs — the `cannot pickle '_asyncio.Task'` race — and the only one with
+# a 30 s RPC cap, which turns one gateway stall into `Error: timed out`.
+# Override per instance with `workload_agent_runner` (models.py).
+_AGENT_RUNNER_ENV = EnvVar(name="EXGENTIC_DEFAULT_RUNNER", value="direct")
+
+
 def _resolve_model(
     defn: "BenchmarkDefinition", model: str | None, llm: WorkloadLLMConfig | None
 ) -> str:
@@ -322,16 +338,7 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
                 extra_env=[
                     _secret_env("OPENAI_API_KEY", "openai-secret", "apikey"),
                     EnvVar(name="EXGENTIC_SET_AGENT_ENABLE_TOOL_SHORTLISTING", value="true"),
-                    # `service`, not `direct`/`thread`: exgentic's OTEL trace context lives in a
-                    # ContextVar, and litellm fires its success callback on its own logging thread
-                    # which does NOT inherit that ContextVar — so the token-bearing `chat` LLM spans
-                    # (gen_ai.usage.*) crash in _get_parent_context and reports come back with 0
-                    # tokens. Only the `service` runner calls set_context_fallback(), populating the
-                    # process-wide _SUBPROCESS_CONTEXT that try_get_context() falls back to from
-                    # non-inheriting threads (exgentic/core/context.py). `direct` worked on an older
-                    # exgentic build but regressed once the callback moved off the request context;
-                    # `service` is the runner that explicitly bridges thread → context.
-                    EnvVar(name="EXGENTIC_DEFAULT_RUNNER", value="service"),
+                    _AGENT_RUNNER_ENV,
                     EnvVar(name="LITELLM_LOCAL_MODEL_COST_MAP", value="True"),
                     # Response caching off, explicitly — defence in depth, not a fix for anything
                     # we have observed. `utils/settings.py` still declares `litellm_caching = True`
@@ -399,16 +406,7 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
                 extra_env=[
                     _secret_env("OPENAI_API_KEY", "openai-secret", "apikey"),
                     EnvVar(name="EXGENTIC_SET_AGENT_ENABLE_TOOL_SHORTLISTING", value="true"),
-                    # `service`, not `direct`/`thread`: exgentic's OTEL trace context lives in a
-                    # ContextVar, and litellm fires its success callback on its own logging thread
-                    # which does NOT inherit that ContextVar — so the token-bearing `chat` LLM spans
-                    # (gen_ai.usage.*) crash in _get_parent_context and reports come back with 0
-                    # tokens. Only the `service` runner calls set_context_fallback(), populating the
-                    # process-wide _SUBPROCESS_CONTEXT that try_get_context() falls back to from
-                    # non-inheriting threads (exgentic/core/context.py). `direct` worked on an older
-                    # exgentic build but regressed once the callback moved off the request context;
-                    # `service` is the runner that explicitly bridges thread → context.
-                    EnvVar(name="EXGENTIC_DEFAULT_RUNNER", value="service"),
+                    _AGENT_RUNNER_ENV,
                     EnvVar(name="LITELLM_LOCAL_MODEL_COST_MAP", value="True"),
                     # Response caching off, explicitly — defence in depth, not a fix for anything
                     # we have observed. `utils/settings.py` still declares `litellm_caching = True`
@@ -457,16 +455,7 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
                 extra_env=[
                     _secret_env("OPENAI_API_KEY", "openai-secret", "apikey"),
                     EnvVar(name="EXGENTIC_SET_AGENT_ENABLE_TOOL_SHORTLISTING", value="true"),
-                    # `service`, not `direct`/`thread`: exgentic's OTEL trace context lives in a
-                    # ContextVar, and litellm fires its success callback on its own logging thread
-                    # which does NOT inherit that ContextVar — so the token-bearing `chat` LLM spans
-                    # (gen_ai.usage.*) crash in _get_parent_context and reports come back with 0
-                    # tokens. Only the `service` runner calls set_context_fallback(), populating the
-                    # process-wide _SUBPROCESS_CONTEXT that try_get_context() falls back to from
-                    # non-inheriting threads (exgentic/core/context.py). `direct` worked on an older
-                    # exgentic build but regressed once the callback moved off the request context;
-                    # `service` is the runner that explicitly bridges thread → context.
-                    EnvVar(name="EXGENTIC_DEFAULT_RUNNER", value="service"),
+                    _AGENT_RUNNER_ENV,
                     EnvVar(name="LITELLM_LOCAL_MODEL_COST_MAP", value="True"),
                     # Response caching off, explicitly — defence in depth, not a fix for anything
                     # we have observed. `utils/settings.py` still declares `litellm_caching = True`

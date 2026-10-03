@@ -72,10 +72,17 @@ def lost(x):
     check, which emits no `chat` span, so a damaged row now drops to zero `chat` spans and `== 0`
     would catch more than it used to. The structural test is kept because it is the one that holds
     on both sides of that version boundary, and this generator compares matrices across it.
+
+    `status == "OK"` with `llm_count == 0` is the third impossible shape, and the one the `service`
+    runner produces: a gsm8k task makes ONE model call, so a lost span leaves `llm_count 0` beside
+    one or two tool calls and the structural pair test never fires. Gated on status because a task
+    that failed before its first call has no `chat` span legitimately. Same three clauses as
+    `gen-12run-report.py`'s `_lost()`, so the two reports count the same rows.
     """
     lc = x.get("llm_count") or 0
     tc = x.get("tool_count") or 0
-    return (lc > 0 and not x.get("llm_input_tokens")) or (lc <= 1 and tc >= 2)
+    return ((x.get("status") == "OK" and lc == 0)
+            or (lc > 0 and not x.get("llm_input_tokens")) or (lc <= 1 and tc >= 2))
 
 
 def load(path):
@@ -152,11 +159,14 @@ def load(path):
             urlroot=next((a["url"][: -len(a["key"])] for a in (man or {}).get("artifacts", [])
                           if a.get("url", "").endswith(a["key"])), ""),
             z=sum(1 for x in rows if lost(x)),
-            # A row with no input tokens at all is a task that died *before* its first model call —
-            # a legitimate zero, not the p>1 attribution bug `lost()` catches. It is a valid member
-            # of the pass-rate denominator but a zero-cost outlier in any token statistic, and it
-            # inflates the leg's IN CV on its own. `models` excludes it: such a row carries no model.
+            # A row with no input tokens at all has two causes, told apart by `lost()`: a task that
+            # died *before* its first model call (a legitimate zero, and a valid member of the
+            # pass-rate denominator), or a task that ran and whose `chat` spans never reached it
+            # (the `service` runner's p>1 attribution loss — the task's tokens went to another row
+            # or nowhere). Either way it is a zero-cost outlier in any token statistic and inflates
+            # the leg's IN CV on its own. `models` excludes it: such a row carries no model.
             zin=sum(1 for x in rows if not (x.get("llm_input_tokens") or 0)),
+            zdead=sum(1 for x in rows if not (x.get("llm_input_tokens") or 0) and not lost(x)),
             models=sorted({(x.get("model") or "").rsplit("/", 1)[-1] for x in rows
                            if (x.get("llm_input_tokens") or 0) and x.get("model")}),
             chats=chats, pchats=pchats, sl=sl,
@@ -189,15 +199,17 @@ def cv_direction(sets):
     ~0.09) while a model that needs tool round-trips varies on the input side too (~0.4 on the same
     five gsm8k tasks). Pooling those two into one range produces a spread that describes neither.
 
-    A leg-side carrying a zero-input-token row is kept out of the ranges: that task died before its
-    first model call, and the legitimate zero inflates the leg's IN CV all by itself — 0.51 where its
-    clean siblings on the same model read 0.09, with nothing in the CV column to say why. Note the
+    A leg-side carrying a zero-input-token row is kept out of the ranges: that task either died before
+    its first model call or lost its `chat` spans (see `zin` in `summarise`), and the zero inflates
+    the leg's IN CV all by itself — 0.51 where its clean siblings on the same model read 0.09, with
+    nothing in the CV column to say why. Note the
     criterion is the zero row, not the presence of an error: a task that errored *after* running has
     an ordinary token row and contaminates nothing, and an appworld timeout leaves no row at all.
     Excluded leg-sides stay in the out-led count, where one outlier cannot flip the direction.
     """
     obs = [dict(bench=v["bench"], model=" + ".join(v.get("models") or []) or "unknown",
-                icv=v["icv"], ocv=v["ocv"], zin=v.get("zin") or 0, lab=lab, n=n,
+                icv=v["icv"], ocv=v["ocv"], zin=v.get("zin") or 0,
+                zdead=v.get("zdead") or 0, lab=lab, n=n,
                 imed=v.get("imed") or 0)
            for lab, m in sets for n, v in sorted(m.items())
            if v.get("icv") is not None and v.get("ocv") is not None]
@@ -237,10 +249,16 @@ def cv_direction(sets):
          "more than one task (one leg on one platform; a single-task run has no CV). By benchmark, "
          "and by model where a benchmark ran more than one: " + "; ".join(parts) + "."]
     if dropped:
-        L[0] += (" Held out of those ranges: "
-                 + ", ".join("#%d (%s)" % (x["n"], x["lab"]) for x in dropped)
-                 + " — a task there died before its first model call, and the zero-token row it left "
-                   "inflates that leg's IN CV on its own.")
+        def why(x):
+            dead, gone = x["zdead"], x["zin"] - x["zdead"]
+            return ", ".join(s for s in (
+                "%d died before its first model call" % dead if dead else "",
+                "%d ran but lost its `chat` spans" % gone if gone else "") if s)
+        L[0] += (" Held out of those ranges, each for carrying a zero-input-token row that "
+                 "inflates the leg's IN CV on its own: "
+                 + "; ".join("#%d (%s: %s)" % (x["n"], x["lab"], why(x)) for x in dropped)
+                 + ". A row that ran but lost its spans also means that leg's token totals are "
+                   "understated, not merely noisy.")
     if "gsm8k" in order:
         L[0] += (" The mechanism is visible in the gsm8k rows: a model that answers in one call "
                  "re-sends a nearly constant prompt, so only its answer length swings, while a model "

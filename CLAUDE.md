@@ -94,8 +94,20 @@ per-task stats. Two amplifiers, both measured: an authbridge sidecar on the even
 plugin-leg tasks, against **0 of 66** same-benchmark non-plugin tasks) and a large tool count
 (appworld 3 of 20 with no sidecar at all). Concurrency is *not* the cause — gsm8k at 50 tasks and
 4-way parallel lost nothing — and `max_parallel_sessions: 1` only lowers the rate, because the
-same-session emit at `a2a_executor.py:330` races its own encode. We cannot dodge it by runner:
-`direct`/`thread` never pickle, but `service` is what produces the token spans.
+same-session emit at `a2a_executor.py:330` races its own encode. **The dodge is the runner:
+`direct` never pickles, and it is the default again.** The 2026-09-29 belief that only `service`
+emits token spans was false on dev146.
+
+**`service` also misattributes tokens at p>1, so `direct` is not optional.** Its server threads
+read a process-wide trace context that the last-started session owns. Controlled A/B on kind on
+2026-10-03 (gsm8k, 10 tasks, p=4):
+- `service` lost 3 tasks' spans and put 6 of the other 7 on the *wrong* task;
+- `direct` was 10/10 clean.
+
+Every p>1 leg run between 2026-09-29 and that fix has unreliable per-task tokens; the pass rates
+are fine. Detect it by fingerprint: a gsm8k task's input-token count is a per-task constant
+(320, 283, 306, … for tasks 0, 1, 2), so a row holding another task's count is the tell. A zero
+alone misses the moved rows.
 
 **Never bare-replace the strings `benchmarking` or `benchmarker`.** The S3 bucket
 (`rossoctl-benchmarking`), the Keycloak user (`benchmarker`), and the `BM_*` env prefix deliberately

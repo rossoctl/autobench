@@ -83,8 +83,8 @@ here rather than quietly reverting to the Secret and installing a credential nob
                         you, so the profile is the only place to write one down
   --otel-endpoint URL   WORKLOAD_OTEL_ENDPOINT  (default: the in-cluster collector on :8335)
   --otel-insecure B     WORKLOAD_OTEL_INSECURE  true|false (default: true for an in-cluster http URL)
-  --agent-runner R      WORKLOAD_AGENT_RUNNER   service|direct (default: service — `direct` yields a
-                        clean run with ZERO token rows on the current agent image)
+  --agent-runner R      WORKLOAD_AGENT_RUNNER   direct|service (default: direct — `service` puts
+                        token spans on the wrong task, or on none, at max_parallel_sessions > 1)
   --endpoint-template T ENDPOINT_TEMPLATE  set ONLY when the workloads live on another cluster,
                         e.g. 'https://{service}-{namespace}.apps.ykt2.example.com'. Leave
                         unset when Service and workloads share the cluster (ykt5) — the Service
@@ -168,15 +168,17 @@ WORKLOAD_LLM_API_BASE="${WORKLOAD_LLM_API_BASE:-}"
 WORKLOAD_LLM_MODEL="${WORKLOAD_LLM_MODEL:-}"
 WORKLOAD_OTEL_ENDPOINT="${WORKLOAD_OTEL_ENDPOINT:-http://otel-collector.rossoctl-system.svc.cluster.local:8335}"
 WORKLOAD_OTEL_INSECURE="${WORKLOAD_OTEL_INSECURE:-}"
-# `service`, not `direct`: with the current agent image `service` is what emits agent spans and
-# `direct` produces a clean-looking run whose token rows are all ZERO (docs/ADMIN_GUIDE.md §"the
-# runner"). The old `direct` default came from a kind measurement on 2026-08-31 where `service` lost
-# token rows at max_parallel_sessions=4 — that was the warm-agent attribution loss, fixed in agent
-# dev145, and the note at src/autobench/models.py:132 records it as history. Six of the twelve legs
-# run at p=4, and the canonical matrix deploys with EXGENTIC_DEFAULT_RUNNER=service (see leg #9 in
-# run12_specs.json), so `direct` here contradicted the matrix it exists to set up. Do not infer which
-# one is live — look for a non-zero token row in report.ndjson.
-WORKLOAD_AGENT_RUNNER="${WORKLOAD_AGENT_RUNNER:-service}"
+# `direct`, not `service`. This default was flipped to `service` on 2026-09-29 on the belief that
+# `direct` emits no agent spans; that was never re-measured on agent dev146, and it is false there.
+# A controlled A/B on kind 2026-10-03 (gsm8k 10 tasks, p=4, one image, only the runner changed) put
+# 10/10 `chat` spans on their own task under `direct`, and under `service` lost 3 tasks' spans and
+# put 6 of the other 7 on the WRONG task — the service runner's threads read a process-wide context
+# that the last-started session owns. `service` also carries the cloudpickle race and a 30 s RPC
+# cap. Full reasoning on `_AGENT_RUNNER_ENV` in src/autobench/benchmarks/registry.py. Six of the
+# twelve legs run at p=4, so a wrong value here corrupts half the matrix's per-task tokens while
+# every pass rate still looks right. Detect it by fingerprint, not by zeros: on gsm8k, a task's
+# input-token count is the same in every run, so a row carrying another task's count is the tell.
+WORKLOAD_AGENT_RUNNER="${WORKLOAD_AGENT_RUNNER:-direct}"
 ENDPOINT_TEMPLATE="${ENDPOINT_TEMPLATE:-}"
 S3_PREFIX="${S3_PREFIX:-}"
 S3_ENABLED="${S3_ENABLED:-}"

@@ -714,10 +714,10 @@ def test_instance_agent_runner_overrides_registry_default():
     defn = BENCHMARKS["gsm8k"]
     default_req = build_agent_request(defn, "tool_calling", "team1", None)
     default_runner = [e for e in default_req.env_vars if e.name == "EXGENTIC_DEFAULT_RUNNER"]
-    assert [e.value for e in default_runner] == ["service"]
+    assert [e.value for e in default_runner] == ["direct"]
 
     overridden = build_agent_request(
-        defn, "tool_calling", "team1", None, agent_runner="direct"
+        defn, "tool_calling", "team1", None, agent_runner="service"
     )
     runners = [e for e in overridden.env_vars if e.name == "EXGENTIC_DEFAULT_RUNNER"]
-    assert [e.value for e in runners] == ["direct"], "must replace, not duplicate"
+    assert [e.value for e in runners] == ["service"], "must replace, not duplicate"

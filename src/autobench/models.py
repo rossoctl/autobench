@@ -126,16 +126,14 @@ class InstanceConfig(BaseModel):
     # Optional per-instance LLM endpoint/model/proxy override for the workload pods. Set out-of-band
     # in the instance file. When unset, the registry's built-in LiteLLM base + default model are used.
     workload_llm: WorkloadLLMConfig | None = None
-    # Overrides the agent's `EXGENTIC_DEFAULT_RUNNER`. The registry pins `service` because that
-    # is what bridged thread -> OTEL context on the exgentic build current at the time, but the
-    # agent image is an unpinned `:latest` and the correct runner has flipped between `direct`
-    # and `service` across rebuilds. Picking the wrong one costs token attribution silently:
-    # `TraceLogger._write_otel` fails with "'NoneType' object has no attribute 'otel_context'"
-    # and the LLM spans land WITHOUT gen_ai.usage.*, so per-task tokens read 0 while the run
-    # still passes. Only bites with max_parallel_sessions > 1. Measured on kind 2026-08-31,
-    # gsm8k 5 tasks at p=4: `service` -> 4/5 pass, 4/5 rows zero-token; `direct` -> 5/5 pass,
-    # 0 zero-token rows, totals identical to a serial run. Set per instance rather than
-    # changing the shared default, which would risk regressing the OCP clusters.
+    # Overrides the agent's `EXGENTIC_DEFAULT_RUNNER`, which the registry pins to `direct` (the
+    # reasoning is on `_AGENT_RUNNER_ENV` in benchmarks/registry.py). The agent image is an
+    # unpinned `:latest`, so this is the lever if an upstream rebuild ever changes which runner
+    # attributes spans correctly. The wrong one costs token attribution silently and only at
+    # max_parallel_sessions > 1: the run passes while `chat` spans land on another task's row or
+    # on none. Measured twice on kind with gsm8k at p=4, `direct` clean both times — 2026-08-31
+    # (5 tasks: `service` zeroed 4/5 rows) and 2026-10-03 (10 tasks: `service` lost 3 tasks'
+    # spans and put 6 of the remaining 7 on the wrong task). Unset = the registry's value.
     workload_agent_runner: str | None = None
 
 
