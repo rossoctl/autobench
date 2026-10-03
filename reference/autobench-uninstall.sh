@@ -8,8 +8,9 @@
 # flags. It needs far fewer of them — the platform, the context, and the benchmarker password the
 # workload teardown logs in with. S3 is not consulted.
 #
-#   1. workloads    every exgentic-* AgentRuntime in the team namespaces, deleted THROUGH THE SERVICE
-#                   by exact name (autobench-cli delete-agent / delete-tool), then re-listed until
+#   1. workloads    every exgentic-* workload (AgentRuntime or operator Deployment) in the team
+#                   namespaces, deleted THROUGH THE SERVICE by exact name (autobench-cli
+#                   delete-agent / delete-tool), then re-listed until
 #                   none remain. Not `autobench-cli teardown`: DELETE /benchmarks/{b}/deploy defaults
 #                   experiment=default, returns 204 having deleted nothing for a named experiment,
 #                   and stops at a missing agent before reaching its MCP tool.
@@ -133,10 +134,17 @@ log "AutoBench uninstall — platform=$AB_PLATFORM context=$KUBE_CONTEXT namespa
 HAVE_RELEASE=""
 helm status "$RELEASE" "${H[@]}" >/dev/null 2>&1 && HAVE_RELEASE=1
 
-# exgentic-* AgentRuntimes in one namespace, one name per line.
+# exgentic-* workloads in one namespace, one name per line. AgentRuntimes alone are not an
+# inventory: ykt3's backend renders the operator-managed Deployments with no AgentRuntime at all
+# (not even for the platform's weather-*), so a CR-only list there reads "none" while six
+# workloads keep running. The Deployment name is the agent/tool name, so the union dedupes.
 list_workloads() {  # $1 namespace
-    kubectl --context "$KUBE_CONTEXT" -n "$1" get agentruntimes -o json 2>/dev/null \
-        | jq -r '.items[].metadata.name | select(startswith("exgentic-"))'
+    { kubectl --context "$KUBE_CONTEXT" -n "$1" get agentruntimes -o json 2>/dev/null \
+          | jq -r '.items[].metadata.name'
+      kubectl --context "$KUBE_CONTEXT" -n "$1" get deploy \
+          -l app.kubernetes.io/managed-by=rossoctl-operator -o json 2>/dev/null \
+          | jq -r '.items[].metadata.name'
+    } | grep '^exgentic-' | sort -u || true
 }
 
 # --- 1. workloads, through the Service ----------------------------------------------------------------
@@ -150,7 +158,7 @@ for t in $TEAM_LIST; do
     [ "$n" -gt 0 ] && list_workloads "$t" | sed "s|^|    $t/|" >&2
 done
 if [ "$TOTAL" -eq 0 ]; then
-    log "    none — no exgentic-* AgentRuntime in: $TEAMS"
+    log "    none — no exgentic-* AgentRuntime or Deployment in: $TEAMS"
 elif [ -n "$KEEP_WORKLOADS" ]; then
     warn "--keep-workloads — $TOTAL workload(s) keep running, and a pod that is already running is never re-pulled or re-configured"
 else
@@ -208,7 +216,7 @@ else
             for t in $TEAM_LIST; do list_workloads "$t" | sed "s|^|    still present: $t/|" >&2; done
             die "$left workload(s) survived the teardown — the release was NOT uninstalled"
         fi
-        log "    ok    no exgentic-* AgentRuntime remains"
+        log "    ok    no exgentic-* AgentRuntime or Deployment remains"
     fi
 fi
 
