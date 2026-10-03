@@ -5,7 +5,7 @@ gitignored `results/` directory at the repo root and stay on the machine that pr
 
 A run earns a place here when it establishes a reference point that later work will be compared
 against, or when it overturns something we previously believed. Two examples of what that means in
-practice: the current cross-cluster 12-run is the baseline that a regression would be measured
+practice: the current cross-platform 12-run is the baseline that a regression would be measured
 against, and the plugin-overhead study exists because it falsified a method we had been quoting.
 A run that merely repeats an established result does not earn a place here, however clean it is.
 
@@ -20,9 +20,43 @@ actually ask a model to do, and [docs/PLUGIN_OVERHEAD.md](../PLUGIN_OVERHEAD.md)
 vocabulary and the findings in plain prose. The raw reports below are dense on purpose; the two
 curated documents carry the conclusions.
 
+## v1.33 — 2026-10-03
+
+**The current baseline.** Same Service image (`v1.33`) on both platforms, the same 12 request bodies
+and the same per-leg model ids as v1.28, deterministic task selection, every leg deploying fresh,
+cache spaced exactly as below. Three things changed since v1.28, and they are why this replaces it
+rather than repeating it:
+
+- **Both sides call one LLM gateway.** v1.28 compared two gateways (`--gateway different`), so a
+  model-side difference could not be told from a platform one. Here the comparison runs with
+  `--gateway same`, and KinD started 0.3 h after OpenShift finished — past the ~10 min completion
+  cache, so neither side can have replayed the other.
+- **OpenShift is a single-cluster Helm install.** v1.28's OpenShift side was the ykt3 Service driving
+  ykt2 workloads; this one is the Service and its workloads on ykt3, installed and torn down by
+  `reference/autobench-{install,uninstall}.sh`.
+- **The agent runs on the `direct` runner, and that was verified, not assumed.** The matrices run
+  between 2026-09-29 and 2026-10-02 used the `service` runner, which at 4-way parallelism put most
+  gsm8k tasks' tokens on the *wrong* task and capped every agent RPC at 30 s, which appworld's long
+  turns kept hitting. Here every gsm8k task on both platforms carries its own input-token fingerprint —
+  #3's 50 tasks at p=4 match #2's ten at p=1 one for one — and **0 of 278 rows lost token
+  attribution**. The 30 s cap is gone from the failure table.
+
+| report | what it establishes |
+|---|---|
+| [12run-ocp.md](v1.33-2026-10-03/12run-ocp.md) | Full 12-run on OpenShift (ykt3, single-cluster). 12/12 legs succeeded, 141 tasks, 0 lost token rows. |
+| [12run-kind.md](v1.33-2026-10-03/12run-kind.md) | The same 12 runs on a single-node KinD cluster. 12/12 succeeded, 141 tasks, 0 lost token rows. |
+| [12run-comparison.md](v1.33-2026-10-03/12run-comparison.md) | **The one to read.** 8/12 pass rates identical, 7 legs with byte-identical input-token totals, and every errored task classified by cause. |
+
+The four legs that differ (#4, #6, #9, #10) are each one task apart, and one of them is plumbing:
+KinD's #6 lost a task to the IBAC judge's upstream (HTTP 502), not to the model. appworld's losses are
+the agent's, on both sides — its "missing assistant content" defect (5 and 6), the 600 s per-task
+budget (3 and 1), and once on KinD the agent's own `max_actions` limit.
+
+The plugin studies were not re-run on this image; v1.28's below remain the current ones.
+
 ## v1.28 — 2026-09-15
 
-**The current baseline, and the only one.** Same Service image (`v1.28`) on both platforms, same 12
+**The previous 12-run baseline, and still the current plugin study.** Same Service image (`v1.28`) on both platforms, same 12
 request bodies, deterministic task selection, every leg deploying fresh. Two things make it a
 reference point rather than one more matrix:
 
@@ -83,6 +117,11 @@ nesting invariant from its own artifacts so the defect cannot recur unnoticed.
 health probe killed 12 of 141 tasks on KinD and 0 on OpenShift, and a killed task still leaves a
 zero-token `report.ndjson` row that skews every per-task statistic. v1.28 above is that experiment
 run again on the fixed agent.
+
+**The `service`-runner matrices of 2026-09-29 to 2026-10-02** (v1.32/v1.33, three platforms). Their
+pass rates are sound, but their per-task gsm8k tokens are misattributed at p>1 and their appworld
+failures are inflated by the runner's 30 s RPC cap — exactly the contamination a baseline must not
+carry. v1.33 above is the same matrix on the `direct` runner.
 
 **The retrospective `12run-plugin-overhead-*.md` reports.** These mined plugin cost out of the
 canonical 12-run, which runs each preset once at `max_tasks=5` in a fixed order. That design cannot
