@@ -501,6 +501,9 @@ if _cx or _cy:
         "run-level timeout": "The whole run hit its deadline and took this task with it.",
         "run interrupted": "The run was cancelled or the Service restarted under it.",
         "session terminated": "The agent session ended before the task finished.",
+        "agent action/step limit": "The model kept calling tools until the agent's own action budget "
+                                   "(`max_actions`) stopped it. A behaviour of the model under this "
+                                   "agent, closer to a wrong answer than to infrastructure.",
         "task timed out (unattributed)": "A timeout the classifier could not pin on the per-task "
                                          "budget or the run deadline.",
         "other": "Unclassified — inspect the error text in `run.json`. A new failure mode lands here "

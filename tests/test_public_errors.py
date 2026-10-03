@@ -63,6 +63,11 @@ _OBSERVED: list[tuple[str, str]] = [
     ),
     ("Session terminated", "session_terminated"),
     (
+        "A2A task ended in state 'failed': Error: limit_reached (max_actions): steps=16/100, "
+        "actions=109/100",
+        "action_limit",
+    ),
+    (
         "MCP connect to https://exgentic-mcp-gsm8k-team1.apps.example.com/mcp timed out after 30s "
         "(tool pod still warming or unreachable?)",
         "mcp_connect_timeout",

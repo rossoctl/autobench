@@ -69,6 +69,7 @@ _SLUG_LABELS: dict[str, str] = {
     "mcp_tool_error": "MCP unreachable",
     "run_timeout": "run-level timeout",
     "run_interrupted": "run interrupted",
+    "action_limit": "agent action/step limit",
     "session_terminated": "session terminated",
     "timed_out": "task timed out (unattributed)",
     "other": "other",
@@ -89,11 +90,20 @@ def parse_scrubbed(msg: str | None) -> tuple[str, str] | None:
     return (m.group(1), m.group(2)) if m else None
 
 
+# Shapes an image published as `other` before `public_errors` had a bucket for them, keyed by the
+# shape id and re-labelled from the verbatim text the Service logged beside it. The shape hashes the
+# normalized template, so the id is the same whichever image emitted it.
+_OTHER_SHAPES: dict[str, str] = {
+    "03deb26f": "action_limit",  # "Error: limit_reached (max_actions): steps=<n>/<n>, actions=<n>/<n>"
+}
+
+
 def cause(msg: str | None) -> str:
     """Display label for an error string from either era. `"other"` when nothing matches."""
     parsed = parse_scrubbed(msg)
     if parsed:
-        return _SLUG_LABELS.get(parsed[0], "other")
+        slug = _OTHER_SHAPES.get(parsed[1], parsed[0]) if parsed[0] == "other" else parsed[0]
+        return _SLUG_LABELS.get(slug, "other")
     text = msg or ""
     for label, patterns in _LEGACY:
         if any(p in text for p in patterns):

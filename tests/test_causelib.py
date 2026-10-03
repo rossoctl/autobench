@@ -105,3 +105,13 @@ def test_cause_tolerates_missing_and_empty():
     for blank in (None, "", "   "):
         assert CL.cause(blank) == "other"
         assert CL.shape(blank) is None
+
+
+def test_a_shape_published_as_other_is_relabelled_by_its_bucket():
+    """`_OTHER_SHAPES` re-files `other` rows an older image published; each entry must name a real
+    bucket, and the current classifier must put that shape's message in the same bucket."""
+    msg = "A2A task ended in state 'failed': Error: limit_reached (max_actions): steps=16/100, actions=109/100"
+    assert pe.public_error(msg) == "action_limit (shape 03deb26f)"
+    assert CL.cause("other (shape 03deb26f)") == CL.cause(pe.public_error(msg)) == "agent action/step limit"
+    assert CL.cause("other (shape deadbeef)") == "other"
+    assert set(CL._OTHER_SHAPES.values()) <= set(pe.CATEGORIES)

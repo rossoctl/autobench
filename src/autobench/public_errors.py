@@ -71,6 +71,9 @@ _CAUSES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("task_timeout", ("per-task timeout",)),
     ("run_timeout", ("run exceeded timeout of",)),
     ("run_interrupted", ("run was interrupted before completing",)),
+    # --- the agent's own step/action budget: the model kept acting until the agent stopped it
+    # ("Error: limit_reached (max_actions): steps=16/100, actions=109/100" on appworld) ---------
+    ("action_limit", ("limit_reached (",)),
     # --- defects in the agent / MCP images, not in the model -----------------------------------
     ("agent_defect", ("missing assistant content", "cannot pickle", "has no attribute 'model_dump'",
                       "No action with is_message=True")),
