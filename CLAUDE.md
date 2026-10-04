@@ -83,6 +83,14 @@ that pair need the `total − probe_failures` denominator. And the message wordi
 you see `is unreachable` rather than `did not respond ... after N attempt(s): <cause>`, the pod is
 running dev145, whatever `:latest` points at now. Check the digest on the pod, not the tag.
 
+**On KinD, a task lost in under a second to `model_probe_failed`, with `Temporary failure in name
+resolution` behind it, is CoreDNS, not the gateway.** The node's resolver on podman for macOS
+answers SERVFAIL now and then, and CoreDNS caches that answer for 5 s, so the agent's retry 0.3 s
+later gets it too. It took the 1-task smoke test on 2026-10-04. `autobench-install.sh` (step 3c,
+`reference/kind-dns.sh`) adds `servfail 0` to the cache block; check the Corefile has it before
+looking anywhere else. Never add `serve_stale`: that resolver answers with TTL 0, and against it
+serve_stale refreshes on every request (893,400 upstream queries against 1,100 in an A/B).
+
 **`cannot pickle '_asyncio.Task' object` is an agent race, not a flaky model — and it is still
 open.** The `service` runner cloudpickles `start()`'s kwargs, and the action classes it sends carry
 `__pydantic_parent_namespace__["self"]` → the executor → `_background_tasks` → a live asyncio Task,
