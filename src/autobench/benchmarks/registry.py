@@ -76,6 +76,17 @@ def _secret_env(name: str, secret: str, key: str) -> EnvVar:
 # Override per instance with `workload_agent_runner` (models.py).
 _AGENT_RUNNER_ENV = EnvVar(name="EXGENTIC_DEFAULT_RUNNER", value="direct")
 
+# A per-call ceiling on the agent's LLM calls, so a stalled gateway call becomes a retry instead of
+# the end of the task. The agent passes no timeout of its own (`litellm_tool_calling/instance.py`
+# `_completion_with_retries`), so litellm falls back to `REQUEST_TIMEOUT`, else 6000 s — and the ETE
+# gateway does stall: on kind 2026-10-04 single calls hung ~450 s before a 500/502, which cost
+# appworld 5 tasks to the 600 s task budget and the 1-task gsm8k smoke test its whole 120 s run. The
+# agent already retries a timeout (`classify_error` -> TRANSIENT, 5 retries, exponential backoff);
+# it just never got one. Verified in the dev146 image: a call to a socket that never answers raises
+# `litellm.Timeout` at the set value, and hangs past 15 s without it. 120 s is 1.5x the slowest
+# successful chat in every mirrored span report (6,698 calls, max 79.4 s, appworld; tau2 32.9 s).
+_AGENT_REQUEST_TIMEOUT_ENV = EnvVar(name="REQUEST_TIMEOUT", value="120")
+
 
 def _resolve_model(
     defn: "BenchmarkDefinition", model: str | None, llm: WorkloadLLMConfig | None
@@ -339,6 +350,7 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
                     _secret_env("OPENAI_API_KEY", "openai-secret", "apikey"),
                     EnvVar(name="EXGENTIC_SET_AGENT_ENABLE_TOOL_SHORTLISTING", value="true"),
                     _AGENT_RUNNER_ENV,
+                    _AGENT_REQUEST_TIMEOUT_ENV,
                     EnvVar(name="LITELLM_LOCAL_MODEL_COST_MAP", value="True"),
                     # Response caching off, explicitly — defence in depth, not a fix for anything
                     # we have observed. `utils/settings.py` still declares `litellm_caching = True`
@@ -407,6 +419,7 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
                     _secret_env("OPENAI_API_KEY", "openai-secret", "apikey"),
                     EnvVar(name="EXGENTIC_SET_AGENT_ENABLE_TOOL_SHORTLISTING", value="true"),
                     _AGENT_RUNNER_ENV,
+                    _AGENT_REQUEST_TIMEOUT_ENV,
                     EnvVar(name="LITELLM_LOCAL_MODEL_COST_MAP", value="True"),
                     # Response caching off, explicitly — defence in depth, not a fix for anything
                     # we have observed. `utils/settings.py` still declares `litellm_caching = True`
@@ -456,6 +469,7 @@ BENCHMARKS: dict[str, BenchmarkDefinition] = {
                     _secret_env("OPENAI_API_KEY", "openai-secret", "apikey"),
                     EnvVar(name="EXGENTIC_SET_AGENT_ENABLE_TOOL_SHORTLISTING", value="true"),
                     _AGENT_RUNNER_ENV,
+                    _AGENT_REQUEST_TIMEOUT_ENV,
                     EnvVar(name="LITELLM_LOCAL_MODEL_COST_MAP", value="True"),
                     # Response caching off, explicitly — defence in depth, not a fix for anything
                     # we have observed. `utils/settings.py` still declares `litellm_caching = True`

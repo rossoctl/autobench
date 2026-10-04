@@ -706,6 +706,18 @@ def test_teardown_benchmark(client, make_token, jwks_doc):
     assert r.status_code == 204
 
 
+@pytest.mark.parametrize("bench", ["gsm8k", "tau2", "appworld"])
+def test_every_agent_caps_a_single_llm_call(bench):
+    """Without REQUEST_TIMEOUT litellm waits 6000 s on a stalled gateway call, so the agent's own
+    retry never fires and the task's whole budget goes — the 1-task smoke test included."""
+    from autobench.benchmarks.registry import BENCHMARKS, build_agent_request
+
+    for agent in BENCHMARKS[bench].agents:
+        req = build_agent_request(BENCHMARKS[bench], agent, "team1", None)
+        caps = [e.value for e in req.env_vars if e.name == "REQUEST_TIMEOUT"]
+        assert caps == ["120"], f"{bench}/{agent}: {caps}"
+
+
 def test_instance_agent_runner_overrides_registry_default():
     """`workload_agent_runner` replaces the pinned EXGENTIC_DEFAULT_RUNNER exactly once, so the
     wrong runner can be corrected per instance without touching the shared default."""

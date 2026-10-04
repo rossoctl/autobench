@@ -14,7 +14,7 @@
       "namespace": "team1",
       "max_tasks": 1,
       "max_parallel_sessions": 1,
-      "timeout_seconds": 120
+      "timeout_seconds": 300
     }
   },
   {

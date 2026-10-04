@@ -1375,7 +1375,7 @@ done; sleep 15
 export RUN=$(curl -s $CURL_OPTS -X POST "$SVC/benchmarks/$BENCH/runs" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"agent":"tool_calling","namespace":"team1","experiment":"default",
-       "max_tasks":1,"max_parallel_sessions":1,"timeout_seconds":120}' \
+       "max_tasks":1,"max_parallel_sessions":1,"timeout_seconds":300}' \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["run_id"])')
 echo "run_id=$RUN"                                    # e.g. 20260902215628-79e0713a
 
@@ -1453,7 +1453,7 @@ export BM_CARD_TEMPLATE="https://{service}-{namespace}.apps.ykt2.example.com/.we
 
 # See "What you need on the client side" above for install options; the shortest is:
 #   uv tool install "rossoctl-autobench @ git+https://github.com/rossoctl/autobench"
-autobench-cli all --benchmark gsm8k --tasks 1 --timeout 120 --mirror /tmp/autobench
+autobench-cli all --benchmark gsm8k --tasks 1 --timeout 300 --mirror /tmp/autobench
 ```
 
 Which prints, for the run above:
@@ -1556,6 +1556,9 @@ concurrently. Task selection is **deterministic**, so `--tasks 1` runs the *same
 time — which is why it is the standard smoke test (a 1-task gsm8k run reproduces 320 input / 87
 output tokens). Set `--task-timeout` on multi-turn work: without it one wedged task can consume the
 entire `--timeout`, which is why the canonical matrix gives tau2 600s per task under a 2100s wall.
+Keep even the smoke test at 300s: the gateway occasionally stalls a single call, the agent cuts it
+at 120s (`REQUEST_TIMEOUT`, injected by the Service) and retries, and a 120s run budget leaves no
+room for that retry — a 1-task run that normally takes 3–10s then fails outright.
 §6.3 has the semantics in full — what a multi-task run is, and why both over- and under-asking on
 `--tasks` are silent.
 
@@ -1808,7 +1811,7 @@ than as JSON. Export the same five variables as §7.1 first; every line then nee
 
 | # | One-line command | What it varies |
 |---|---|---|
-| 1 | `autobench-cli all --benchmark gsm8k --tasks 1 --timeout 120 --mirror /tmp/autobench` | baseline — the smoke test |
+| 1 | `autobench-cli all --benchmark gsm8k --tasks 1 --timeout 300 --mirror /tmp/autobench` | baseline — the smoke test |
 | 2 | `autobench-cli all --benchmark gsm8k --tasks 10 --timeout 300 --mirror /tmp/autobench` | volume, still serial |
 | 3 | `autobench-cli all --benchmark gsm8k --tasks 50 --parallel 4 --timeout 400 --mirror /tmp/autobench` | volume + concurrency |
 | 4 | `autobench-cli all --benchmark gsm8k --model openai/Azure/gpt-4.1 --tasks 5 --parallel 4 --timeout 300 --task-timeout 120 --mirror /tmp/autobench` | model swap |
