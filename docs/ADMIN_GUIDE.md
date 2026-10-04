@@ -997,7 +997,7 @@ generates the instance config and creates the Secret. The chart is the last step
 alone it installs a pod with nothing to authenticate as.
 
 ```bash
-IMAGE=ghcr.io/rossoctl/autobench:v1.33 reference/kind-post-setup.sh    # first time / after a rebuild
+IMAGE=ghcr.io/rossoctl/autobench:v1.34 reference/kind-post-setup.sh    # first time / after a rebuild
 
 python3 reference/preflight.py --platform kind --context kind-rossoctl \
         --password-file ~/.rossoctl-kind/benchmarker.pass
@@ -1149,7 +1149,7 @@ a working one produce the same pass rate. See `docs/PLUGIN_OVERHEAD.md`.
 
 ```bash
 helm upgrade autobench deploy/helm/autobench -n rossoctl-system -f <values> \
-  --set image.tag=v1.33
+  --set image.tag=v1.34
 helm history  autobench -n rossoctl-system
 helm rollback autobench 1 -n rossoctl-system
 helm uninstall autobench -n rossoctl-system          # leaves autobench-instances behind
