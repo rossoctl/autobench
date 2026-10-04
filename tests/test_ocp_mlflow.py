@@ -281,3 +281,19 @@ def test_a_binding_naming_the_account_is_reported_and_never_deleted(cluster):
     assert "RoleBinding/team1/mlflow-trace-writers" in p.stderr
     assert state["bindings"] == [binding]
     assert not any("rolebinding" in d for d in state["deleted"])
+
+
+def test_the_charts_own_binding_is_named_as_the_releases_not_warned(cluster):
+    # Only a dry run sees it — a real uninstall removes the release before this step.
+    chart = {"kind": "RoleBinding",
+             "metadata": {"name": "autobench-service-mlflow-trace-writer", "namespace": "team1",
+                          "annotations": {"meta.helm.sh/release-name": "autobench",
+                                          "meta.helm.sh/release-namespace": "rossoctl-system"}},
+             "subjects": [{"kind": "ServiceAccount", "name": SA, "namespace": "rossoctl-system"}]}
+    make, run = cluster
+    make(sa=_sa("a"), token=_token("b"), record=_record(serviceaccount="a", secret="b"),
+         release=True, bindings=[chart])
+    p, state = run("uninstall", "--dry-run")
+    assert p.returncode == 0, p.stderr
+    assert "removed with the Helm release" in p.stderr
+    assert "NOT touched" not in p.stderr

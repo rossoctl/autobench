@@ -255,12 +255,20 @@ do_uninstall() {
     if [ -n "$deleted_sa" ]; then
         # The chart's own binding went with the release; anything still naming the account was made
         # some other way — ykt3's hand-made team1/mlflow-trace-writers also grants otel-collector.
-        bindings="$({ kubectl --context "$KUBE_CONTEXT" get rolebindings,clusterrolebindings -A -o json 2>/dev/null \
-                      || echo '{}'; } \
-            | jq -r --arg sa "$SA" --arg ns "$NS" '.items[]?
+        # Only a dry run can still see the chart's own: the release is gone before a real run gets here.
+        local found ours
+        found="$({ kubectl --context "$KUBE_CONTEXT" get rolebindings,clusterrolebindings -A -o json 2>/dev/null \
+                   || echo '{}'; } \
+            | jq -r --arg sa "$SA" --arg ns "$NS" --arg rel "$RELEASE" '.items[]?
                 | select(any(.subjects[]?; .kind == "ServiceAccount" and .name == $sa and .namespace == $ns))
-                | "\(.kind)/\(.metadata.namespace // "-")/\(.metadata.name)"')"
-        [ -z "$bindings" ] || warn "still naming the removed sa/$SA, and NOT touched (not ours): $(printf '%s' "$bindings" | tr '\n' ' ')"
+                | (.metadata.annotations // {}) as $a
+                | (if $a["meta.helm.sh/release-name"] == $rel and $a["meta.helm.sh/release-namespace"] == $ns
+                   then "release" else "other" end)
+                  + " \(.kind)/\(.metadata.namespace // "-")/\(.metadata.name)"')"
+        ours="$(printf '%s\n' "$found" | sed -n 's/^release //p' | tr '\n' ' ')"
+        bindings="$(printf '%s\n' "$found" | sed -n 's/^other //p' | tr '\n' ' ')"
+        [ -z "$ours" ] || log "    release ${ours}— the chart's, removed with the Helm release"
+        [ -z "$bindings" ] || warn "still naming the removed sa/$SA, and NOT touched (not ours): $bindings"
     fi
     run "${K[@]}" delete cm "$RECORD_CM" >/dev/null
     [ -n "$DRY_RUN" ] || log "    ok      cm/$RECORD_CM deleted"
