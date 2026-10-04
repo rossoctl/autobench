@@ -59,7 +59,7 @@ REFERENCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$REFERENCE_DIR/envfile.sh"
 envfile_prescan "$@" || exit 1
 BENCH_REPO="${BENCH_REPO:-$(cd "$REFERENCE_DIR/.." && pwd)}"
-IMAGE="${IMAGE:-ghcr.io/rossoctl/autobench:v1.34}"
+IMAGE="${IMAGE:-ghcr.io/rossoctl/autobench:v1.35}"
 CLUSTER="${CLUSTER:-rossoctl}"
 CTX="${KUBE_CONTEXT:-kind-${CLUSTER}}"
 REALM="${REALM:-rossoctl}"
