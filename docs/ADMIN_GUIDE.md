@@ -394,7 +394,7 @@ in a pod spec:
 | `HF_TOKEN` | `secretKeyRef` → `hf-secret` / `hf-token` | gsm8k only; presence is the requirement, not content |
 | `OPENAI_API_BASE`, `LLM_API_BASE` | instance `workload_llm.api_base` | any inherited values are **dropped** and re-injected |
 | `EXGENTIC_DEFAULT_RUNNER` | instance `workload_agent_runner` | §3.4 |
-| `REQUEST_TIMEOUT` | fixed `120` | litellm's per-call ceiling; unset it is 6000 s, so a stalled gateway call was never retried |
+| `REQUEST_TIMEOUT` | fixed `120`, from image v1.35 | litellm's per-call ceiling; unset it is 6000 s, so a stalled gateway call was never retried |
 | `EXGENTIC_OTEL_ENABLED` | `true` when `workload_otel.enabled` | |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` / `_PROTOCOL` / `_INSECURE` | instance `workload_otel` | the endpoint is the `:8335` one |
 

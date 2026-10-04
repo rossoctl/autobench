@@ -1557,7 +1557,7 @@ time — which is why it is the standard smoke test (a 1-task gsm8k run reproduc
 output tokens). Set `--task-timeout` on multi-turn work: without it one wedged task can consume the
 entire `--timeout`, which is why the canonical matrix gives tau2 600s per task under a 2100s wall.
 Keep even the smoke test at 300s: the gateway occasionally stalls a single call, the agent cuts it
-at 120s (`REQUEST_TIMEOUT`, injected by the Service) and retries, and a 120s run budget leaves no
+at 120s (`REQUEST_TIMEOUT`, injected by the Service from image v1.35) and retries, and a 120s run budget leaves no
 room for that retry — a 1-task run that normally takes 3–10s then fails outright.
 §6.3 has the semantics in full — what a multi-task run is, and why both over- and under-asking on
 `--tasks` are silent.
