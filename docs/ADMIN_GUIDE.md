@@ -712,6 +712,7 @@ So the install path **checks** instead of assuming:
 | script | what it does now |
 |---|---|
 | `autobench-install.sh --install-mlflow auto\|always\|never` (KinD) | the same three modes through `reference/kind-mlflow.sh`, plus an **ownership record**, so `autobench-uninstall.sh` removes the reader only when this installed it (§5.2) |
+| `autobench-install.sh --install-mlflow auto\|always\|never` (OpenShift) | creates the credential the default shape reads — `sa/mlflow-reader` and `secret/mlflow-reader-token` — through `reference/ocp-mlflow.sh`, with the same kind of record (§5.1). Nothing is created when another shape below is declared |
 | `kind-post-setup.sh --install-mlflow auto\|always\|never` | `auto` (the default) applies `deploy/kind/mlflow-reader.yaml` only when nothing is already serving `MLFLOW_URL`; it logs which way it went and why. `never` is for a cluster whose MLflow is external — the collector is still repointed at `MLFLOW_URL`, which is the half that actually matters |
 | `ocp-service-bootstrap.sh` | resolving to **no MLflow credential at all is a precheck failure**, not the warning it used to be. It previously wrote `bearer_token: ""` and let the install proceed |
 | `kind-service-bootstrap.sh` | reads the experiment id off the collector, and a lookup that **cannot run is fatal**. It used to fall back to `0` with its stderr discarded, so on a `python3` without PyYAML every install guessed, silently. It now runs in the uv environment of §2.2, or takes `--experiment-id N` |
@@ -948,7 +949,8 @@ in order and stops at the first one that is wrong:
 3. `preflight.py --pre-install` (it must report 0 failures). What the release itself creates is not
    required to exist yet: the trace-writer RoleBinding, and with the judge its Deployment, its
    upstream Secret and the `ibac.*` fields;
-   - 3b. **KinD only: the MLflow read path** — `mlflow-reader` and the collector repoint (§5.2);
+   - 3b. **the MLflow read path** — on KinD `mlflow-reader` and the collector repoint (§5.2); on
+     OpenShift the `mlflow-reader` ServiceAccount and its token Secret, whichever is missing (§5.1);
 4. the bootstrap script, which writes the instance file;
 5. the `autobench-instances` Secret, with only that one key replaced and the others kept and named;
 6. `helm upgrade --install --wait`;
@@ -988,6 +990,17 @@ curl -fsS "https://$HOST/healthz"                                          # {"s
 Leave `route.host` empty unless you need a specific name — the router generates
 `autobench-<namespace>.apps.<cluster>`, which is the shape every recipe in the developer guide
 assumes.
+
+Before the bootstrap, the default MLflow credential has to exist: the `mlflow-reader` ServiceAccount,
+which the chart's trace-writer RoleBinding names but never creates, and the token Secret
+`mlflow-reader-token` the bootstrap copies into the instance file. `autobench-install.sh` runs
+`reference/ocp-mlflow.sh install --context <ctx>` as step 3b, which creates whichever of the two is
+missing and writes `cm/autobench-mlflow-credential` **before** it does, naming each object it made
+and its uid. Uninstall reads that record and deletes only what it names, and only while the uid still
+matches. An account that was there first is reused and left in place, and `--install-mlflow always`
+takes it over instead. A RoleBinding is never deleted: one made by hand that still names the account
+is reported. Nothing is created at all when the install declares another credential shape (the
+table in §3.7), or with `--install-mlflow never`.
 
 ### 5.2 KinD
 
@@ -1199,8 +1212,10 @@ reference/autobench-uninstall.sh --env-file ~/.rossoctl-ykt5/autobench.env [--te
    - `rossoctl-platform-config` must no longer name the judge.
 5. **Report the two out-of-band Secrets**, `autobench-instances` and `ibac-judge-upstream`, by key
    name. They are kept unless you pass `--purge-secrets`.
-6. **KinD only: the MLflow read path**, if and only if `autobench-install.sh` installed it — the
-   collector restored, `mlflow-reader` removed (§5.2). `--keep-mlflow` skips this step.
+6. **The MLflow read path**, if and only if `autobench-install.sh` made it. On KinD the collector is
+   restored and `mlflow-reader` removed (§5.2). On OpenShift the recorded `sa/mlflow-reader` and its
+   token Secret are deleted, and any RoleBinding still naming the account is reported, never
+   deleted (§5.1). `--keep-mlflow` skips this step.
 
 ## 6. Verifying the install
 

@@ -17,9 +17,11 @@
 #   3. preflight    reference/preflight.py --pre-install must report 0 failures. What the release
 #                   itself creates counts as present, and the MLflow round trip is skipped (it goes
 #                   through the Service, which may not be installed yet) — step 8 checks both live
-#   3b. MLflow      kind only: reference/kind-mlflow.sh installs mlflow-reader and points the
-#                   collector at it — unless something already serves MLFLOW_URL (INSTALL_MLFLOW=auto)
-#                   — and RECORDS that it did, so autobench-uninstall.sh removes exactly that
+#   3b. MLflow      kind: reference/kind-mlflow.sh installs mlflow-reader and points the collector at
+#                   it — unless something already serves MLFLOW_URL (INSTALL_MLFLOW=auto).
+#                   openshift: reference/ocp-mlflow.sh creates sa/mlflow-reader and its token Secret,
+#                   whichever is missing. Each RECORDS what it made, so autobench-uninstall.sh
+#                   removes exactly that
 #   4. config       the platform's bootstrap script writes the instance file — it re-proves the
 #                   benchmarker login and the S3 key itself
 #   5. Secrets      autobench-instances gets that ONE key replaced (other keys are kept and named);
@@ -63,7 +65,8 @@ Usage: reference/autobench-install.sh [--env-file FILE]... [flags]
   --ibac-judge        IBAC_JUDGE=true install the IBAC judge (plugin legs #5-#8 only); needs
                                       IBAC_JUDGE_KEY_FILE, IBAC_JUDGE_UPSTREAM_BASE, IBAC_JUDGE_MODEL
   --no-ibac-judge                     acknowledge REMOVING a judge the live release has
-  --install-mlflow M  INSTALL_MLFLOW  kind: auto (default) | always | never — see kind-mlflow.sh
+  --install-mlflow M  INSTALL_MLFLOW  auto (default) | always | never — see kind-mlflow.sh and
+                                      ocp-mlflow.sh
   --dry-run                           checks for real, cluster writes printed instead of run
   --skip-preflight                    skip step 3 (the bootstrap's own checks still run)
   -h, --help
@@ -156,12 +159,11 @@ case "$IBAC_JUDGE" in ''|true|false) ;; *) die "IBAC_JUDGE must be true or false
 # IBAC_JUDGE too: the bootstrap reports the judge's absence differently when this install creates it.
 export KUBE_CONTEXT CLUSTER S3_ENABLED IBAC_JUDGE INSTALL_MLFLOW
 
-# kind: whether this install creates the MLflow read path — preflight must know before it judges it.
-MLFLOW_PLAN=""
-if [ "$AB_PLATFORM" = kind ]; then
-    MLFLOW_PLAN="$("$REFERENCE_DIR/kind-mlflow.sh" plan --context "$KUBE_CONTEXT")" \
-        || die "could not decide the MLflow plan (see above)"
-fi
+# Whether this install creates the MLflow read path (kind) or credential (openshift) — preflight must
+# know before it judges the former, and a dry run before it runs the bootstrap against the latter.
+if [ "$AB_PLATFORM" = kind ]; then MLFLOW_SCRIPT="$REFERENCE_DIR/kind-mlflow.sh"; else MLFLOW_SCRIPT="$REFERENCE_DIR/ocp-mlflow.sh"; fi
+MLFLOW_PLAN="$("$MLFLOW_SCRIPT" plan --context "$KUBE_CONTEXT")" \
+    || die "could not decide the MLflow plan (see above)"
 
 K=(kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE")
 H=(--kube-context "$KUBE_CONTEXT" -n "$NAMESPACE")
@@ -224,18 +226,23 @@ else
     PRE=(--platform "$AB_PLATFORM" --context "$KUBE_CONTEXT" --namespace "$NAMESPACE"
          --values "$HELM_VALUES" --chart "$CHART" --pre-install --skip-mlflow-probe)
     [ "$IBAC_JUDGE" = true ] && PRE+=(--ibac-judge)
-    [ "$MLFLOW_PLAN" = install ] && PRE+=(--kind-mlflow)
+    [ "$AB_PLATFORM" = kind ] && [ "$MLFLOW_PLAN" = install ] && PRE+=(--kind-mlflow)
     "${PY[@]}" "$REFERENCE_DIR/preflight.py" "${PRE[@]}" \
         || die "preflight reports failures — fix them, then re-run (nothing was written)"
 fi
 
-# --- 3b. the MLflow read path (kind) -----------------------------------------------------------------
-# Before the bootstrap: it reads the collector's experiment id and warns when the reader is absent.
-if [ "$AB_PLATFORM" = kind ]; then
-    log ""
-    log "==> 3b. MLflow read path ($MLFLOW_PLAN)"
-    "$REFERENCE_DIR/kind-mlflow.sh" install --context "$KUBE_CONTEXT" ${DRY_RUN:+--dry-run} \
-        || die "the MLflow install failed (see above) — re-run; autobench-uninstall.sh undoes a partial one"
+# --- 3b. the MLflow read path (kind) or credential (openshift) ---------------------------------------
+# Before the bootstrap: on kind it reads the collector's experiment id and warns when the reader is
+# absent; on openshift it copies the token Secret this creates into the instance file.
+log ""
+if [ "$AB_PLATFORM" = kind ]; then log "==> 3b. MLflow read path ($MLFLOW_PLAN)"; else log "==> 3b. MLflow credential ($MLFLOW_PLAN)"; fi
+"$MLFLOW_SCRIPT" install --context "$KUBE_CONTEXT" ${DRY_RUN:+--dry-run} \
+    || die "the MLflow install failed (see above) — re-run; autobench-uninstall.sh undoes a partial one"
+BOOT_NO_AUTH="${MLFLOW_NO_AUTH:-}"
+if [ -n "$DRY_RUN" ] && [ "$AB_PLATFORM" = openshift ] && [ "$MLFLOW_PLAN" = install ]; then
+    # A dry run created no token Secret, so the bootstrap would fail on the credential a real run has.
+    log "    dry run: the token Secret does not exist yet — the bootstrap below runs as --mlflow-no-auth"
+    BOOT_NO_AUTH=1
 fi
 
 # --- 4. the instance config --------------------------------------------------------------------------
@@ -248,7 +255,7 @@ if [ "$AB_PLATFORM" = openshift ]; then
 else
     BOOT=("$REFERENCE_DIR/kind-service-bootstrap.sh" --cluster "$CLUSTER" --context "$KUBE_CONTEXT")
 fi
-INSTANCE_FILE="$("${BOOT[@]}" --out-dir "$OUT_DIR" --print-out-file)" \
+INSTANCE_FILE="$(MLFLOW_NO_AUTH="$BOOT_NO_AUTH" "${BOOT[@]}" --out-dir "$OUT_DIR" --print-out-file)" \
     || die "the bootstrap failed (see above) — nothing was written to the cluster"
 [ -f "$INSTANCE_FILE" ] || die "the bootstrap printed '$INSTANCE_FILE', which is not a file"
 INSTANCE_KEY="$(basename "$INSTANCE_FILE")"

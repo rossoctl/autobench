@@ -183,8 +183,9 @@ ibacJudge:
 mlflowTraceWriter:
   enabled: false
   # The identity the SERVICE authenticates to MLflow as — the account whose token is
-  # `mlflow.bearer_token` in the instance-config Secret. Created out-of-band with that token by
-  # reference/ocp-service-bootstrap.sh; referenced here, never created.
+  # `mlflow.bearer_token` in the instance-config Secret. Created out-of-band, with its token
+  # Secret, by reference/ocp-mlflow.sh (autobench-install.sh step 3b), which records that it did;
+  # reference/ocp-service-bootstrap.sh copies the token. Referenced here, never created.
   serviceAccount: mlflow-reader
   # MLflow operator's ClusterRole. Platform-owned: referenced, never created.
   clusterRole: mlflow-operator-mlflow-integration

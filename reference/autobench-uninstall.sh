@@ -22,9 +22,11 @@
 #                   name the removed judge
 #   5. Secrets      autobench-instances and ibac-judge-upstream are made out-of-band and so are KEPT
 #                   and reported; --purge-secrets deletes them too
-#   6. MLflow       kind only: reference/kind-mlflow.sh uninstall removes mlflow-reader and puts the
-#                   collector's config back — ONLY if autobench-install.sh installed them, which its
-#                   record cm/autobench-mlflow-install says. A reader made any other way is kept.
+#   6. MLflow       kind: reference/kind-mlflow.sh uninstall removes mlflow-reader and puts the
+#                   collector's config back; openshift: reference/ocp-mlflow.sh uninstall removes
+#                   sa/mlflow-reader and its token Secret. Each ONLY if autobench-install.sh made
+#                   them, which its record (cm/autobench-mlflow-install, cm/autobench-mlflow-credential)
+#                   says — anything made another way is kept, and a RoleBinding is never deleted.
 #                   --keep-mlflow skips it
 #
 # Workloads that are not AutoBench's (anything not named exgentic-*) are never touched.
@@ -49,7 +51,8 @@ Usage: reference/autobench-uninstall.sh [--env-file FILE]... [flags]
   --teams LIST        TEAMS           team namespaces to clear of exgentic-* workloads (default team1)
   --keep-workloads                    skip step 1 (they keep running, and keep their old config)
   --purge-secrets                     also delete autobench-instances and ibac-judge-upstream
-  --keep-mlflow                       kind: keep an MLflow read path autobench-install.sh installed
+  --keep-mlflow                       keep what autobench-install.sh made for MLflow (kind: the
+                                      read path; openshift: sa/mlflow-reader and its token)
   --dry-run                           list what would go; delete nothing
   -h, --help
 
@@ -285,9 +288,9 @@ for s in "$INSTANCES_SECRET" "$JUDGE_SECRET"; do
     fi
 done
 
-# --- 6. the MLflow read path (kind) --------------------------------------------------------------------
+# --- 6. the MLflow read path (kind) or credential (openshift) -----------------------------------------
+log ""
 if [ "$AB_PLATFORM" = kind ]; then
-    log ""
     log "==> 6. MLflow read path"
     if [ -n "$KEEP_MLFLOW" ]; then
         log "    kept    --keep-mlflow — mlflow-reader and the collector config stay as they are"
@@ -295,6 +298,14 @@ if [ "$AB_PLATFORM" = kind ]; then
         mkdir -p "$RECORD"
         "$REFERENCE_DIR/kind-mlflow.sh" uninstall --context "$KUBE_CONTEXT" --record-dir "$RECORD" \
             ${DRY_RUN:+--dry-run} || die "the MLflow removal failed (see above)"
+    fi
+else
+    log "==> 6. MLflow credential"
+    if [ -n "$KEEP_MLFLOW" ]; then
+        log "    kept    --keep-mlflow — sa/mlflow-reader and its token stay as they are"
+    else
+        "$REFERENCE_DIR/ocp-mlflow.sh" uninstall --context "$KUBE_CONTEXT" ${DRY_RUN:+--dry-run} \
+            || die "the MLflow credential removal failed (see above)"
     fi
 fi
 

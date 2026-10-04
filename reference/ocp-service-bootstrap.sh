@@ -331,16 +331,8 @@ else
         # Reported as a precheck FAILURE below, not just here: this used to be a warning, and the
         # file was written with an empty bearer anyway.
         warn "secret ${MLFLOW_TOKEN_SECRET} has no .data.token, and no MLflow credential was given."
-        warn "         Either create it:"
-        warn "           oc -n rossoctl-system create sa mlflow-reader"
-        warn "           oc -n rossoctl-system apply -f - <<'Y'"
-        warn "           apiVersion: v1"
-        warn "           kind: Secret"
-        warn "           metadata:"
-        warn "             name: ${MLFLOW_TOKEN_SECRET}"
-        warn "             annotations: {kubernetes.io/service-account.name: mlflow-reader}"
-        warn "           type: kubernetes.io/service-account-token"
-        warn "           Y"
+        warn "         Either create it — autobench-install.sh does, as step 3b, and records that it did:"
+        warn "           reference/ocp-mlflow.sh install --context <ctx>"
         warn "         or supply the credential of the MLflow that already exists"
         warn "         (--mlflow-bearer-file / --mlflow-username / --mlflow-client-id),"
         warn "         or declare it unauthenticated with --mlflow-no-auth."
