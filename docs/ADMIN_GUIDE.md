@@ -952,6 +952,7 @@ in order and stops at the first one that is wrong:
    upstream Secret and the `ibac.*` fields;
    - 3b. **the MLflow read path** — on KinD `mlflow-reader` and the collector repoint (§5.2); on
      OpenShift the `mlflow-reader` ServiceAccount and its token Secret, whichever is missing (§5.1);
+   - 3c. on KinD only, **CoreDNS's cache stops caching a SERVFAIL** (§5.2);
 4. the bootstrap script, which writes the instance file;
 5. the `autobench-instances` Secret, with only that one key replaced and the others kept and named;
 6. `helm upgrade --install --wait`;
@@ -1044,6 +1045,33 @@ sha8 (the config's credentials are `${env:…}` references, so the copy carries 
   live in the platform's postgres and survive.
 
 `--keep-mlflow` on the uninstall skips all of it.
+
+**The installer also stops KinD's CoreDNS caching a failed lookup** (step 3c, via
+`reference/kind-dns.sh`). A KinD node forwards DNS to its container runtime. On podman for macOS
+that resolver now and then answers SERVFAIL, and CoreDNS caches the answer for 5 s by default. So
+the resolver's retry, and the agent's second probe 0.3 s later, both get the cached failure, and the
+task fails in under a second as `model_probe_failed`. That is how the 1-task smoke test was lost on
+2026-10-04. The fix is one line in the `.:53` server's `cache` block, `servfail 0`, so a retry goes
+upstream again. `reload` applies it in place and nothing restarts.
+
+Measured in a controlled A/B, with the same CoreDNS image and an upstream that fails 5% of queries:
+
+| Corefile | lookups lost (failed, and the retry too) | upstream queries |
+|---|---|---|
+| kind's own | 33 of 1500 | 1,100 |
+| with `servfail 0` | **0** of 1500 | 6,100 |
+| with `servfail 0` + `serve_stale 1h` | 0 of 1500 | **893,400** |
+
+The extra upstream load comes from the search suffixes the node inherits, which always fail and are
+now asked again each time. `serve_stale` is deliberately **not** used: the podman resolver answers
+with TTL 0, and against that serve_stale refreshes on every request.
+
+`KIND_DNS` / `--kind-dns` choose `auto` (the default: harden unless the cache block already has
+`servfail 0`) or `never`. Ownership works like the MLflow record: the install writes
+`cm/autobench-dns-install` in `kube-system`, holding the Corefile as it was. A Corefile already
+hardened some other way gets no record and is never touched. `autobench-uninstall.sh` restores the
+original **only if the Corefile is still exactly what the install left**. Otherwise it saves the
+original next to its manifest record and changes nothing. `--keep-dns` skips the step.
 
 `8080` there is the **host** port KinD publishes the istio gateway on; it is not this Service's
 port, and the two matching is a coincidence. Note also that `kind load docker-image` bypasses the
@@ -1217,6 +1245,8 @@ reference/autobench-uninstall.sh --env-file ~/.rossoctl-ykt5/autobench.env [--te
    restored and `mlflow-reader` removed (§5.2). On OpenShift the recorded `sa/mlflow-reader` and its
    token Secret are deleted, and any RoleBinding still naming the account is reported, never
    deleted (§5.1). `--keep-mlflow` skips this step.
+7. **CoreDNS's Corefile** on KinD, put back byte for byte, if and only if `autobench-install.sh`
+   changed it and nothing has changed it since (§5.2). `--keep-dns` skips this step.
 
 ## 6. Verifying the install
 
@@ -1274,6 +1304,7 @@ fourth, and only in part: it zeroes some rows and moves other rows' tokens onto 
 | `/deploy` returns **424**, agent `CrashLoopBackOff` | collector endpoint on 4318, or `hf-secret` missing so the MCP pod never started | the collector's `command`; `get secret hf-secret` |
 | token request 400 `Account is not fully set up` | the realm requires `firstName`/`lastName` for ROPC | the user's profile |
 | tasks error on the first completion, run finishes with zeroes | `openai-secret` empty, or holding the *other* gateway's key | `preflight.py` prints both namespaces' `sha8`; compare them |
+| on KinD, a task fails in under a second as `model_probe_failed`, the API's text saying `Temporary failure in name resolution` | the node's resolver answered SERVFAIL once, and CoreDNS cached it for 5 s, so the agent's retry got the same answer | `kubectl -n kube-system get cm coredns -o jsonpath='{.data.Corefile}'`: the `.:53` block's `cache` needs `servfail 0`. `reference/kind-dns.sh install` adds it (§5.2) |
 | `Model endpoint … is unreachable` on every task | the agent pod is running **dev145**, whatever `:latest` points at | the wording: dev146 says `did not respond … after N attempt(s)`. **Read it from the authenticated API, not the S3 artifacts** — those now classify both wordings to the same `model_probe_failed`, so the distinction is gone there. Compare the pod's `imageID` digest, never the tag |
 | a config change appears to do nothing | `InstanceConfig` and the `SERVICE_*` settings both use `extra="ignore"` — an unknown field is dropped **silently** | read the value back; adding one is never self-verifying |
 | the new `api_base` is ignored | a stale Deployment from an earlier bring-up is still serving the old one | list Deployments in the team namespaces by age |

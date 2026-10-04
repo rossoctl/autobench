@@ -28,6 +28,9 @@
 #                   them, which its record (cm/autobench-mlflow-install, cm/autobench-mlflow-credential)
 #                   says — anything made another way is kept, and a RoleBinding is never deleted.
 #                   --keep-mlflow skips it
+#   7. DNS          kind: reference/kind-dns.sh uninstall puts CoreDNS's Corefile back, byte for byte,
+#                   ONLY if autobench-install.sh changed it (cm/autobench-dns-install) and nothing has
+#                   changed it since. --keep-dns skips it
 #
 # Workloads that are not AutoBench's (anything not named exgentic-*) are never touched.
 
@@ -53,6 +56,7 @@ Usage: reference/autobench-uninstall.sh [--env-file FILE]... [flags]
   --purge-secrets                     also delete autobench-instances and ibac-judge-upstream
   --keep-mlflow                       keep what autobench-install.sh made for MLflow (kind: the
                                       read path; openshift: sa/mlflow-reader and its token)
+  --keep-dns                          kind: keep CoreDNS's `servfail 0` that autobench-install.sh added
   --dry-run                           list what would go; delete nothing
   -h, --help
 
@@ -77,6 +81,7 @@ DEPLOY="autobench-service"
 KEEP_WORKLOADS=""
 PURGE_SECRETS=""
 KEEP_MLFLOW=""
+KEEP_DNS=""
 DRY_RUN=""
 
 while [ $# -gt 0 ]; do
@@ -89,6 +94,7 @@ while [ $# -gt 0 ]; do
         --keep-workloads) KEEP_WORKLOADS=1; shift ;;
         --purge-secrets)  PURGE_SECRETS=1; shift ;;
         --keep-mlflow)    KEEP_MLFLOW=1; shift ;;
+        --keep-dns)       KEEP_DNS=1; shift ;;
         --dry-run)        DRY_RUN=1; shift ;;
         -h|--help)        usage; exit 0 ;;
         *) usage >&2; die "unknown argument: $1" ;;
@@ -306,6 +312,19 @@ else
     else
         "$REFERENCE_DIR/ocp-mlflow.sh" uninstall --context "$KUBE_CONTEXT" ${DRY_RUN:+--dry-run} \
             || die "the MLflow credential removal failed (see above)"
+    fi
+fi
+
+# --- 7. CoreDNS (kind) ---------------------------------------------------------------------------------
+if [ "$AB_PLATFORM" = kind ]; then
+    log ""
+    log "==> 7. CoreDNS cache"
+    if [ -n "$KEEP_DNS" ]; then
+        log "    kept    --keep-dns — CoreDNS's Corefile stays as it is"
+    else
+        mkdir -p "$RECORD"
+        "$REFERENCE_DIR/kind-dns.sh" uninstall --context "$KUBE_CONTEXT" --record-dir "$RECORD" \
+            ${DRY_RUN:+--dry-run} || die "the CoreDNS restore failed (see above)"
     fi
 fi
 

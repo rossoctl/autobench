@@ -22,6 +22,8 @@
 #                   openshift: reference/ocp-mlflow.sh creates sa/mlflow-reader and its token Secret,
 #                   whichever is missing. Each RECORDS what it made, so autobench-uninstall.sh
 #                   removes exactly that
+#   3c. DNS         kind: reference/kind-dns.sh adds `servfail 0` to CoreDNS's cache, so one upstream
+#                   DNS blip is retried instead of failing a task (KIND_DNS=auto); recorded the same way
 #   4. config       the platform's bootstrap script writes the instance file — it re-proves the
 #                   benchmarker login and the S3 key itself
 #   5. Secrets      autobench-instances gets that ONE key replaced (other keys are kept and named);
@@ -32,7 +34,7 @@
 #                   this time with the MLflow round trip, the one check that crosses the whole chain
 #
 # --dry-run runs 1-4 for real (they write nothing to the cluster; the instance file goes to a temp
-# dir) and prints 3b and 5-7 instead of running them.
+# dir) and prints 3b, 3c and 5-7 instead of running them.
 #
 # On a freshly rebuilt KinD cluster run reference/kind-post-setup.sh first: it seeds the realm user
 # and the team secrets, which this script checks but does not create. The MLflow read path is the
@@ -67,6 +69,7 @@ Usage: reference/autobench-install.sh [--env-file FILE]... [flags]
   --no-ibac-judge                     acknowledge REMOVING a judge the live release has
   --install-mlflow M  INSTALL_MLFLOW  auto (default) | always | never — see kind-mlflow.sh and
                                       ocp-mlflow.sh
+  --kind-dns M        KIND_DNS        kind: auto (default) | never — see kind-dns.sh
   --dry-run                           checks for real, cluster writes printed instead of run
   --skip-preflight                    skip step 3 (the bootstrap's own checks still run)
   -h, --help
@@ -89,6 +92,7 @@ HELM_VALUES="${HELM_VALUES:-}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 IBAC_JUDGE="${IBAC_JUDGE:-}"
 INSTALL_MLFLOW="${INSTALL_MLFLOW:-auto}"
+KIND_DNS="${KIND_DNS:-auto}"
 NAMESPACE="${NAMESPACE:-rossoctl-system}"
 RELEASE="autobench"
 CHART="$REPO_DIR/deploy/helm/autobench"
@@ -111,6 +115,7 @@ while [ $# -gt 0 ]; do
         --ibac-judge)     IBAC_JUDGE=true; shift ;;
         --no-ibac-judge)  IBAC_JUDGE=false; DROP_JUDGE=1; shift ;;
         --install-mlflow) INSTALL_MLFLOW="${2:-}"; shift 2 ;;
+        --kind-dns)       KIND_DNS="${2:-}"; shift 2 ;;
         --dry-run)        DRY_RUN=1; shift ;;
         --skip-preflight) SKIP_PREFLIGHT=1; shift ;;
         -h|--help)        usage; exit 0 ;;
@@ -164,6 +169,11 @@ export KUBE_CONTEXT CLUSTER S3_ENABLED IBAC_JUDGE INSTALL_MLFLOW
 if [ "$AB_PLATFORM" = kind ]; then MLFLOW_SCRIPT="$REFERENCE_DIR/kind-mlflow.sh"; else MLFLOW_SCRIPT="$REFERENCE_DIR/ocp-mlflow.sh"; fi
 MLFLOW_PLAN="$("$MLFLOW_SCRIPT" plan --context "$KUBE_CONTEXT")" \
     || die "could not decide the MLflow plan (see above)"
+DNS_PLAN=""
+if [ "$AB_PLATFORM" = kind ]; then
+    DNS_PLAN="$("$REFERENCE_DIR/kind-dns.sh" plan --context "$KUBE_CONTEXT" --mode "$KIND_DNS")" \
+        || die "could not decide the CoreDNS plan (see above)"
+fi
 
 K=(kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE")
 H=(--kube-context "$KUBE_CONTEXT" -n "$NAMESPACE")
@@ -204,6 +214,7 @@ fi
 log "AutoBench install — platform=$AB_PLATFORM context=$KUBE_CONTEXT cluster=$CLUSTER namespace=$NAMESPACE"
 log "  values $HELM_VALUES   image tag ${IMAGE_TAG:-(chart appVersion)}   judge ${IBAC_JUDGE:-false}   s3 $S3_ENABLED"
 [ -n "$MLFLOW_PLAN" ] && log "  mlflow $MLFLOW_PLAN (INSTALL_MLFLOW=$INSTALL_MLFLOW)"
+[ -n "$DNS_PLAN" ] && log "  dns    $DNS_PLAN (KIND_DNS=$KIND_DNS)"
 [ -n "${ENVFILE_LOADED:-}" ] && log "  env files: $ENVFILE_LOADED"
 [ -n "$DRY_RUN" ] && log "  DRY RUN — checks run for real; cluster writes are printed, not run"
 
@@ -243,6 +254,14 @@ if [ -n "$DRY_RUN" ] && [ "$AB_PLATFORM" = openshift ] && [ "$MLFLOW_PLAN" = ins
     # A dry run created no token Secret, so the bootstrap would fail on the credential a real run has.
     log "    dry run: the token Secret does not exist yet — the bootstrap below runs as --mlflow-no-auth"
     BOOT_NO_AUTH=1
+fi
+
+# --- 3c. CoreDNS (kind) --------------------------------------------------------------------------------
+if [ "$AB_PLATFORM" = kind ]; then
+    log ""
+    log "==> 3c. CoreDNS cache ($DNS_PLAN)"
+    "$REFERENCE_DIR/kind-dns.sh" install --context "$KUBE_CONTEXT" --mode "$KIND_DNS" ${DRY_RUN:+--dry-run} \
+        || die "the CoreDNS change failed (see above) — re-run; autobench-uninstall.sh undoes a partial one"
 fi
 
 # --- 4. the instance config --------------------------------------------------------------------------
