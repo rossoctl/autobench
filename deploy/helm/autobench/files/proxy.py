@@ -1,11 +1,45 @@
-import os, sys, urllib.request, urllib.error
+import os, socket, sys, time, urllib.request, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-UPSTREAM = os.environ["UPSTREAM_BASE"].rstrip("/")
+UPSTREAM = os.environ.get("UPSTREAM_BASE", "").rstrip("/")
 KEY = os.environ.get("UPSTREAM_KEY", "")
 TIMEOUT = float(os.environ.get("UPSTREAM_TIMEOUT", "60"))
+# Connection-level failures are retried, because the request provably never reached the upstream:
+# a name that did not resolve, or a connection that was refused. On KinD the node's resolver answers
+# SERVFAIL now and then, and one failed lookup used to fail the judged task outright. A timeout or an
+# HTTP error is NOT retried — that request may have been served, and the judge must not bill twice.
+ATTEMPTS = int(os.environ.get("UPSTREAM_CONNECT_ATTEMPTS", "3"))
+BACKOFF = float(os.environ.get("UPSTREAM_CONNECT_BACKOFF", "0.5"))
 HOP = {"host", "authorization", "content-length", "connection",
        "transfer-encoding", "keep-alive", "upgrade"}
+
+
+def never_sent(e):
+    """True if the request cannot have left this pod, so a retry cannot duplicate it."""
+    r = getattr(e, "reason", None)
+    return isinstance(e, urllib.error.URLError) and isinstance(r, (socket.gaierror, ConnectionRefusedError))
+
+
+def open_with_retry(req, opener=None, sleep=time.sleep):
+    opener = opener or urllib.request.urlopen
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            return opener(req, timeout=TIMEOUT)
+        except urllib.error.HTTPError:
+            raise
+        except Exception as e:
+            if attempt == ATTEMPTS or not never_sent(e):
+                raise
+            sys.stderr.write("upstream %s(%s), retrying (%d/%d)\n"
+                             % (type(e).__name__, type(e.reason).__name__, attempt, ATTEMPTS - 1))
+            sleep(BACKOFF * attempt)
+
+
+def describe(e):
+    """`URLError(gaierror)`: the class alone hid whether a failure was DNS, TCP or TLS."""
+    r = getattr(e, "reason", None)
+    return type(e).__name__ + ("(%s)" % type(r).__name__ if isinstance(r, BaseException) else "")
+
 
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -31,12 +65,12 @@ class H(BaseHTTPRequestHandler):
             hdrs["Authorization"] = "Bearer " + KEY
         req = urllib.request.Request(UPSTREAM + self.path, data=body, headers=hdrs, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            with open_with_retry(req) as r:
                 data, status, ct = r.read(), r.status, r.headers.get("Content-Type", "application/json")
         except urllib.error.HTTPError as e:
             data, status, ct = e.read(), e.code, e.headers.get("Content-Type", "application/json")
         except Exception as e:
-            data, status, ct = ('{"error":"upstream: %s"}' % type(e).__name__).encode(), 502, "application/json"
+            data, status, ct = ('{"error":"upstream: %s"}' % describe(e)).encode(), 502, "application/json"
         self.send_response(status)
         self.send_header("Content-Type", ct)
         self.send_header("Content-Length", str(len(data)))
@@ -49,4 +83,8 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         self._forward("POST")
 
-ThreadingHTTPServer(("0.0.0.0", 8080), H).serve_forever()
+
+if __name__ == "__main__":
+    if not UPSTREAM:
+        sys.exit("UPSTREAM_BASE is not set")
+    ThreadingHTTPServer(("0.0.0.0", 8080), H).serve_forever()

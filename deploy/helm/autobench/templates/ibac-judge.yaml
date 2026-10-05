@@ -75,6 +75,10 @@ spec:
     metadata:
       labels:
         {{- include "autobench.judgeLabels" . | nindent 8 }}
+      annotations:
+        # The code ConfigMap is mounted, and a pod reads it at start — so a chart upgrade that changes
+        # proxy.py must roll the pod, or it keeps serving the old code.
+        checksum/proxy: {{ .Files.Get "files/proxy.py" | sha256sum }}
     spec:
       containers:
         - name: proxy
