@@ -43,6 +43,14 @@ def test_a_failed_lookup_is_retried(proxy):
     assert len(calls) == 3
 
 
+def test_the_backoff_doubles_to_outlast_a_burst(proxy):
+    dns = urllib.error.URLError(socket.gaierror(-5, "No address associated with hostname"))
+    opener, calls = flaky([dns] * 4)
+    slept = []
+    assert proxy.open_with_retry("req", opener=opener, sleep=slept.append) == "ok"
+    assert slept == [0.5, 1.0, 2.0, 4.0]           # 7.5 s: past every burst measured on KinD
+
+
 def test_retries_are_bounded(proxy):
     dns = urllib.error.URLError(socket.gaierror(-3, "Temporary failure in name resolution"))
     opener, calls = flaky([dns] * 5)

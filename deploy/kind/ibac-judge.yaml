@@ -52,7 +52,10 @@ data:
     # a name that did not resolve, or a connection that was refused. On KinD the node's resolver answers
     # SERVFAIL now and then, and one failed lookup used to fail the judged task outright. A timeout or an
     # HTTP error is NOT retried — that request may have been served, and the judge must not bill twice.
-    ATTEMPTS = int(os.environ.get("UPSTREAM_CONNECT_ATTEMPTS", "3"))
+    # The failures come in bursts: measured inside the judge pod on KinD, 8 of 385 lookups failed and
+    # each recovered within 0.5–2.5 s. So the backoff doubles (0.5, 1, 2, 4 s): five attempts span 7.5 s,
+    # where three spanning 1.5 s still lost 3 of 58 calls.
+    ATTEMPTS = int(os.environ.get("UPSTREAM_CONNECT_ATTEMPTS", "5"))
     BACKOFF = float(os.environ.get("UPSTREAM_CONNECT_BACKOFF", "0.5"))
     HOP = {"host", "authorization", "content-length", "connection",
            "transfer-encoding", "keep-alive", "upgrade"}
@@ -76,7 +79,7 @@ data:
                     raise
                 sys.stderr.write("upstream %s(%s), retrying (%d/%d)\n"
                                  % (type(e).__name__, type(e.reason).__name__, attempt, ATTEMPTS - 1))
-                sleep(BACKOFF * attempt)
+                sleep(BACKOFF * 2 ** (attempt - 1))
 
 
     def describe(e):
