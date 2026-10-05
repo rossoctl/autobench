@@ -19,7 +19,7 @@ non-obvious when *changing* it.
 ## Commands
 
 ```sh
-uv run pytest -q                      # 385 tests, ~58 s, no cluster required
+uv run pytest -q                      # 388 tests, ~58 s, no cluster required
 uv run autobench-service              # local service on :8000
 python3 reference/gen_toc.py <file>   # regenerate a doc's <!-- toc --> block after editing headings
 ```
@@ -148,15 +148,14 @@ A full 12-run takes 1–2 hours. Three rules, all learned the hard way:
   and ~42 minutes of sleeping. **The hit detector is the response `id`, never latency**: a replay can
   take as long as a miss.
 - **The gap spaces legs, and one residual is inside a leg: tau2's opening call.** It is
-  byte-identical for every tau2 task (5054 input tokens on all 60 v1.28 tasks, both platforms) —
+  byte-identical for every tau2 task (5054 input tokens on every v1.35 tau2 task, both platforms) —
   the prompt carries no task text, because the scenario lives in the MCP user simulator and the task
   id rides in the session metadata. Consecutive tasks are seconds apart, so no `BM_CACHE_GAP` value
-  reaches it: one generation serves the leg. ~5–6% of input, ~2–3% of output, ~2–3% of chat latency,
-  **tau2 only, and symmetric across platforms** — so it does not bias the cross-cluster comparison,
-  but never read a tau2 first-call latency as a measurement. Nothing collides *within* a task: each
-  call re-sends the grown history, and no task in the matrix repeats even an input-token count among
-  its own calls. Side benefit: two slow legs flip their first-call output token count mid-leg at
-  **+641 s and +632 s**, confirming the ~10 min TTL from an independent signal.
+  reaches it: one generation serves the leg. ~6% of input, ~2–3% of output, ~1–2% of chat latency,
+  **tau2 only, and symmetric across platforms** — so it does not bias the cross-platform comparison,
+  but never read a tau2 first-call latency as a measurement. Collisions *within* a task are rare: each
+  call re-sends the grown history, so bodies normally grow, but appworld's agent occasionally re-sends
+  an identical request (2 of 281 tasks on v1.35, 22 s and 2 min apart).
 
 If a poller dies, the server-side run keeps going — **adopt it and merge the results** rather than
 re-running the leg.

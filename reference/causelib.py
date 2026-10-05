@@ -17,8 +17,9 @@ So:
   inline plus three later entries for messages that table filed wrongly or not at all: the IBAC
   judge failing (it shares `wrong_answer`'s "Error executing submit" prefix, so it read as the
   model answering wrong), the agent's `cannot pickle` race, and the agent's own `timed out`. Each
-  mirrors a `public_errors` bucket, so the two eras agree on them. A pre-scrub landmark run must
-  still regenerate the table it published — re-check `docs/results/` before touching this table.
+  mirrors a `public_errors` bucket, so the two eras agree on them. A pre-scrub run (the archived
+  landmarks under `docs/archive/` among them) must still regenerate the table it published, so keep
+  these patterns stable.
 
 The scrubbed era classifies more finely than the legacy patterns could — `public_errors` has 21
 buckets — 20 drawn from a survey of all 1,056 strings in the bucket, plus `judge_call_failed`, found

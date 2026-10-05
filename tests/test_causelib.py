@@ -3,7 +3,8 @@
 It is tested here anyway because its output is *published*: it decides the per-cause tables in the
 landmark reports under `docs/results/`. Two regressions would be silent and wrong rather than loud —
 a `public_errors` category with no label here (a raw slug in a published table), and a drift in the
-legacy patterns (a pre-scrub landmark run re-generating differently than it published).
+legacy patterns (a pre-scrub run, such as the archived landmarks, re-generating differently than it
+published).
 """
 
 import pathlib
