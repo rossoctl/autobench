@@ -34,6 +34,9 @@ replayed the other's completions.
 | [12run-ocp.md](v1.35-2026-10-04/12run-ocp.md) | Full 12-run on OpenShift (ykt3, single-cluster). 12/12 legs succeeded, 141 tasks, 0 lost token rows. |
 | [12run-kind.md](v1.35-2026-10-04/12run-kind.md) | The same 12 runs on a single-node KinD cluster. 12/12 succeeded, 141 tasks, 0 lost token rows. |
 | [12run-comparison.md](v1.35-2026-10-04/12run-comparison.md) | **The one to read.** 8/12 pass rates identical, 7 legs with byte-identical input-token totals, and every errored task classified by cause. |
+| [plugin-study-ocp.md](v1.35-2026-10-04/plugin-study-ocp.md) | Designed AuthBridge overhead experiment on OpenShift — 13 legs, n=50, reversed-order replicates, cache spaced, judge calls counted. |
+| [plugin-study-kind.md](v1.35-2026-10-04/plugin-study-kind.md) | The same 13 legs on KinD. |
+| [plugin-study-xplat.md](v1.35-2026-10-04/plugin-study-xplat.md) | **The one to read for plugins.** Both clusters put the cost in the same layer — the IBAC judge, +1.36 s/task on OpenShift and +1.48 s on KinD — and every other layer is below the between-deploy noise floor. |
 
 What makes it a reference point:
 
@@ -50,6 +53,13 @@ What makes it a reference point:
 
 The four legs that differ (#6, #7, #9, #10) are each one task apart, in both directions: on a 5-task
 leg one task is worth 0.20, and tau2 is nondeterministic per episode.
+
+The **plugin study** ran on 2026-10-05 on the same image, both platforms one after the other, with
+the gateway cache spaced. Every serial tool call was judged (10 of 10 on both), the judged-call
+ratio is ~1 for the IBAC presets and 0 for the rest, and per-tool-call cost does **not** carry
+across benchmarks (tau2 cost 1.7–2.0× what a gsm8k-based projection predicts). On KinD, one leg
+(#107) was re-run alone after its first deploy never stabilised, so that replicate ran last rather
+than in its crossover slot; the KinD report records it.
 
 ## What is deliberately not here
 

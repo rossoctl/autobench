@@ -166,12 +166,7 @@ L += ["## Why compare, when both reports already agree on method", "",
       "The two platforms ran the **same 13 legs from the same spec file, on the same image, with "
       "the same deterministic task selection**. The intent was ordinary cross-platform validation: "
       "confirm on a second cluster what the first one measured.", "",
-      "That is not what came back. The platforms agree on every *structural* finding and disagree "
-      "on every *magnitude* — including which plugin layer the cost belongs to. That disagreement "
-      "is the single most consequential result of the study, and it is **invisible in either "
-      "per-platform report alone**: each one reads as a clean, internally consistent answer. It is "
-      "the reason a per-task plugin figure must never be quoted without naming the cluster it was "
-      "measured on.", ""]
+      "<!--INTRO-->", ""]
 
 # --- same work -------------------------------------------------------------
 L += ["## First: did the two platforms do the same work?", "",
@@ -200,23 +195,27 @@ ub, nb_, tb, spb = tok_spread(B)
 xa = [A["legs"][n]["in_tok"] for n in sorted(A["legs"]) if legs[n].get("role", "").startswith("rep")]
 xb = [B["legs"][n]["in_tok"] for n in sorted(B["legs"]) if legs[n].get("role", "").startswith("rep")]
 xspread = max(abs(a - b) / min(a, b) for a, b in zip(xa, xb)) * 100
+identical_all = len(ua) == 1 and len(ub) == 1 and xspread == 0
 L += ["",
-      f"**The gsm8k legs are not byte-identical, within or across platforms** — worth stating "
-      f"plainly, because the per-platform reports' own identical-work checks flag this too. "
+      (f"**The gsm8k replicate legs are byte-identical, within and across platforms.** "
+       if identical_all else
+       f"**The gsm8k legs are not all byte-identical** — worth stating plainly, because the "
+       f"per-platform reports' own identical-work checks flag this too. ") +
       f"{A['label']} produced {len(ua)} distinct totals across its 10 replicate legs "
       f"({na} legs share the most common one) and {B['label']} produced {len(ub)} "
       f"({nb_} share the most common). Within-platform spread is "
       f"{spa:.1f}% ({A['label']}) and {spb:.1f}% ({B['label']}); the largest same-leg gap across "
       f"platforms is {xspread:.1f}%.", "",
-      f"The cause is benign and expected: the model is sampled rather than deterministic, so an "
-      f"agent occasionally spends one extra tool call on a task, and the two clusters front "
-      f"different LiteLLM gateways. What matters is the ratio of that confound to the effects being "
-      f"measured. A few percent of token drift cannot manufacture the differences below, which are "
-      f"**multiples** — up to 60x. The confound would matter if this document ranked presets against "
-      f"each other by a few percent, and it explicitly does not.", ""]
+      ("" if identical_all else
+       f"The cause is benign and expected: the model is sampled rather than deterministic, so an "
+       f"agent occasionally spends one extra tool call on a task. What matters is the ratio of that "
+       f"confound to the effects being measured. A few percent of token drift cannot manufacture the "
+       f"differences below, which are **multiples** of the baseline — up to <!--MAXMULT-->x. The "
+       f"confound would matter if this document ranked presets against each other by a few percent, "
+       f"and it explicitly does not."), ""]
 
 # --- the headline ----------------------------------------------------------
-L += ["## The headline: the platforms disagree about which layer costs anything", "",
+L += ["<!--HEADLINE-->", "",
       "Steady-state non-LLM time per task (`agent_call_s - llm_total_s`), replicates pooled, "
       "warm-up wave excluded.", "",
       f"| condition | {A['label']} median s | {B['label']} median s | ratio | "
@@ -264,11 +263,13 @@ else:
           f"{A['label']} and `{val_b:+.2f}` s on {B['label']}.", ""]
 
 # --- spread ---------------------------------------------------------------
+agree = bool(dom_a) and dom_a == dom_b
+maxmult = max(max(x[1] / base_a, x[2] / base_b) for x in rows_out)
 L += ["### It is variable cost, not a fixed penalty (a hypothesis worth falsifying)", "",
-      f"A ~{val_a:.0f} s per-task cost on one cluster and ~0.1 s on another invites an obvious "
-      "guess: a timeout or a failing retry somewhere in the sidecar's egress path. A timeout leaves "
-      "a signature — values piled on a round number with a small spread. The distributions falsify "
-      "it.", "",
+      f"A per-task step of `{val_a:+.2f}` s on {A['label']} and `{val_b:+.2f}` s on {B['label']} "
+      "invites an obvious guess: a timeout or a failing retry somewhere in the sidecar's egress path. "
+      "A timeout leaves a signature — values piled on a round number with a small spread. The "
+      "distributions test it.", "",
       f"| platform | condition | n | min | median | max | SD |", "|---|---|---:|---:|---:|---:|---:|"]
 for P in (A, B):
     for c in ("baseline", "auth-only", "full"):
@@ -277,31 +278,46 @@ for P in (A, B):
             continue
         L.append(f"| {P['label']} | {c} | {len(s)} | {min(s):.2f} | {st.median(s):.2f} | "
                  f"{max(s):.2f} | {st.pstdev(s):.2f} |")
-sd_a = st.pstdev(cond_samples(A, "auth-only") or [0])
-sb_auth = cond_samples(B, "auth-only") or [0]
-sb_full = cond_samples(B, "full") or [0]
+def pile(samples, width=0.1):
+    """Share of samples in the most populated `width`-s bin — a timeout would pile up in one."""
+    bins = {}
+    for v in samples:
+        bins[round(v / width)] = bins.get(round(v / width), 0) + 1
+    return max(bins.values()) / len(samples) if samples else 0.0
+
+
+spread = []
+for P in (A, B):
+    f = cond_samples(P, "full") or [0]
+    spread.append(f"on {P['label']} `full` spans {min(f):.2f}–{max(f):.2f} s around a median of "
+                  f"{st.median(f):.2f} s (SD {st.pstdev(f):.2f} s), its busiest 0.1-s bin holding "
+                  f"{pile(f):.0%} of tasks")
+piled = max(pile(cond_samples(P, "full") or [0]) for P in (A, B))
 L += ["",
-      f"On {A['label']} the sidecar conditions spread across roughly an order of magnitude "
-      f"(4.5–20 s for `auth-only`) with an SD of ~{sd_a:.1f} s — **broad and unimodal, with nothing "
-      f"piled at a round number**. That is the shape of contention and queueing, not of a fixed "
-      f"timeout, so the timeout hypothesis is dead.", "",
-      f"{B['label']} deserves a separate remark rather than a reassuring one-liner. Its `auth-only` "
-      f"distribution is genuinely tight (SD {st.pstdev(sb_auth):.2f} s), but its `full` distribution "
-      f"is **not**: median {st.median(sb_full):.2f} s against a max of {max(sb_full):.2f} s, SD "
-      f"{st.pstdev(sb_full):.2f} s. That heavy right tail is the IBAC judge, which is itself an LLM "
-      f"call and therefore inherits inference latency variance. So on the quiet cluster the judge's "
-      f"own variability becomes the dominant source of spread, where on the busy cluster it is "
-      f"buried under cluster contention.", "",
-      "Two consequences. First, the mechanism to chase on the shared cluster is *why the intercepted "
-      "path is slow and jittery there*, not a misconfigured timeout — a different investigation. "
-      "Second, on both platforms the spread grows with the median, so enabling the sidecar costs "
+      "In the IBAC conditions " + "; ".join(spread) + ". " +
+      ("**Broad, with nothing piled at a round number** — the shape of variable latency, not of a "
+       "fixed timeout, so the timeout hypothesis does not survive."
+       if piled < 0.25 else
+       "⚠️ **One bin holds a quarter of the tasks or more** — that is what a fixed timeout looks "
+       "like, so the timeout hypothesis is NOT ruled out here; inspect that bin before quoting."), "",
+      "The heavy right tail has an obvious owner: the IBAC judge is itself an LLM call, so the "
+      "conditions that consult it inherit inference latency variance. Two consequences. First, the "
+      + ("cost should move with the judge's model and gateway rather than with the cluster — "
+         "consistent with it landing in the same layer on both. "
+         if agree else
+         "mechanism to chase on the cluster that pays elsewhere is *why its intercepted path is "
+         "slow and jittery*, not a misconfigured timeout — a different investigation. ")
+      + "Second, on both platforms the spread grows with the median, so engaging the judge costs "
       "**reproducibility** as well as latency, which matters for anyone using these benchmarks to "
       "detect regressions.", ""]
 
 # --- what reproduced ------------------------------------------------------
 L += ["## What reproduced exactly: every structural finding", "",
-      "The magnitudes did not travel. The *structure* did — and the structural findings are the "
-      "ones with consequences.", ""]
+      ("The magnitudes are close rather than equal; the *structure* reproduced exactly — and the "
+       "structural findings are the ones with consequences."
+       if agree else
+       "The magnitudes did not travel. The *structure* did — and the structural findings are the "
+       "ones with consequences."), ""]
 
 # serial diagnostic
 diag = [n for n in ORDER if legs[n].get("role") == "serial-diagnostic"]
@@ -411,29 +427,53 @@ for c in CONDITIONS:
     L.append(f"| {c} | {fmt(vs[0], 3)} | {fmt(vs[1], 3)} |")
 med_a = st.median([v[0] for v in dd.values() if v[0] is not None])
 med_b = st.median([v[1] for v in dd.values() if v[1] is not None])
+# The same resolvability rule as gen-plugin-study.py, so the two reports cannot disagree about which
+# steps are real: between-deploy SD from the median |Δ| (σ ≈ MAD/0.6745/√2), and a step must exceed 3σ.
+floor_a = 3 * med_a / 0.6745 / 2 ** 0.5
+floor_b = 3 * med_b / 0.6745 / 2 ** 0.5
 L += ["",
-      f"Typical between-deploy \\|Δ\\| is **{med_a:.2f} s** on {A['label']} and **{med_b:.3f} s** on "
-      f"{B['label']}. On both platforms the noise floor scales with the platform's own cost level, "
-      f"and on both it **exceeds every preset-to-preset marginal step except the one dominant "
-      f"layer**. The conclusion is the same on each cluster and worth stating plainly: with two "
-      f"deploys per condition, a *ranking of presets* is not available at any task count. Adding "
-      f"tasks tightens the wrong interval.", ""]
+      f"Typical between-deploy \\|Δ\\| is **{med_a:.3f} s** on {A['label']} and **{med_b:.3f} s** on "
+      f"{B['label']}, so a step must exceed **{floor_a:.2f} s** and **{floor_b:.2f} s** respectively "
+      f"(three between-deploy SDs, the rule the per-platform reports use) to count as resolved. "
+      + "".join(
+          f"On {P['label']} the marginal steps that clear that floor are "
+          f"{', '.join(f'`{c}` ({v:+.2f} s)' for c, v in st_) or 'none'}. "
+          for P, st_ in ((A, [(x[0], x[3]) for x in rows_out if x[3] is not None and abs(x[3]) > floor_a]),
+                         (B, [(x[0], x[4]) for x in rows_out if x[4] is not None and abs(x[4]) > floor_b])))
+      + "Every other step is inside the noise, so with two deploys per condition a *ranking of "
+      "presets* beyond those is not available at any task count. Adding tasks tightens the wrong "
+      "interval.", ""]
+
+extra_steps = []
+for P, idx, floor, dom in ((A, 3, floor_a, dom_a), (B, 4, floor_b, dom_b)):
+    for x in rows_out:
+        if x[idx] is not None and abs(x[idx]) > floor and x[0] != dom:
+            extra_steps.append(f"`{x[0]}` on {P['label']} ({x[idx]:+.2f} s against a {floor:.3f} s floor)")
 
 # --- so what --------------------------------------------------------------
 L += ["## What this means for how plugin cost gets quoted", "",
       "**Portable across platforms (quote these):**", "",
       "- Every serial tool call is authorized; TTL caching is ruled out. Reproduced independently.",
       "- The judged-call ratio for IBAC presets is ~1, and 0 for presets that do not engage IBAC.",
-      "- Enabling the AuthBridge sidecar has a cost that is large relative to the no-sidecar "
-      "baseline and clearly resolvable on both clusters.",
-      "- Beyond the one dominant layer, preset-to-preset differences are below the between-deploy "
-      "noise floor on both clusters.",
+      (f"- The cost enters at **{dom_a}** on both clusters (`{val_a:+.2f}` s and `{val_b:+.2f}` s "
+       f"per task) and is clearly resolvable on both."
+       if agree else
+       "- Enabling the AuthBridge sidecar has a cost that is large relative to the no-sidecar "
+       "baseline and clearly resolvable on both clusters."),
+      ("- Beyond the one dominant layer, preset-to-preset differences are below the between-deploy "
+       "noise floor on both clusters."
+       if not extra_steps else
+       "- Beyond the one dominant layer, preset-to-preset differences are below the between-deploy "
+       "noise floor, except " + "; ".join(extra_steps) + " — resolvable there, but small, and not "
+       "reproduced on the other cluster."),
       "- Per-tool-call cost is **not** a cross-benchmark constant.", "",
       "**Not portable (do not quote without naming the cluster):**", "",
       f"- Any absolute per-task second figure. The same condition on the same image differs by "
       f"{min(x[1] / x[2] for x in rows_out if x[2]):.0f}–"
       f"{max(x[1] / x[2] for x in rows_out if x[2]):.0f}x between these two clusters.",
-      "- *Which layer* the cost belongs to. The two clusters disagree, and each is right locally.",
+      ("- The exact size of each step: close on these two clusters, but measured on two only."
+       if agree else
+       "- *Which layer* the cost belongs to. The two clusters disagree, and each is right locally."),
       "- Any ranking of presets against each other.", "",
       "The practical rule this suggests: measure plugin overhead **on the cluster whose numbers you "
       "intend to quote**, using this spec file, and treat the structural findings as the only "
@@ -455,6 +495,24 @@ for i, P in enumerate(PS):
     L.append(f"  '{P['label']}' {PLATS[i]['run']}{j}{sep}{cont}")
 L += ["```", ""]
 
+intro = ("That is what came back, and it is worth saying because it is not guaranteed. The "
+         f"platforms agree on every *structural* finding **and** on which plugin layer the cost "
+         f"belongs to — **{dom_a}** on both — and they differ only in magnitude, by "
+         f"{min(x[1] / x[2] for x in rows_out if x[2]):.1f}–{max(x[1] / x[2] for x in rows_out if x[2]):.1f}x. "
+         "Attribution is not guaranteed to travel, which is why this report checks it rather than "
+         "assuming it. Still name the cluster beside any per-task figure: the seconds are close here, "
+         "not equal."
+         if agree else
+         "That is not what came back. The platforms agree on every *structural* finding and disagree "
+         "on every *magnitude* — including which plugin layer the cost belongs to. That disagreement "
+         "is the single most consequential result of the study, and it is **invisible in either "
+         "per-platform report alone**: each one reads as a clean, internally consistent answer. It is "
+         "the reason a per-task plugin figure must never be quoted without naming the cluster it was "
+         "measured on.")
+headline = ("## The headline: both platforms put the cost in the same layer, at different magnitudes"
+            if agree else "## The headline: the platforms disagree about which layer costs anything")
+L = [x.replace("<!--INTRO-->", intro).replace("<!--HEADLINE-->", headline)
+      .replace("<!--MAXMULT-->", f"{maxmult:.0f}") for x in L]
 doc = "\n".join(L)
 doc = doc.replace("<!--TOC-->", _toc(doc))
 OUT.write_text(doc)

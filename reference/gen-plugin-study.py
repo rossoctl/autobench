@@ -329,13 +329,15 @@ for n in GS:
     o = ok(rr)
     models = sorted({x.get("model") for x in rr if x.get("model")}) or ["—"]
     par = sorted({x.get("num_parallel") for x in rr})
-    s = (sum(x.get("llm_input_tokens") or 0 for x in o),
-         sum(x.get("llm_count") or 0 for x in o),
-         sum(x.get("tool_count") or 0 for x in o))
+    # Every row, not only OK ones: a wrong answer is a failed evaluation of the SAME work, and
+    # excluding it made two legs with identical work read as different.
+    s = (sum(x.get("llm_input_tokens") or 0 for x in rr),
+         sum(x.get("llm_count") or 0 for x in rr),
+         sum(x.get("tool_count") or 0 for x in rr))
     sig[n] = s
     L.append("| %d | %d | %s | %s | %d | %d | %d | %d | %d | %d | %s | `%s` |" % (
         n, POS[n], cond(n), legs[n]["rep"], len(rr), len(o), s[0],
-        sum(x.get("llm_output_tokens") or 0 for x in o), s[1], s[2],
+        sum(x.get("llm_output_tokens") or 0 for x in rr), s[1], s[2],
         ",".join(str(x) for x in par), models[0]))
 same = len(set(sig.values())) == 1
 L += ["",
@@ -606,9 +608,8 @@ L.append("")
 if sd_dep:
     L += [f"Median \\|Δ\\| between two deploys of the *same* condition is "
           f"**{st.median(dep_diffs):.2f} s** (max {max(dep_diffs):.2f} s), implying a between-deploy "
-          f"SD of roughly **{sd_dep:.2f} s**. Compare that with the marginal effects in the table "
-          "above — every preset-to-preset step is *smaller than the noise between two deploys of one "
-          "preset*.", "",
+          f"SD of roughly **{sd_dep:.2f} s**. A step is resolvable only if it exceeds about three "
+          f"times that (**{3 * sd_dep:.2f} s**) — compare the marginal effects in the table above.", "",
           "So the correct reading of this experiment is:", ""]
     steps = [(a, b, st.median(pool[b]) - st.median(pool[a]))
              for a, b in zip(CONDS, CONDS[1:]) if pool.get(a) and pool.get(b)]
