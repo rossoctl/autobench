@@ -6,17 +6,16 @@ order, each rung costing roughly an order of magnitude more than the one below i
 money. Each also stresses a different part of the agent stack. This note explains what each is, what a
 single task actually involves, and what they look like in practice.
 
-All the "measured" figures below come from our own **v1.28** runs of 2026-09-15 (282 tasks attempted
-across two clusters: OpenShift `ykt3→ykt2` and single-node KinD), not from the benchmarks' published
-papers. Those runs are published under
-[`docs/results/v1.28-2026-09-15/`](results/v1.28-2026-09-15/), and every figure here is traceable to
+All the "measured" figures below come from our own **v1.35** runs of 2026-10-04 (282 tasks attempted
+on two single-cluster installs: OpenShift on `ykt3` and single-node KinD), not from the benchmarks'
+published papers. Those runs are published under
+[`docs/results/v1.35-2026-10-04/`](results/v1.35-2026-10-04/), and every figure here is traceable to
 their artifacts.
 
-Per-task averages are computed over all **267 task rows** the two matrices produced, **none of which
-lost telemetry** — so unlike earlier measurements there is no intact/damaged split to correct for.
-The 15 missing rows are all appworld tasks killed by the 600 s per-task timeout, and a killed task
-leaves no `report.ndjson` row at all: **pass rates are over the 282 tasks attempted, while token and
-latency figures describe the 267 that finished.**
+Per-task averages are computed over all **281 task rows** the two matrices produced, **none of which
+lost telemetry**. The one missing row is an appworld task killed by the 600 s per-task timeout, and a
+killed task leaves no `report.ndjson` row at all: **pass rates are over the 282 tasks attempted, while
+token and latency figures describe the 281 that finished.**
 
 <!-- Regenerate this list: python3 reference/gen_toc.py docs/BENCHMARKS_PRIMER.md -->
 <!-- toc -->
@@ -48,16 +47,16 @@ latency figures describe the 267 that finished.**
 | What it tests | multi-step arithmetic reasoning | multi-turn dialogue + tool use | long-horizon app automation |
 | **Model we run it on** | **gpt-5-mini** (or gpt-4.1) | **claude-sonnet-5** | **gemini-2.5-pro** |
 | Its rate, in / out $ per 1M | 0.25 / 2.00 | 1.52 / 7.60 | 1.25 / 10.00 |
-| Task rows measured | 172 of 172 | 60 of 60 | 35 of 50 (15 timed out) |
+| Task rows measured | 172 of 172 | 60 of 60 | 49 of 50 (1 timed out) |
 | Rows with lost telemetry | 0 | 0 | 0 |
-| **Pass rate** | **0.97** | **0.83** | **0.00** |
-| Input tokens / task | **341** | **90,902** | **269,953** |
-| Output tokens / task | 180 | 2,061 | 25,140 |
-| **Cost / task** ‡ | **$0.00055** | **$0.154** | **$0.589** |
-| LLM calls / task † | 1.1 | 11.4 | 29.2 |
-| Tool calls / task | 1.1 | 11.4 | 14.6 |
-| Median task latency | **4.9s** | **84s** | **264s** |
-| Slowest task seen | 39s | 136s | 592s |
+| **Pass rate** | **0.98** | **0.90** | **0.00** |
+| Input tokens / task | **343** | **87,935** | **291,509** |
+| Output tokens / task | 170 | 2,071 | 26,950 |
+| **Cost / task** ‡ | **$0.00053** | **$0.149** | **$0.634** |
+| LLM calls / task † | 1.1 | 11.1 | 30.2 |
+| Tool calls / task | 1.1 | 11.1 | 14.9 |
+| Median task latency | **2.5s** | **48s** | **222s** |
+| Slowest task seen | 15s | 75s | 591s |
 | Task pool | 1,319 (`main`/`test` split) | 114 (`retail` domain) | 168 (`test_normal` split) |
 | `task_id` format | integer (`0`, `1`, …) | integer (`0`, `1`, …) | `21abae1_1` |
 
@@ -65,9 +64,9 @@ latency figures describe the 267 that finished.**
 the same one, so the dollar row is a product of tokens *and* a rate and it does **not** track the
 token ratios. See [What a run costs](#what-a-run-costs) for the rate card and why.
 
-The headline is the **scale gap**: a tau2 task costs ~267× the input tokens of a gsm8k task, and an
-appworld task ~792×. Choose accordingly — a 50-task gsm8k run is about a minute; a 20-task appworld
-run is 30–45 minutes and millions of tokens.
+The headline is the **scale gap**: a tau2 task costs ~256× the input tokens of a gsm8k task, and an
+appworld task ~850×. Choose accordingly — a 50-task gsm8k run is well under a minute; a 20-task
+appworld run is about 25 minutes and millions of tokens.
 
 ---
 
@@ -101,8 +100,8 @@ the simplest possible agentic loop.
 gsm8k fails, the problem is infrastructure (deploy, auth, LLM reachability, telemetry), not agent
 capability. It is our canary.
 
-**What to expect.** ~0.97 pass rate, ~5s per task, ~341 input tokens. Deterministic enough that the
-same task produces the *same token count* on different clusters — **6 of the 12 legs in the v1.28 pair
+**What to expect.** ~0.98 pass rate, ~2.5s per task, ~343 input tokens. Deterministic enough that the
+same task produces the *same token count* on different clusters — **7 of the 12 legs in the v1.35 pair
 have byte-identical input-token totals across OpenShift and KinD** — and we use that as a correctness
 check that two environments are genuinely comparable.
 
@@ -131,48 +130,38 @@ current tau2-bench figure or leaderboard entry. Like the domain, **the version i
 artifact**; it is only readable out of the image. The one thing the pin buys is reproducibility — a
 tag does not drift when `:latest` is re-pulled.
 
-> **The user simulator's own model calls used to be cached inside the MCP pod, and that cache broke
-> tasks outright.** `tau2_shim.py` re-enables the Exgentic LiteLLM disk cache at import — explicitly
-> undoing τ²-bench's own decision to disable it — so simulator completions landed in a SQLite cache
-> shared by every session for the pod's whole life. As of litellm 1.103.1 any *hit* on that cache
-> raises `ModuleNotFoundError: No module named 'soundfile'` from inside litellm's cache-hit
-> bookkeeping, tau2 aborts ~70 ms in, and because the MCP action executor never learns, the task
-> surfaces 600 s later as `Failed to execute action: timed out`. The pod's own startup primes the
-> cache on **task 0** (it opens a dummy session on the first task to enumerate action types), so task
-> 0 failed on every run; on a re-used pod, so did every task a previous run had completed. Measured
-> on a 4-task leg: tasks 0 and 1 errored at 600 s, tasks 2 and 3 ran normally.
+> **The user simulator's own model calls are deliberately not cached.** `tau2_shim.py` re-enables
+> the Exgentic LiteLLM disk cache at import — explicitly undoing τ²-bench's own decision to disable
+> it — so without a pin, simulator completions land in a SQLite cache shared by every session for the
+> pod's whole life. In the litellm the image ships, any *hit* on that cache raises
+> `ModuleNotFoundError: No module named 'soundfile'` from inside litellm's cache-hit bookkeeping,
+> tau2 aborts ~70 ms in, and because the MCP action executor never learns, the task surfaces 600 s
+> later as `Failed to execute action: timed out`. The pod's own startup primes the cache on **task 0**
+> (it opens a dummy session on the first task to enumerate action types), so task 0 would fail on
+> every run, and on a re-used pod every task a previous run had completed.
 >
 > Our tau2 `tool_env` therefore pins **`EXGENTIC_LITELLM_CACHING=false`**, which makes the broken
-> code path unreachable. Because `tool_env` is baked into the Service image, the pin takes effect
-> only from **image `v1.32`** — on an earlier image the pin is not there however recent the repo is.
-> Verified on `v1.32` on both architectures: task 0 runs at `llm_count 10` / 71k input /
-> `tool_total_s 15.3` on arm64 and `llm_count 9` / 41k / `8.9` on amd64, against `llm_count 1` /
-> 5054 / `600.1` on the image before it. The amd64 leg matters because that is the platform the
-> 600 s failures were first measured on.
->
-> The fingerprint of an affected run is therefore `llm_count 1`, `llm_input_tokens 5054` and
-> `tool_total_s ≈ 600.1` on the errored tasks — if you see it, check the running image tag rather
-> than the benchmark. Pass rates from the 2026-09-30 tau2 runs, which predate `v1.32`, need a
-> **`total − 1`** denominator (fresh pod) and should not be compared with anything; the matrices in
-> `docs/results/` predate the litellm version that introduced this.
+> code path unreachable. `tool_env` is baked into the Service image, so a change to it takes effect
+> only after an image rebuild. The fingerprint of the failure, should the pin ever go missing, is
+> `llm_count 1`, `llm_input_tokens 5054` and `tool_total_s ≈ 600.1` on the errored tasks.
 
 **The key architectural difference.** tau2 introduces a **second LLM — a user simulator** that plays
 the customer. So each task involves two models talking to each other, plus tool calls. That single
-fact explains most of tau2's profile: ~11 LLM calls and ~11 tool calls per task, and ~91k input
+fact explains most of tau2's profile: ~11 LLM calls and ~11 tool calls per task, and ~88k input
 tokens because the whole growing conversation is re-sent on every turn.
 
 **What it stresses.** Conversation state, tool selection over many turns, and the agent's ability to
 stay on task. It is also the first benchmark where **model choice dominates the result** — see below.
 
-**What to expect.** ~0.83 pass rate with claude-sonnet-5 and ~84s median per task, in a fairly narrow
-band — the fastest task in the v1.28 pair took 44s and the slowest 136s, so tau2 does not have the
+**What to expect.** ~0.90 pass rate with claude-sonnet-5 and ~48s median per task, in a fairly narrow
+band — the fastest task in the v1.35 pair took 24s and the slowest 75s, so tau2 does not have the
 long tail appworld does. Results are inherently a little noisy run-to-run because episodes are
 nondeterministic: inside that single pair the same 10 tasks scored **0.90 on one cluster and 1.00 on
-the other**, and the same 20 tasks 0.75 vs 0.80. A 0.05–0.10 gap across a 10–20 task run is normal
+the other**, and the same 20 tasks 0.90 vs 0.85. A 0.05–0.10 gap across a 10–20 task run is normal
 variance, not a regression.
 
 > **Model sensitivity is dramatic here.** On the same 10 tasks, tau2 scored **0.1 with gpt-5-mini**
-> and **0.9 with claude-sonnet-5** (a one-off comparison from an earlier image, not part of the v1.28
+> and **0.9 with claude-sonnet-5** (a one-off comparison on an earlier image, not part of the v1.35
 > pair — the model has been pinned ever since, so no current matrix re-measures it). That is not a
 > small tuning difference — it is the benchmark being
 > effectively unsolvable for one model and mostly solved by another. The Service therefore pins tau2
@@ -267,10 +256,10 @@ because they carry every tool name and description while the assistant call carr
 | benchmark | LLM calls / task | of which are tool-selection calls | input tokens spent selecting | output tokens spent selecting |
 |---|---|---|---|---|
 | **gsm8k** | 1.1 | 0.0 (0%) | 0% | 0% |
-| **tau2** | 11.4 | 0.0 (0%) | 0% | 0% |
-| **appworld** | 29.2 | 14.6 (50%) | 68% | 81% |
+| **tau2** | 11.1 | 0.0 (0%) | 0% | 0% |
+| **appworld** | 30.2 | 15.1 (50%) | 67% | 79% |
 
-Measured over the **266 task rows that carry chat spans** in the v1.28 matrices, both platforms. `gsm8k` and `tau2` expose fewer than the agent's `max_selected_tools = 30` and so measure **exactly zero** selection calls — they are the control for the detector. `appworld` is above the threshold and pairs **1:1**: 511 selection calls against 511 assistant calls, every turn. A selection call averages **12,602 input tokens** against **5,888** for the assistant call it precedes — it carries every tool name and description, while the assistant call carries only the 30 winners' schemas. The split is stable across clusters: 67% on OpenShift (ykt3 Service, ykt2 workloads) and 70% on KinD (single-node local).
+Measured over the **281 task rows that carry chat spans** in the two matrices, both platforms. `gsm8k` and `tau2` expose fewer than the agent's `max_selected_tools = 30` and so measure **exactly zero** selection calls — they are the control for the detector. `appworld` is above the threshold and pairs **1:1**: 739 selection calls against 739 assistant calls, every turn. A selection call averages **13,003 input tokens** against **6,326** for the assistant call it precedes — it carries every tool name and description, while the assistant call carries only the 30 winners' schemas. The split is stable across clusters: 67% on OpenShift (ykt3, single-cluster) and 67% on KinD (single-node local).
 <!-- /shortlist -->
 
 Two things follow. Read appworld's token and dollar figures as **mostly a tool-selection bill**, not a
@@ -327,36 +316,29 @@ A few things that trip people up:
 
 - **`pass_rate` = `evaluated_pass / total`.** A task that errors before evaluation counts as not
   passed, so a low pass rate can mean "failed the task" *or* "never got to be judged".
-- **† The `llm` column changed meaning between agent versions, so never compare across it.** The
-  table above is measured on `exgentic 0.3.5.dev146` and its `llm` figures count real calls
-  **one-for-one, with no offset to subtract**. Agents up to `0.3.5.dev131` issued a `max_tokens=1`
-  capability probe before the real work and counted it as a `chat` span, so ***their* gsm8k `llm=2`
-  means one real call** — subtract one per task before comparing an older number with these. As of
-  `0.3.5.dev145` the probe is *replaced* by an unbilled `GET /v1/models` reachability check that emits
-  no `chat` span, verified absent across all **1,895 `chat` spans** of this v1.28 pair (1,122
-  OpenShift + 773 KinD, all four model classes): not one carries `request_max_tokens = 1`. (That
-  replacement had a sharp edge of its own — it ran per task with a hard 10 s cap and no retry, and on
-  a high-latency gateway it failed tasks outright, killing 12 of 141 KinD tasks on `dev145`. Fixed in
-  `dev146`, which these runs used, and both matrices record **zero** probe failures. See Bug 3 in
-  `docs/exgentic-agent-bug-report-20260901.md`.) The practical trap: **do not compare `llm` counts
-  across runs that straddle the change** — a leg will look like it made one fewer call per task when
+- **† The `llm` column counts real model calls one-for-one.** Older agents (up to
+  `exgentic 0.3.5.dev131`) issued a `max_tokens=1` capability probe before the real work and counted
+  it as a `chat` span, so *their* gsm8k `llm=2` meant one real call. The current agent sends no such
+  probe — none of the **2,338 `chat` spans** of the v1.35 pair (1,183 OpenShift + 1,155 KinD, all four
+  model classes) carries `request_max_tokens = 1`. The practical trap: **do not compare `llm` counts
+  with a run made on an agent that old** — a leg would look like it made one fewer call per task when
   only the instrumentation changed.
 - **Input tokens grow faster than output.** Every LLM call re-sends the whole conversation, so
   cumulative input scales roughly with the square of the turn count while output is bounded per
   call. That is why tau2/appworld input *totals* dwarf output.
-- **But output is usually the more *variable* direction** — OUT CV > IN CV in **15 of the 22 v1.28
+- **But output is usually the more *variable* direction** — OUT CV > IN CV in **16 of the 22 v1.35
   legs that ran more than one task**. This corrects an earlier claim here that input variance is
   always wider; it is not. On single-turn gsm8k the prompt is near-constant (IN CV 0.06–0.09 on the
-  gpt-5-mini legs that ran clean) while answer length swings with how much the model reasons (OUT CV
-  0.52–0.86), so output varies ~8× more in relative terms. **Within one benchmark the model decides
+  gpt-5-mini legs) while answer length swings with how much the model reasons (OUT CV 0.55–0.99), so
+  output varies ~10× more in relative terms. **Within one benchmark the model decides
   the shape**: the gpt-4.1 leg needs ~3 tool round-trips per task, so its input varies too (IN CV
-  0.39–0.44 on the same five tasks) — which is why the comparison report ranges CVs per model, not
+  0.38–0.44 on the same five tasks) — which is why the comparison report ranges CVs per model, not
   per benchmark. **One errored task is enough to break that
-  IN range**: OCP leg #6 (`ibac-only`, 2 of 5 tasks errored) carries a row with `llm_input_tokens = 0`
-  from a task that failed before its first model call, which lifts that leg alone to IN CV 0.51. That
-  is the legitimate zero — not the telemetry bug two bullets down — so read the error count beside a
-  CV before believing it. Only long-horizon **appworld** inverts it in every leg
-  (IN CV 0.15–0.69 against OUT CV 0.13–0.52), because its tasks differ enormously in turn count and
+  IN range**: a task that fails before its first model call still leaves a row, with
+  `llm_input_tokens = 0`, and a single such row on a 5-task leg lifts its IN CV several-fold. That is
+  the legitimate zero — not the telemetry bug two bullets down — so read the error count beside a CV
+  before believing it (the v1.35 pair has no such row). Only long-horizon **appworld** inverts it in
+  every leg (IN CV 0.57–0.88 against OUT CV 0.40–0.62), because its tasks differ enormously in turn count and
   compounding context then dominates. Don't assume a direction — check the CV columns.
 - **Task selection is deterministic.** A run takes the first `max_tasks` tasks, so the same
   `task_id` is the same task across runs and clusters, and a smaller run's tasks are a prefix of a
@@ -375,7 +357,7 @@ A few things that trip people up:
   zero-check therefore missed every tau2 and appworld case. Now that the probe is gone a damaged task
   drops to zero `chat` spans, so `llm = 0` catches more than it used to — but the structural pair
   test is the one that holds across agent versions, and it is what the report generators use.
-  **This defect is fixed as of `0.3.5.dev145`** — a warm agent now keeps full token attribution,
+  **This defect is fixed in the current agent** — a warm agent now keeps full token attribution,
   measured over four reuse legs. We keep deploying fresh per run anyway, but for an unrelated reason
   (a newly created pod re-pulls `:latest`; a long-lived one serves a stale digest indefinitely).
   Details: `docs/exgentic-agent-bug-report-20260901.md`.
@@ -390,13 +372,13 @@ A few things that trip people up:
   turn off (`EXGENTIC_LITELLM_CACHING=false` is pinned and changes nothing), and **latency is the
   wrong detector** — one measured replay took 3.0 s, the same as a miss. Compare response `id`s. To
   get independent legs, space them: `BM_CACHE_GAP` in `reference/run-12.py` rests each (benchmark,
-  model) prompt set for 900 s, which is what the v1.28 matrices were run with.
+  model) prompt set for 900 s, which is what the v1.35 matrices were run with.
 - **One collision survives the spacing, on tau2 only.** Spacing works between legs; tau2's *opening*
   call collides between tasks *inside* a leg, seconds apart, where no gap can reach. It is
-  byte-identical on all 60 v1.28 tau2 tasks across both platforms (5054 input tokens) because the
+  byte-identical on every tau2 task of the v1.35 pair, both platforms (5054 input tokens), because the
   prompt carries no task text — a tau2 scenario lives in the MCP server's user simulator, which only
   speaks after the agent opens, so the agent's first call cannot tell the tasks apart. One generation
-  serves the leg. It is worth ~5–6% of input, ~2–3% of output and ~2–3% of chat latency on a tau2
+  serves the leg. It is worth ~6% of input, ~2–3% of output and ~1–2% of chat latency on a tau2
   leg, zero elsewhere, and it lands the same way on both clusters — so cross-platform comparisons
   hold, but a tau2 first-call latency is not a measurement.
 
@@ -423,56 +405,54 @@ study ([docs/PLUGIN_OVERHEAD.md](PLUGIN_OVERHEAD.md)):
 ## What a run costs
 
 The [at-a-glance](#at-a-glance) table gives the raw per-task counts. These are the *derived* figures
-you need to budget with — same 267 rows, both platforms pooled:
+you need to budget with — same 281 rows, both platforms pooled:
 
 | per task | gsm8k | tau2 | appworld |
 |---|---:|---:|---:|
 | **model (the benchmark's default)** | **`Azure/gpt-5-mini`** | **`aws/claude-sonnet-5`** | **`gemini-2.5-pro`** |
 | its rate, in / out $ per 1M | 0.25 / 2.00 | 1.52 / 7.60 | 1.25 / 10.00 |
-| **total tokens** | **520** | **92,963** | **295,093** |
-| × a gsm8k task, in **tokens** | 1× | 178× | 564× |
-| **cost at our gateway's rates** | **$0.00055** | **$0.154** | **$0.589** |
-| × a gsm8k task, in **dollars** | 1× | 279× | 1,069× |
-| cost of 100 tasks | $0.06 | $15.38 | $58.88 |
-| input share of tokens | 66% | 98% | 92% |
-| input share of **cost** | 31% | 90% | 57% |
-| share of task time inside model calls | 90% | 58% | 96% |
-| tokens per **passed** task | 537 | ~112 K | no finite value |
+| **total tokens** | **513** | **90,006** | **318,459** |
+| × a gsm8k task, in **tokens** | 1× | 175× | 621× |
+| **cost at our gateway's rates** | **$0.00053** | **$0.149** | **$0.634** |
+| × a gsm8k task, in **dollars** | 1× | 282× | 1,195× |
+| cost of 100 tasks | $0.05 | $14.94 | $63.39 |
+| input share of tokens | 67% | 98% | 92% |
+| input share of **cost** | 32% | 89% | 57% |
+| share of task time inside model calls | 82% | 60% | 95% |
+| tokens per **passed** task | 525 | ~100 K | no finite value |
 
 **Read the model row first.** Every dollar figure in this table is tokens × *that* model's rate, and
 no two rungs share a model — so a figure here transfers to a different model only after you recompute
 it, and the ratio rows below are as much a statement about the price list as about the benchmarks.
 
-**Money amplifies the difficulty ladder rather than tracking it.** A tau2 task is 178× a gsm8k task in
-tokens but **279×** in dollars, and appworld 564× in tokens but **1,069×** — because climbing a rung
+**Money amplifies the difficulty ladder rather than tracking it.** A tau2 task is 175× a gsm8k task in
+tokens but **282×** in dollars, and appworld 621× in tokens but **1,195×** — because climbing a rung
 also switches you to a dearer model, so the rungs are spaced *wider* in dollars than in tokens. Any
 budget scaled from the token ratios is short by roughly 1.6–1.9×.
 
 **Read the cost share, not the token share, to find the cost driver.** They disagree, because output
-is priced 4–8× input everywhere (see the rate card below). Input is 66% of gsm8k's *tokens* but only
-31% of its *bill*; for appworld, 92% of tokens and 57% of the bill. Only tau2 is genuinely
-input-dominated in money at 90%, and it is the one benchmark where a cheaper-input model really does
+is priced 4–8× input everywhere (see the rate card below). Input is 67% of gsm8k's *tokens* but only
+32% of its *bill*; for appworld, 92% of tokens and 57% of the bill. Only tau2 is genuinely
+input-dominated in money at 89%, and it is the one benchmark where a cheaper-input model really does
 beat a terser one. Everywhere else, verbosity is the thing to control.
 
 **Tokens per passed task** (per-task cost ÷ pass rate) is the honest unit when you are comparing
 options rather than sizing a run: a model that halves your token use and halves your pass rate has
 gained you nothing, and appworld at 0.00 has no finite cost per success at all.
 
-The dollar rows cover 266 priced rows rather than 267 — one task on OpenShift leg #6 died before its
-first model call, so it has tokens of zero and no cost, which is also why its 523-token mean rounds a
-hair above the 520 in the token row. The two ratio rows divide by that 523, so they read 178× and 564×
-where a division by the rounded 520 would give 179× and 567×.
+Every one of the 281 rows is priced — no task died before its first model call — so the ratio rows
+divide by exactly the 513-token gsm8k task in the token row.
 
 ### Two figures to read before budgeting
 
 Generated from the same artifacts as the table above, by
-`uv run --with matplotlib python reference/gen-cost-charts.py results/v1.28-dev146/run12-{ocp,kind}-dev146.json`
+`uv run --with matplotlib python reference/gen-cost-charts.py /tmp/autobench/run12-{ykt3,kind}-v135-20261004.json`
 — along with four more, in
 [DEVELOPER_GUIDE.md § Token- and cost-efficiency in six figures](DEVELOPER_GUIDE.md#token--and-cost-efficiency-in-six-figures):
 cost composition, model choice on identical tasks, where a matrix's bill goes by leg, and what the
 IBAC judge adds.
 
-<!-- Regenerate: uv run --with matplotlib python reference/gen-cost-charts.py results/v1.28-dev146/run12-*.json -->
+<!-- Regenerate: uv run --with matplotlib python reference/gen-cost-charts.py /tmp/autobench/run12-{ykt3,kind}-v135-20261004.json -->
 <!-- charts -->
 
 #### Figure 1 — Money climbs the ladder faster than tokens
@@ -518,34 +498,34 @@ token count and lose on the bill.
 Everything in this section is derived — regenerate it rather than editing a number:
 
 ```sh
-python3 reference/gen-cost-analysis.py /tmp/autobench/run12-{ocp,kind}-dev146.json
+python3 reference/gen-cost-analysis.py /tmp/autobench/run12-{ykt3,kind}-v135-20261004.json
 ```
 
 ### What one leg costs
 
-Measured totals from the v1.28 legs, so you can size a run before starting it:
+Measured totals from the v1.35 legs, so you can size a run before starting it:
 
 | leg | tokens (OpenShift) | $ (OpenShift) | tokens (KinD) | $ (KinD) |
 |---|---:|---:|---:|---:|
-| gsm8k, 1 task | 470 | $0.0004 | 790 | $0.0010 |
-| gsm8k, 10 tasks | 5.1 K | $0.0046 | 5.1 K | $0.0047 |
-| gsm8k, 50 tasks at `p=4` | 25 K | $0.0225 | 24 K | $0.0212 |
-| tau2, 10 tasks | 1.01 M | $1.66 | 1.04 M | $1.73 |
-| tau2, 20 tasks at `p=4` | 1.74 M | $2.90 | 1.78 M | $2.94 |
-| appworld, 5 tasks | 1.49 M | $2.79 | 0.93 M | $1.90 |
-| appworld, 20 tasks at `p=4` | 5.71 M | $11.52 | 2.20 M | $4.40 |
-| **the whole 12-run matrix** | **10.0 M** | **$18.91** | **6.0 M** | **$11.02** |
+| gsm8k, 1 task | 406 | $0.0003 | 406 | $0.0003 |
+| gsm8k, 10 tasks | 5.1 K | $0.0047 | 5.1 K | $0.0046 |
+| gsm8k, 50 tasks at `p=4` | 24 K | $0.0199 | 25 K | $0.0219 |
+| tau2, 10 tasks | 0.96 M | $1.59 | 0.94 M | $1.56 |
+| tau2, 20 tasks at `p=4` | 1.74 M | $2.88 | 1.77 M | $2.93 |
+| appworld, 5 tasks | 1.55 M | $3.10 | 1.71 M | $3.39 |
+| appworld, 20 tasks at `p=4` | 6.47 M | $12.63 | 5.87 M | $11.94 |
+| **the whole 12-run matrix** | **10.8 M** | **$20.25** | **10.3 M** | **$19.87** |
 
 **Budget by benchmark, not by task count.** All eight gsm8k legs together are **0.2%** of the
-matrix's bill on OpenShift and 0.4% on KinD; appworld's two legs are **76%** and 57%; tau2's two are
-24% and 42%. A 50-task gsm8k leg costs 2 cents — less than *one twenty-fifth* of a single appworld
-task. If you are watching spend, there are only two legs to watch.
+matrix's bill on both platforms; appworld's two legs are **78%** and 77%; tau2's two are 22% and
+23%. A 50-task gsm8k leg costs 2 cents — about *a thirtieth* of a single appworld task. If you are watching spend, there are only two legs to watch.
 
-**The same request body is not the same bill on two clusters.** The 20-task appworld leg cost 2.6×
-more on OpenShift, because appworld turn counts are nondeterministic and the slower cluster's tasks
-ran longer before the 600 s timeout hit them. That is also why the two matrix totals must not be read
-as a platform comparison: OpenShift completed 18 appworld tasks against KinD's 10, so it did more
-work, not merely dearer work.
+**The same request body is close to the same bill on two clusters, but not by law.** The two
+matrices land within 2% of each other ($20.25 and $19.87), and the 20-task appworld leg within 6%.
+That is the same work measured twice on one gateway, not a guarantee: appworld turn counts are
+nondeterministic (OpenShift completed 21 appworld tasks, KinD 20), and a cluster whose tasks run
+longer before the 600 s timeout bills more for the same request bodies. Size appworld against your
+own cluster.
 
 ### Model choice, measured on identical tasks
 
@@ -554,17 +534,18 @@ makes them a clean comparison:
 
 | same 5 gsm8k tasks | gpt-4.1 | gpt-5-mini |
 |---|---:|---:|
-| pass rate (OpenShift / KinD) | 0.80 / 1.00 | 1.00 / 1.00 |
+| pass rate (OpenShift / KinD) | 0.80 / 0.80 | 1.00 / 1.00 |
 | LLM calls per task | 2.8 – 3.0 | 1.0 |
-| input tokens per task | 775 – 837 | 313 |
-| output tokens per task | 57 – 63 | 125 – 368 |
-| total tokens per task | 832 – 900 | 438 – 681 |
-| median task latency | 10.4 – 10.8 s | 11.2 – 16.4 s |
-| **cost per task** | **$0.0020 – 0.0022** | **$0.00033 – 0.00081** |
+| input tokens per task | 782 – 835 | 313 |
+| output tokens per task | 63 | 201 – 214 |
+| total tokens per task | 844 – 898 | 514 – 527 |
+| median task latency | 3.6 – 4.4 s | 2.5 – 4.0 s |
+| **cost per task** | **$0.0021 – 0.0022** | **$0.00048 – 0.00051** |
 
 The reasoning model answers in **one** call; gpt-4.1 needs ~3 tool round-trips, so it sends 2.6× the
-input and emits roughly a quarter of the output. Note that it is also the *faster* of the two per
-task despite tripling the calls — reasoning time is not free.
+input and emits roughly a third of the output. The two are close in latency (3.6–4.4 s against
+2.5–4.0 s), so tripling the calls costs gpt-4.1 little time — the one call gpt-5-mini makes carries
+its reasoning.
 
 **gpt-4.1 costs 4.1× gpt-5-mini for the same five tasks** — mean of its 2 legs against gpt-5-mini's
 7, with the ratio spanning 2.5–6.7× depending on which pair of legs you compare, because gpt-5-mini's
@@ -576,7 +557,7 @@ within 10% of each other.
 **So the token ranking and the money ranking disagree, and which wins is a property of the price
 list, not of the models.** gpt-5-mini uses fewer total tokens *and* costs less here, but only because
 gpt-5-mini's input is 8× cheaper; on a card where the two models were priced alike, gpt-4.1's terser
-output would win above `P_out / P_in ≈ 2.7`. Compute it for your own rates rather than inheriting
+output would win above `P_out / P_in ≈ 3.4`. Compute it for your own rates rather than inheriting
 ours:
 
 ```
@@ -585,26 +566,26 @@ cost per task  =  (input_tokens × P_in  +  output_tokens × P_out) / 1e6
 
 ### Read every figure above as a floor
 
-- **A killed task still costs.** The 600 s per-task timeout leaves no `report.ndjson` row, so
-  appworld's 15 timed-out tasks contributed tokens that appear in none of these totals.
+- **A killed task still costs.** The 600 s per-task timeout leaves no `report.ndjson` row, so the
+  one appworld task that timed out contributed tokens that appear in none of these totals.
 - **tau2's user simulator is invisible to us.** It runs inside the **MCP** pod, which is not
   instrumented, so its inference is billed by the gateway and counted nowhere here. The tell is in
-  the latency split: 27% of a tau2 task's wall time sits *inside tool calls*, against under 1% for
-  gsm8k and appworld, and every `chat` span we record carries the agent's model.
+  the latency split: 22% of a tau2 task's wall time sits *inside tool calls*, against 6% for gsm8k
+  and under 1% for appworld, and every `chat` span we record carries the agent's model.
 - **A cache replay can also make a leg read high.** Legs that share a prompt set within the
   gateway's ~10 min TTL re-report stored `usage` for calls that were never made upstream.
 - **Plugins add billed calls of their own** — one IBAC judge completion per authorized tool call,
   outside the agent's spans, because the sidecar makes them and not the instrumented agent. The judge
   runs `Azure/gpt-4.1` on a fixed 1,577-char system prompt, so **≥ $0.00111 per call** — which is
-  **2.4× the entire gsm8k task it is authorizing** ($0.00045), and 1.4–4.4× the agent's whole bill
+  **2.6× the entire gsm8k task it is authorizing** ($0.00043), and 1.4–4.4× the agent's whole bill
   across legs #6–#8. On the plugin legs IBAC is not overhead on the bill; it *is* the bill. See
   [`PLUGIN_OVERHEAD.md`](PLUGIN_OVERHEAD.md).
 - **Input cost is an upper bound.** The gateway *reports* cached input
   (`usage.prompt_tokens_details.cached_tokens`, verified by probe) but does not publish a cached-input
   rate, and `report.ndjson` records one undifferentiated `llm_input_tokens` — so no past run can be
   re-priced. The exposure is capped by the `input share of cost` column above: if cached input were
-  *free*, tau2 would floor at $0.0157 instead of $0.154, appworld at $0.251 instead of $0.589, and
-  gsm8k on gpt-5-mini would barely move ($0.00038 vs $0.00045). That ordering is structural, not
+  *free*, tau2 would floor at $0.0157 instead of $0.149, appworld at $0.270 instead of $0.634, and
+  gsm8k on gpt-5-mini would barely move ($0.00035 vs $0.00043). That ordering is structural, not
   luck — caching pays off on a long re-sent prefix, which is exactly what makes input dominate.
 
 ---
@@ -615,8 +596,8 @@ cost per task  =  (input_tokens × P_in  +  output_tokens × P_out) / 1e6
 |---|---|---:|
 | check a cluster/deploy/auth/telemetry path works | **gsm8k**, 1–10 tasks | < $0.01 |
 | exercise concurrency and volume cheaply | **gsm8k**, 50 tasks at `max_parallel_sessions=4` | $0.02 |
-| compare models meaningfully | **tau2** (it discriminates; gsm8k saturates at ~1.0) | $1.70 / 10 tasks |
-| stress long contexts, long tasks, timeouts | **appworld** | $1.90–2.80 / 5 tasks |
+| compare models meaningfully | **tau2** (it discriminates; gsm8k saturates at ~1.0) | $1.60 / 10 tasks |
+| stress long contexts, long tasks, timeouts | **appworld** | $3.10–3.40 / 5 tasks |
 | get a fast signal that nothing regressed | **gsm8k** — if it fails, stop and fix infrastructure | < $0.01 |
 
 The cost column is measured, not estimated — see [What one leg costs](#what-one-leg-costs). It is also

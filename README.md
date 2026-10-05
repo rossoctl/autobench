@@ -12,7 +12,7 @@ Rossoctl over `httpx`.
 
 | Component | What it is |
 |---|---|
-| `autobench-service` | The service. FastAPI, one per-issuer instance config, deployed in or beside a cluster. |
+| `autobench-service` | The service. FastAPI, one per-issuer instance config, deployed on the cluster whose workloads it benchmarks. |
 | `autobench-cli` | Stdlib-only client CLI that drives the service over its HTTP API end to end. |
 
 ## Benchmarks
@@ -22,8 +22,8 @@ server-side user simulator), and **appworld** (long-horizon app automation). See
 [docs/BENCHMARKS_PRIMER.md](docs/BENCHMARKS_PRIMER.md) — including
 [which one to pick](docs/BENCHMARKS_PRIMER.md#picking-a-benchmark) and
 [what a run of it costs](docs/BENCHMARKS_PRIMER.md#what-a-run-costs) in tokens and minutes, measured.
-They are not interchangeable: a tau2 task costs **178×** the tokens of a gsm8k task and an appworld
-task **564×** — and in dollars the gap is wider still, 279× and 1,069×, because each rung also runs a
+They are not interchangeable: a tau2 task costs **175×** the tokens of a gsm8k task and an appworld
+task **621×** — and in dollars the gap is wider still, 282× and 1,195×, because each rung also runs a
 dearer model.
 
 ## Getting started
@@ -35,9 +35,10 @@ that matter when changing the code rather than using it.
 
 ## Results
 
-[docs/results/](docs/results/README.md) publishes the reports for **landmark runs** — the current
-v1.28 cross-cluster baseline and the designed AuthBridge plugin-overhead study run on the same image.
-All of them are generated from S3 artifacts, never hand-edited.
+[docs/results/](docs/results/README.md) publishes the reports for **landmark runs** — the v1.35
+baseline, a 12-run pair on two single-cluster installs (OpenShift and KinD), and the designed
+AuthBridge plugin-overhead study run on the same image. All of them are generated from S3 artifacts,
+never hand-edited. Earlier versions are archived under [docs/archive/](docs/archive/2026-10-04/README.md).
 
 For the plugin question specifically, read [docs/PLUGIN_OVERHEAD.md](docs/PLUGIN_OVERHEAD.md) first:
 it explains the sidecar/preset/judge vocabulary and carries the conclusions, the headline being that
