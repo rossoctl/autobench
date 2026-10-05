@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-10-03T04:19:38Z
+**Last modified:** 2026-10-05T01:24:27Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -14,9 +14,9 @@ proves the install. *Driving* the Service once it answers is a different documen
   platforms rather than endpoints. Route *shapes* are real
   (`<service>-<namespace>.apps.<cluster>.example.com`), so substitute your own domain and the
   recipes work unchanged.
-- **The cluster names are samples, and so is every endpoint they stand for.** `ykt2`/`ykt3`/`ykt5`
-  are the OpenShift clusters this project happens to run on, reached from the Internet; the KinD
-  cluster is a laptop on an organisation intranet. Nothing here requires any of them, or a
+- **The cluster names are samples, and so is every endpoint they stand for.** `ykt3` is the
+  OpenShift cluster this project happens to run on, reached from the Internet; the KinD cluster is
+  a laptop on an organisation intranet. Nothing here requires any of them, or a
   particular LLM service (§3.5) — they are the worked examples, and the chart is deliberately
   generic.
 - **No secret value appears in this guide, and none should appear in your terminal.** Every script
@@ -35,7 +35,7 @@ install, §6 is the only verification that means anything.
 **Contents**
 
 - [1. What you install, and what you don't](#1-what-you-install-and-what-you-dont)
-  - [The two cluster shapes](#the-two-cluster-shapes)
+  - [One cluster](#one-cluster)
 - [2. Prerequisites](#2-prerequisites)
   - [2.1 Rossoctl v0.8.0 or later](#21-rossoctl-v080-or-later)
   - [2.2 Workstation tooling](#22-workstation-tooling)
@@ -92,15 +92,11 @@ install is useful:
   `reference/run12_specs.json` name it;
 - an OTEL collector that writes to an MLflow the Service can read (§3.4).
 
-### The two cluster shapes
+### One cluster
 
-| shape | example | consequence |
-|---|---|---|
-| **single-cluster** — Service and agents together | KinD, ykt5 | agents reach the collector over service DNS; no extra ingress |
-| **split** — Service here, agents there | ykt3 hosts the Service, agents run on ykt2 | the instance config carries `agent_endpoint_template`/`mcp_endpoint_template`, and the agents export telemetry back through an **edge Route** on `:443` whose target port resolves to the collector's 8335 |
-
-The shape is not a chart value. It lives entirely in the instance config, so one chart installs
-both.
+This guide covers the **single-cluster** deployment: the Service and the benchmark workloads it
+deploys run on the same cluster — KinD, or OpenShift (`ykt3` in the examples). The agents reach the
+collector over service DNS, and nothing needs an extra ingress.
 
 ## 2. Prerequisites
 
@@ -177,9 +173,7 @@ longer being gated on the failure that is hardest to notice.
 
 ```bash
 python3 reference/preflight.py --platform kind      --context kind-rossoctl
-python3 reference/preflight.py --platform openshift --context <ykt5-ctx>
-python3 reference/preflight.py --platform openshift --context <ykt3-ctx> \
-                              --workload-context <ykt2-ctx>          # split shape
+python3 reference/preflight.py --platform openshift --context <ykt3-ctx>
 python3 reference/preflight.py --json                                # machine-readable
 python3 reference/preflight.py --pre-install [--ibac-judge] \
                               --values deploy/helm/values-openshift.yaml   # before an install
@@ -199,11 +193,10 @@ compared against where the collector *will* export.
 `AB_PLATFORM`, `HELM_VALUES`, `NAMESPACE` and `TEAMS` stand in for `--context`, `--platform`,
 `--values`, `--namespace` and `--teams`, and a flag beats them. The header names the variable each
 one came from — `context=… ($KUBE_CONTEXT)` — and only when neither is given is the *current* kubectl
-context audited, marked `(current)`. Before this, an env file's `KUBE_CONTEXT` was ignored, so a
-preflight given ykt5's file while the current context was ykt2 audited ykt2.
+context audited, marked `(current)`.
 
 ```bash
-uv run python reference/preflight.py --env-file ~/.rossoctl-ykt5/autobench.env --pre-install
+uv run python reference/preflight.py --env-file ~/.rossoctl-ykt3/autobench.env --pre-install
 ```
 
 On OpenShift the MLflow is never installed by us, so `--pre-install` does not excuse its absence:
@@ -240,7 +233,7 @@ MLflow round trip (the only check that reaches the write half end to end)
 A clean preflight is necessary, not sufficient: only a 1-task leg with a non-zero token row proves the whole chain.
 ```
 
-Three things about how it reads the cluster are worth knowing, because each was a false alarm
+Two things about how it reads the cluster are worth knowing, because each was a false alarm
 first:
 
 - **Ports and targets come from live objects**, never from a manifest or a ConfigMap — the
@@ -248,10 +241,6 @@ first:
 - **`Route` has no CRD.** It is served by the aggregated openshift-apiserver, so
   `get crd routes.route.openshift.io` reports it missing on a cluster that plainly serves Routes.
   The script asks `api-resources --api-group=route.openshift.io` instead.
-- **A split shape is not a broken one.** With `agent_endpoint_template` in the instance config and
-  no `--workload-context`, the workload checks are *skipped* rather than run against the wrong
-  cluster — and a `workload_otel` endpoint on `:443` is resolved through the Route to the
-  collector's port instead of being rejected.
 
 The **identity** section is the one that needs a credential from you, and it is not optional in
 practice: every `/deploy` the Service makes is a ROPC login as `benchmarker`, so a password that is
@@ -282,9 +271,9 @@ used once, and hashed if it is reported at all.
 Copy it outside the repo and fill it in:
 
 ```bash
-umask 077; mkdir -p ~/.rossoctl-ykt5
-cp reference/autobench.env.template ~/.rossoctl-ykt5/autobench.env   # chmod 600 — looser is refused
-reference/autobench-install.sh --env-file ~/.rossoctl-ykt5/autobench.env
+umask 077; mkdir -p ~/.rossoctl-ykt3
+cp reference/autobench.env.template ~/.rossoctl-ykt3/autobench.env   # chmod 600 — looser is refused
+reference/autobench-install.sh --env-file ~/.rossoctl-ykt3/autobench.env
 ```
 
 `--env-file` is accepted by `autobench-install.sh`, `autobench-uninstall.sh`, both bootstrap scripts,
@@ -408,9 +397,9 @@ points *at*.
 | LLM gateway | **not a platform difference** — either platform may use a service on the intranet or on the Internet, subject to the asymmetric rule in §3.5 | ditto | no two services share a key table, so a key moved across does not fail closed — it 401s per completion, mid-run |
 | `openai-secret` | a key issued by **that cluster's own** service | ditto | same |
 | MLflow read path | `mlflow-reader` (§8), no auth | the cluster's own MLflow on `:8443` with a ServiceAccount bearer and `insecure_tls` | a refused read is invisible: the run passes, every token count is 0 |
-| MLflow experiment | `0` | `1`, workspace `team1` on ykt5 | identical signature to the above |
+| MLflow experiment | `0` | `1`, workspace `team1` on ykt3 | identical signature to the above |
 | Keycloak dial | the **backchannel** service DNS — `iss` is unreachable in-cluster, since `*.localtest.me` resolves to pod loopback and there is no CoreDNS rewrite | the `iss` Route itself | JWKS and ROPC both fail at startup |
-| collector endpoint | `http://otel-collector.rossoctl-system.svc.cluster.local:8335` | the same on a single-cluster install; an edge Route on `:443` when the agents live elsewhere | unreachable collector ⇒ agent `CrashLoopBackOff`, surfacing as a 424 on the run |
+| collector endpoint | `http://otel-collector.rossoctl-system.svc.cluster.local:8335` | the same | unreachable collector ⇒ agent `CrashLoopBackOff`, surfacing as a 424 on the run |
 | pod security context | UID/GID/fsGroup pinned to 10001/0/10001 | `runAsNonRoot` + seccomp only | pinning 10001 can be **rejected** when it falls outside the project's allocated UID range |
 | ingress | `HTTPRoute` on the shared gateway | `Route`, edge TLS | — |
 
@@ -432,10 +421,9 @@ trap: botocore reads it too, so it redirects the S3 client's trust store at the 
 artifact upload then fails to validate AWS's public cert — turning an empty report into no artifacts
 at all. `preflight.py` checks both halves, and matches the RoleBinding on the **grant** rather than
 its name, because a cluster set up before the chart existed has an equivalent binding under a
-different one. `mlflowTraceWriter.namespaces` lists MLflow **workspaces** on the Service's own
-cluster, not the namespaces agents run in — the same string on a single-cluster install, but in the
-split shape the agents are elsewhere while the MLflow being written to is here. A workspace missing
-from the list reproduces the empty report for that workspace only.
+different one. `mlflowTraceWriter.namespaces` lists MLflow **workspaces**, which on a single-cluster
+install are the same strings as the namespaces the agents run in. A workspace missing from the list
+reproduces the empty report for that workspace only.
 
 **`insecure_tls` is a read-side lever, and turning it off hardens nothing while breaking the read.**
 The two halves above cover the **write**: with `insecure_tls: false` the OTLP exporter picks up
@@ -445,7 +433,7 @@ False)` when `insecure_tls: true`, or the shared client on the **default system 
 false — and nothing anywhere hands it the service CA. So against an in-cluster MLflow the read path
 has two states, unverified or broken, and `insecure_tls: true` is what keeps it working.
 
-Measured on ykt5, one probe, `experiment_id` pinned so it could not confound the result:
+Measured on an OpenShift install, one probe, `experiment_id` pinned so it could not confound the result:
 
 | stage | `insecure_tls: true` | `insecure_tls: false` |
 |---|---|---|
@@ -472,8 +460,6 @@ being an in-cluster concern.
   - `service` lost 3 tasks' spans and put 6 of the other 7 on the wrong task.
 - **Two more failures `service` carries:** the agent's `cannot pickle '_asyncio.Task'` race, and a
   30 s cap on each agent step (§7).
-- **The installer default was `service` from 2026-09-29 until this fix.** p>1 legs run in that
-  window have unreliable per-task tokens.
 - **The value can still change.** The agent image is pinned to `:latest`, so an upstream rebuild
   could change which runner attributes correctly.
 
@@ -560,7 +546,7 @@ llmProfile: intranet                      # llmProfile: internet
 ```
 
 ```bash
-reference/ocp-service-bootstrap.sh  --llm-profile internet --cluster ykt5 --context <ctx> ...
+reference/ocp-service-bootstrap.sh  --llm-profile internet --cluster ykt3 --context <ctx> ...
 LLM_PROFILE=intranet reference/kind-post-setup.sh
 python3 reference/preflight.py --values deploy/helm/values-kind.yaml --context kind-rossoctl
 ```
@@ -594,8 +580,7 @@ quietly ignored downstream.
   completion leaves through a proxy that cannot reach it. `workload_llm.no_proxy` (and
   `disable_proxy: true`, which injects an empty `HTTP_PROXY`/`http_proxy`) are rendered onto the
   **agent** pod only. Both bootstrap scripts now build the list — loopback, the gateway host, the
-  collector, and Keycloak's in-cluster service — where before only the OpenShift one did, so a KinD
-  bootstrap without `--copy-from` silently lost it.
+  collector, and Keycloak's in-cluster service.
 - **`WORKLOAD_LLM_BASE` was never a second setting.** It is an accepted alias for
   `WORKLOAD_LLM_API_BASE` in the KinD script, kept only so existing invocations keep working; the
   canonical name matches the instance-file field (`workload_llm.api_base`) on both platforms.
@@ -715,8 +700,8 @@ So the install path **checks** instead of assuming:
 | `autobench-install.sh --install-mlflow auto\|always\|never` (KinD) | the same three modes through `reference/kind-mlflow.sh`, plus an **ownership record**, so `autobench-uninstall.sh` removes the reader only when this installed it (§5.2) |
 | `autobench-install.sh --install-mlflow auto\|always\|never` (OpenShift) | creates the credential the default shape reads — `sa/mlflow-reader` and `secret/mlflow-reader-token` — through `reference/ocp-mlflow.sh`, with the same kind of record (§5.1). Nothing is created when another shape below is declared |
 | `kind-post-setup.sh --install-mlflow auto\|always\|never` | `auto` (the default) applies `deploy/kind/mlflow-reader.yaml` only when nothing is already serving `MLFLOW_URL`; it logs which way it went and why. `never` is for a cluster whose MLflow is external — the collector is still repointed at `MLFLOW_URL`, which is the half that actually matters |
-| `ocp-service-bootstrap.sh` | resolving to **no MLflow credential at all is a precheck failure**, not the warning it used to be. It previously wrote `bearer_token: ""` and let the install proceed |
-| `kind-service-bootstrap.sh` | reads the experiment id off the collector, and a lookup that **cannot run is fatal**. It used to fall back to `0` with its stderr discarded, so on a `python3` without PyYAML every install guessed, silently. It now runs in the uv environment of §2.2, or takes `--experiment-id N` |
+| `ocp-service-bootstrap.sh` | resolving to **no MLflow credential at all is a precheck failure**, not a warning, so an install never proceeds with an empty `bearer_token` |
+| `kind-service-bootstrap.sh` | reads the experiment id off the collector, and a lookup that **cannot run is fatal**. It never guesses `0`: it runs in the uv environment of §2.2, or takes `--experiment-id N` |
 | `preflight.py` (OpenShift) | **asks whether the pre-installed MLflow answers at all**, even with `--pre-install`, so the install stops before Helm rather than after it — see below |
 | `autobench-cli mlflow-health` | the gate. One authenticated `GET /mlflow/health` against the deployed Service |
 | `preflight.py` | calls that endpoint for both platforms; `--skip-mlflow-probe` opts out |
@@ -800,12 +785,12 @@ exporter's terminal line with the TLS cause spliced in, naming `CERTIFICATE_VERI
 
 The two read differently because a 403 is not retried and a TLS failure is: the exporter logs a
 retryable cause at `WARNING`, once per attempt, and leaves its terminal `ERROR` generic. The endpoint
-therefore watches both levels — without that, the ykt5 failure would come back saying only
+therefore watches both levels — without that, a missing TLS anchor would come back saying only
 `Failed to export span batch due to timeout, max retries or shutdown.` and naming no cause at all.
 
 ```sh
 BM_BASE=https://autobench-rossoctl-system.apps.example.com \
-BM_PASSWORD_FILE=~/.rossoctl-ykt5/benchmarker.pass \
+BM_PASSWORD_FILE=~/.rossoctl-ykt3/benchmarker.pass \
   uv run autobench-cli mlflow-health          # exit 8 = not healthy; --no-round-trip reads only
 ```
 
@@ -826,9 +811,9 @@ One script per platform, so the file has reproducible provenance instead of bein
 
 ```bash
 # OpenShift — prechecks the whole chain, S3 included, before writing
-reference/ocp-service-bootstrap.sh --cluster ykt5 --context <ctx> \
-  --env-file ~/.rossoctl-ykt5/autobench.env \
-  --apps-domain apps.ykt5.example.com \
+reference/ocp-service-bootstrap.sh --cluster ykt3 --context <ctx> \
+  --env-file ~/.rossoctl-ykt3/autobench.env \
+  --apps-domain apps.ykt3.example.com \
   --llm-api-base https://<external-gateway>/v1 \
   --out-dir instances/
 
@@ -858,13 +843,9 @@ The proof is a SigV4-signed `ListObjectsV2` with `max-keys=0`, so it writes noth
 `AccessDenied` counts as success: AWS checks the signature before the policy, and a writer key
 with `PutObject` alone is exactly what this bucket should be given.
 
-This replaced the old behaviour, which looked for keys in three places, defaulted the bucket when
-it found none, and only *warned*. The Service gates export on the bucket alone, so that produced a
-cluster that scored runs, attempted every upload with empty keys, and logged `S3 export failed`
-where no installer looks (§7).
-
-`--s3-from` is gone: passing it now dies with the replacement spelled out. `--copy-from` now carries
-only `workload_llm`.
+The Service gates export on the bucket alone, so a bucket with empty keys would score every run,
+attempt every upload, and log `S3 export failed` where no installer looks (§7). That is why the
+declaration is required and proved rather than defaulted. `--copy-from` carries only `workload_llm`.
 
 To move an existing install's keys into an env file without printing them, run this. It reads
 from the live Secret, since on some clusters that is the only copy:
@@ -890,8 +871,7 @@ kubectl -n rossoctl-system rollout restart deploy/autobench-service
 The filename encodes the `iss` **host** with `:` rewritten to `_`; the exact `iss` inside the file
 is the source of truth. The Service reads instance files at startup, hence the restart. Note that
 `PUT /config` is in-memory only — a correction that must survive a restart goes in the Secret. It
-merges field by field, so a body may carry only what you are changing; on `v1.30` and earlier it did
-not, and §7 has the symptom that produced.
+merges field by field, so a body may carry only what you are changing.
 
 Four properties of these scripts are load-bearing:
 
@@ -961,8 +941,8 @@ in order and stops at the first one that is wrong:
    again, this time with the MLflow round trip.
 
 ```bash
-reference/autobench-install.sh --env-file ~/.rossoctl-ykt5/autobench.env --dry-run   # checks only
-reference/autobench-install.sh --env-file ~/.rossoctl-ykt5/autobench.env
+reference/autobench-install.sh --env-file ~/.rossoctl-ykt3/autobench.env --dry-run   # checks only
+reference/autobench-install.sh --env-file ~/.rossoctl-ykt3/autobench.env
 ```
 
 `--dry-run` runs steps 1–4 for real and prints 3b and 5–7 instead of running them. They are the only
@@ -981,7 +961,7 @@ step.
 
 ```bash
 python3 reference/preflight.py --platform openshift --context <ctx> \
-        --password-file ~/.rossoctl-ykt5/benchmarker.pass                  # 0 failures first
+        --password-file ~/.rossoctl-ykt3/benchmarker.pass                  # 0 failures first
 helm upgrade --install autobench deploy/helm/autobench \
   -n rossoctl-system --kube-context <ctx> -f deploy/helm/values-openshift.yaml
 oc -n rossoctl-system rollout status deploy/autobench-service
@@ -1218,8 +1198,8 @@ credential the chart never created.
 the parts that a bare `helm uninstall` leaves to you:
 
 ```bash
-reference/autobench-uninstall.sh --env-file ~/.rossoctl-ykt5/autobench.env --dry-run   # lists only
-reference/autobench-uninstall.sh --env-file ~/.rossoctl-ykt5/autobench.env [--teams team1,team2]
+reference/autobench-uninstall.sh --env-file ~/.rossoctl-ykt3/autobench.env --dry-run   # lists only
+reference/autobench-uninstall.sh --env-file ~/.rossoctl-ykt3/autobench.env [--teams team1,team2]
 ```
 
 1. **Workloads first, through the Service.**
@@ -1295,8 +1275,7 @@ fourth, and only in part: it zeroes some rows and moves other rows' tokens onto 
 | a p>1 leg passes, but **some** rows show `llm_count 0` and others carry a token count that belongs to a different task | `workload_agent_runner: service`. Its threads read a process-wide trace context owned by the last-started session, so spans are parented to the wrong task or orphaned. p=1 legs are unaffected, which is what makes it look intermittent | the instance's `workload_agent_runner` (`preflight.py` warns on it). On gsm8k compare per-task input tokens with an earlier run: they are per-task constants. §3.4 |
 | run passes `pass_rate 1.0`, and `report.ndjson`/`token_report.ndjson` are **zero bytes** — only 4 of the 8 artifacts carry anything | the Service's *own* span export failed, so MLflow never got the root `Agent.Session` span and the trace was dropped. On OpenShift, one of the two halves in §3.4: no service-CA trust anchor (TLS) or no trace-writer RoleBinding (403) | `autobench-cli mlflow-health` (§3.7) — its `write` stage names the cause where the run named nothing, and it is the only check that reproduces this without a run. `preflight.py` reports both halves separately as well |
 | reports empty, or every token count 0, **right after someone set `insecure_tls: false` to harden the install** | the MLflow **read** client has no trust anchor — only the OTLP write path does. `false` leaves it on the system trust store, which lacks the service CA | `autobench-cli mlflow-health`: `write` stays ok while `read`/`round_trip` FAIL with `CERTIFICATE_VERIFY_FAILED`. That split is the signature. §3.4 |
-| the same zero-byte report, but **only after you used `PUT /config`**, and the TLS anchor and RoleBinding both check out | on `v1.30` and earlier the merge rewrote every field with a non-`null` default, so a `PUT` of *one* field also reset `mlflow.experiment_id` to `"0"` — the Service then wrote spans to one experiment and read the report from another. `s3.public_read` was reset to `true` the same way, which re-enables public ACLs on a bucket someone made private | `GET /config` right after the `PUT` and compare every field, not just the one you sent — the response body is the effective config. Fixed in `v1.31`; §5 of the developer guide |
-| runs score normally, `artifacts` is empty, and the Service logs `S3 export failed` | the instance file names a bucket with **empty or wrong keys**: the Service gates export on the bucket alone, so it attempts every upload. The old bootstrap scripts wrote exactly that when they found no keys, defaulting the bucket and only warning | read the block back as lengths, never values: §4's `get secret … \| base64 -d` piped into `jq '.s3 \| map_values(length)'` — a `0` beside a key is the cause. Regenerate with `S3_ENABLED` declared; the bootstrap now proves the key before writing, and `S3_ENABLED=false` writes no block at all |
+| runs score normally, `artifacts` is empty, and the Service logs `S3 export failed` | the instance file names a bucket with **empty or wrong keys**: the Service gates export on the bucket alone, so it attempts every upload. A hand-written instance file, or one made by a script older than the S3 declaration, can carry exactly that | read the block back as lengths, never values: §4's `get secret … \| base64 -d` piped into `jq '.s3 \| map_values(length)'` — a `0` beside a key is the cause. Regenerate with `S3_ENABLED` declared; the bootstrap now proves the key before writing, and `S3_ENABLED=false` writes no block at all |
 | the run publishes **no artifacts at all**, `botocore … SSLError: unable to get local issuer certificate` | `REQUESTS_CA_BUNDLE` was used for the service CA instead of `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`; botocore honours it too and the S3 client can no longer validate AWS's cert | §3.4 |
 | a task's `error` in the **published** `run.json` reads `other (shape 7b2e…)` and says nothing about what failed | the S3 artifacts classify error text to a closed category set rather than publishing it (the bucket is anonymously listable); `other` means the message matched no known category | the verbatim text was never discarded — `GET /benchmarks/<b>/runs/<id>` on the authenticated API still returns it, and the Service logs it at **WARNING** beside the same shape id. Section 6.6 of the developer guide; add a category to `public_errors._CAUSES` once you know the cause |
 | one task errors `A2A task ended in state 'failed': Error: timed out` at ~30 s, with `llm_count: 0` | the LLM gateway accepted the connection and never answered, **and** the instance runs `workload_agent_runner: service`. That runner caps a single `react` at a hard-coded **30 s** with no retry (`docker` and `venv` allow 600 s), so a stalled completion becomes a failed task. Under the default `direct` there is no RPC hop: litellm's own timeout fires and the agent retries, so a stall costs time rather than the task. On appworld this was 12–16 of 20 tasks a leg under `service` | the instance's runner first; then probe the gateway from inside the agent pod: a stall is a *read* timeout after TLS succeeds, and it also hits the unauthenticated `GET /public/litellm_model_cost_map`, which proves it is not the model | probe the gateway from inside the agent pod: a stall is a *read* timeout after TLS succeeds, and it also hits the unauthenticated `GET /public/litellm_model_cost_map`, which proves it is not the model |
