@@ -1,13 +1,14 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-10-02T00:50:33Z
+**Last modified:** 2026-10-05T01:32:23Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
 
 A task-oriented guide to driving the AutoBench Service over its RESTful API. Every
 `curl` below is derived from the flows we exercised end-to-end (gsm8k single-turn, tau2
-multi-turn) on the `ykt3` and `kind-rossoctl` clusters.
+multi-turn) on two single-cluster installs, OpenShift (`ykt3`) and KinD (`kind-rossoctl`), where
+the Service and the benchmark workloads it deploys run on the same cluster.
 
 - Reference the machine-readable contract in [`openapi.json`](./openapi.json) /
   [`openapi.yaml`](./openapi.yaml).
@@ -58,7 +59,7 @@ multi-turn) on the `ykt3` and `kind-rossoctl` clusters.
   - [6.7 Tear down](#67-tear-down)
 - [7. End-to-end examples (validated flows)](#7-end-to-end-examples-validated-flows)
   - [What you need on the client side](#what-you-need-on-the-client-side)
-  - [7.0 Run #1 start to finish, on the ykt3 Service driving ykt2 workloads](#70-run-1-start-to-finish-on-the-ykt3-service-driving-ykt2-workloads)
+  - [7.0 Run #1 start to finish, on ykt3 (OpenShift, single-cluster)](#70-run-1-start-to-finish-on-ykt3-openshift-single-cluster)
   - [7.1 The same thing in one command (`autobench-cli`)](#71-the-same-thing-in-one-command-autobench-cli)
   - [7.2 `autobench-cli` options](#72-autobench-cli-options)
   - [7.3 Other validated flows](#73-other-validated-flows)
@@ -80,7 +81,7 @@ multi-turn) on the `ykt3` and `kind-rossoctl` clusters.
 ## 1. Mental model (read this first)
 
 The Service is **pure-Python and HTTP-only**. It never calls a cluster API (no kubectl, no
-kubeconfig). It talks to the Rossoctl/kagenti backend over HTTPS and to Keycloak for tokens.
+kubeconfig). It talks to the Rossoctl backend over HTTP(S) and to Keycloak for tokens.
 Two consequences shape everything below:
 
 1. **Two independent tokens.**
@@ -155,8 +156,7 @@ is `ibac-only`, as a flow it is sidecar → MCP server.
 Three things about this shape are not guessable from the API surface:
 
 **The agent has its own MCP connection, separate from the Service's.** `MCP_URL` is injected into the
-agent's env at deploy time (always `svc.cluster.local`, since agent→tool is intra-cluster even on a
-cross-cluster run). The Service opens and grades the session (flow 2); the agent's tool calls
+agent's env at deploy time (always `svc.cluster.local`, since agent→tool is intra-cluster). The Service opens and grades the session (flow 2); the agent's tool calls
 (flows 5–6) mutate that same session's state, correlated by `session_id` — which travels as A2A
 request metadata, *not* in the prompt text. So grading reads tool-side state, and the runner discards
 whatever the agent replies: an agent that answers in prose without making the submitting tool call
@@ -569,11 +569,11 @@ token endpoint are derived from the instance `iss`
 ```bash
 # --- Environment (pick the block for your target cluster) ---
 
-# Option A — ykt3 (OpenShift; realm/client "kagenti"), the cluster the e2e runs were validated on:
-export SVC="https://autobench.apps.ykt3.example.com"     # AutoBench Service base URL
-export KC="https://keycloak.apps.ykt3.example.com"          # Keycloak base (iss origin)
-export REALM="kagenti"                                       # realm from the iss
-export KC_CLIENT="kagenti"                                   # public client with Direct Access Grants
+# Option A — ykt3 (OpenShift, single-cluster; realm/client "rossoctl"):
+export SVC="https://autobench-rossoctl-system.apps.ykt3.example.com"   # AutoBench Service base URL
+export KC="https://keycloak-keycloak.apps.ykt3.example.com"            # Keycloak base (iss origin)
+export REALM="rossoctl"                                                # realm from the iss
+export KC_CLIENT="rossoctl"                                            # public client with Direct Access Grants
 
 # Option B — kind-rossoctl (local; realm/client "rossoctl"):
 #   The instance's iss is http://keycloak.localtest.me:8080/realms/rossoctl, but in-cluster the
@@ -624,11 +624,11 @@ One file per instance keys the whole thing to the `iss`. Loaded at startup from
 
 ```json
 {
-  "iss": "https://keycloak.apps.ykt3.example.com/realms/kagenti",
+  "iss": "https://keycloak-keycloak.apps.ykt3.example.com/realms/rossoctl",
   "keycloak_backchannel_url": null,
-  "rossoctl_base_url": "https://kagenti-backend.kagenti-system.svc.cluster.local:8000",
+  "rossoctl_base_url": "http://rossoctl-backend.rossoctl-system:8000",
   "service_credential": {
-    "client_id": "kagenti",
+    "client_id": "rossoctl",
     "client_secret": "",
     "username": "benchmarker",
     "password": "<benchmarker-password>"
@@ -644,9 +644,8 @@ One file per instance keys the whole thing to the `iss`. Loaded at startup from
 - `service_credential` is the ROPC identity the Service presents to Rossoctl (must exist in
   the realm with `firstName`/`lastName` set, or Keycloak 400s with "Account is not fully set
   up").
-- `mcp_endpoint_template` / `agent_endpoint_template` are only needed when the workloads live
-  on a **different** cluster reachable via external routes (use `{service}`/`{namespace}`
-  placeholders). Leave `null` for co-located in-cluster workloads.
+- `mcp_endpoint_template` / `agent_endpoint_template` stay `null`: the workloads run on the same
+  cluster, so the Service reaches them over in-cluster service DNS.
 - `mlflow` / `s3` can be seeded here or set later via `PUT /config` (§5).
 
 ### 4.2 Infrastructure resources (baked into the benchmark definitions)
@@ -750,10 +749,10 @@ curl -s -X PUT "$SVC/config" \
           "public_read": false
         },
         "mlflow": {
-          "tracking_url": "https://mlflow.apps.ykt3.example.com",
+          "tracking_url": "https://mlflow.redhat-ods-applications.svc.cluster.local:8443",
           "client_id": "mlflow-client",
           "client_secret": "REDACTED",
-          "token_url": "https://keycloak.apps.ykt3.example.com/realms/kagenti/protocol/openid-connect/token",
+          "token_url": "https://keycloak-keycloak.apps.ykt3.example.com/realms/rossoctl/protocol/openid-connect/token",
           "insecure_tls": false
         }
       }'
@@ -771,19 +770,7 @@ A `PUT` is a **field-level merge**: fields you do not mention keep the value the
 instance file or from an earlier `PUT`. Whole sections behave the same way — a body carrying only
 `mlflow` leaves `s3` untouched.
 
-> **In `v1.30` and earlier this was not true, and the failure was silent.** The merge dropped only
-> `null` fields, so the three fields with a non-`null` *default* were rewritten on every call whether
-> you mentioned them or not: `mlflow.experiment_id` back to `"0"`, `mlflow.insecure_tls` back to
-> `false`, and `s3.public_read` back to `true`. The first is the dangerous one — the Service then
-> emits spans under one experiment and reads the report back from another, which publishes a
-> **zero-byte report on a run that reports `pass_rate 1.0`** (§5.1 is how you would now catch it).
-> The third silently re-enabled public-read ACLs on a bucket someone had deliberately made private.
->
-> Fixed in `v1.31`, at or above what `deploy/` pins — so a cluster still serving `v1.30` still has
-> it. When driving one, send every field you care about on every `PUT` and read the result back: the
-> response body is the effective config, so a reset is visible immediately if you look for it.
-
-Because unmentioned and `null` now mean different things, an explicit `null` **clears** a field —
+Because unmentioned and `null` mean different things, an explicit `null` **clears** a field —
 the only way to unset one at runtime:
 
 ```bash
@@ -833,7 +820,7 @@ failure across both levels, putting the cause in a per-attempt `Transient error 
 warning and leaving the terminal `ERROR` generic (`Failed to export span batch due to timeout, max
 retries or shutdown.`), while a *non-retryable* one logs a single self-describing `ERROR`
 (`Failed to export span batch code: 403, reason: Forbidden`). An ERROR-only handler therefore names
-the cause for the 403 and never names it for the missing TLS anchor — the ykt5 failure exactly. Both
+the cause for the 403 and never names it for the missing TLS anchor. Both
 levels are read and spliced, and because a warning alone means an attempt failed and the *retry
 succeeded*, only an `ERROR` marks the stage failed; a recovered retry is reported in `detail`.
 `round_trip` then reads that trace back, which is the only way to catch an MLflow that accepts the
@@ -1153,10 +1140,10 @@ these runs use:
 So a real, working URL — anonymously readable, no credentials, no AWS CLI:
 
 ```
-https://rossoctl-benchmarking.s3.us-east-1.amazonaws.com/ykt3-to-ykt2/benchmarker/keycloak-keycloak.apps.ykt2.hcp.res.ibm.com-realms-rossoctl/gsm8k/20260902215628-79e0713a/report.ndjson
+https://rossoctl-benchmarking.s3.us-east-1.amazonaws.com/ykt3/benchmarker/keycloak-keycloak.apps.ykt3.hcp.res.ibm.com-realms-rossoctl/gsm8k/20261004222426-edc7505b/report.ndjson
 ```
 
-`s3.prefix` is per instance (`ykt3-to-ykt2/` on the OpenShift instance, `kind/` on KinD), and the
+`s3.prefix` is per instance (`ykt3/` on the OpenShift instance, `kind/` on KinD), and the
 issuer host is scheme-stripped with `.`/`:`/`/` replaced by `-`. **The bucket is public and
 anonymously listable**, so treat everything exported as published.
 
@@ -1254,7 +1241,7 @@ uv tool list                   # the version it resolved to (the CLI has no --ve
 ```
 
 Pin instead of chasing `main` when you want reproducibility — append `@<tag-or-sha>` to the URL
-(`...autobench@v1.28`).
+(`...autobench@v1.35`).
 
 #### Or into a venv, if you are also developing against it
 
@@ -1321,16 +1308,16 @@ import autobench.cli, sys
 print([m for m in ('fastapi','httpx','boto3','pydantic') if m in sys.modules] or 'no server deps loaded')"
 ```
 
-### 7.0 Run #1 start to finish, on the ykt3 Service driving ykt2 workloads
+### 7.0 Run #1 start to finish, on ykt3 (OpenShift, single-cluster)
 
-Run #1 of the canonical matrix: gsm8k, 1 task, no gateway, no plugins. Every command below was
-executed exactly as written; the `run_id` and numbers are from that run. Paste the block, then the
-steps.
+Run #1 of the canonical matrix: gsm8k, 1 task, no gateway, no plugins. The `run_id` and numbers
+are from leg #1 of the published v1.35 OpenShift matrix (`docs/results/v1.35-2026-10-04/`), which
+made these same API calls through `reference/run-12.py`. Paste the block, then the steps.
 
 ```bash
-# ---- 0. environment (the cross-cluster instance: Service on ykt3, workloads on ykt2/team1) ----
+# ---- 0. environment (single-cluster: the Service and its workloads both on ykt3, team1) ----
 export SVC="https://autobench-rossoctl-system.apps.ykt3.example.com"
-export KC="https://keycloak-keycloak.apps.ykt2.example.com"   # the instance's iss origin
+export KC="https://keycloak-keycloak.apps.ykt3.example.com"   # the instance's iss origin
 export REALM=rossoctl KC_CLIENT=rossoctl KC_USER=benchmarker
 export BENCH=gsm8k
 export SCOPE="namespace=team1&agent=tool_calling&experiment=default"
@@ -1364,12 +1351,7 @@ STABLE=0; until [ "$STABLE" -ge 4 ]; do
   [ "$R" = 1 ] && STABLE=$((STABLE+1)) || STABLE=0
   echo "ready=$R stable=$STABLE"; sleep 10
 done
-# On OpenShift the Route 502s for ~10s AFTER the Service reports Ready, so gate on the card too:
-AGENT=$(curl -s $CURL_OPTS "$SVC/benchmarks/$BENCH/status?$SCOPE" -H "Authorization: Bearer $TOKEN" \
-        | python3 -c 'import sys,json; print(json.load(sys.stdin)["agent_name"])')
-until curl -sf -o /dev/null "https://$AGENT-team1.apps.ykt2.example.com/.well-known/agent-card.json"; do
-  echo "waiting for the agent card"; sleep 5
-done; sleep 15
+sleep 15     # settle: the agent reports Ready a moment before it is serving (run-12.py does the same)
 
 # ---- 4. submit the run ----
 export RUN=$(curl -s $CURL_OPTS -X POST "$SVC/benchmarks/$BENCH/runs" \
@@ -1377,7 +1359,7 @@ export RUN=$(curl -s $CURL_OPTS -X POST "$SVC/benchmarks/$BENCH/runs" \
   -d '{"agent":"tool_calling","namespace":"team1","experiment":"default",
        "max_tasks":1,"max_parallel_sessions":1,"timeout_seconds":300}' \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["run_id"])')
-echo "run_id=$RUN"                                    # e.g. 20260902215628-79e0713a
+echo "run_id=$RUN"                                    # e.g. 20261004222426-edc7505b
 
 # ---- 5. poll to a terminal status, then print the verdict ----
 while :; do
@@ -1385,14 +1367,14 @@ while :; do
       | python3 -c 'import sys,json; print(json.load(sys.stdin)["status"])')
   echo "status=$S"; case "$S" in succeeded|failed|error|cancelled) break ;; esac; sleep 10
 done
-#   -> succeeded, summary {"total":1,"succeeded":1,"evaluated_pass":1,"pass_rate":1.0,"wall_seconds":5.4}
-#      Note ~100 spans for ONE gsm8k task: ~91 are A2A/HTTP framework internals.
+#   -> succeeded, summary {"total":1,"succeeded":1,"evaluated_pass":1,"pass_rate":1.0,"wall_seconds":3.5}
+#      Note 96 spans for ONE gsm8k task: 88 are A2A/HTTP framework internals.
 
 # ---- 6. artifacts: list the S3 URLs, then mirror them locally ----
 export PREFIX=$(curl -s $CURL_OPTS "$SVC/benchmarks/$BENCH/runs/$RUN" -H "Authorization: Bearer $TOKEN" \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["artifacts_prefix"])')
 echo "$PREFIX"
-#   -> ykt3-to-ykt2/benchmarker/keycloak-keycloak.apps.ykt2.hcp.res.ibm.com-realms-rossoctl/gsm8k/20260902215628-79e0713a
+#   -> ykt3/benchmarker/keycloak-keycloak.apps.ykt3.hcp.res.ibm.com-realms-rossoctl/gsm8k/20261004222426-edc7505b
 mkdir -p "/tmp/autobench/$PREFIX" && (cd "/tmp/autobench/$PREFIX" && \
   for f in run.json report.ndjson report.parquet token_report.ndjson token_report.parquet \
            span_report.ndjson span_report.parquet manifest.json; do
@@ -1413,11 +1395,11 @@ for r in sorted(rows, key=lambda x: str(x["task_id"])):
 bad = [r for r in rows if (r["llm_count"] or 0) <= 1 and (r["tool_count"] or 0) >= 2]
 print("lost token attribution:", len(bad), "of", len(rows))
 EOF
-#   -> 0      openai/Azure/gpt-5-mini-2025-08-07         320     471     2      1  True
+#   -> 0      openai/Azure/gpt-5-mini-2025-08-07         320      86     1      1  True
 #      lost token attribution: 0 of 1
 
-# Which spans did the task actually invoke? A healthy task shows TWO chat spans -- the
-# max_tokens=1 capability probe plus the real call. One means the real call's span was lost.
+# Which spans did the task actually invoke? A healthy task shows one chat span per model call
+# (llm_count above). Fewer chat spans than calls means a usage-bearing span was lost.
 python3 - <<'EOF'
 import collections, json
 rows = [json.loads(l) for l in open("span_report.ndjson") if l.strip()]
@@ -1429,9 +1411,8 @@ for r in rows:
         print("  chat  max_tokens=%s  in=%s  out=%s" % (
             r["request_max_tokens"], r["input_tokens"], r["output_tokens"]))
 EOF
-#   -> spans: 100  (other 91, phase 3, chat 2, tool 2, root 1, agent 1)
-#      chat  max_tokens=1  in=None  out=None     <- the probe (rejected by a reasoning model)
-#      chat  max_tokens=None  in=320  out=471    <- the real call
+#   -> spans: 96  (other 88, phase 3, tool 2, root 1, agent 1, chat 1)
+#      chat  max_tokens=None  in=320  out=86     <- the one model call
 
 # ---- 8. tear down ----
 curl -s $CURL_OPTS -X DELETE "$SVC/benchmarks/$BENCH/deploy?$SCOPE" \
@@ -1441,46 +1422,44 @@ curl -s $CURL_OPTS -X DELETE "$SVC/benchmarks/$BENCH/deploy?$SCOPE" \
 ### 7.1 The same thing in one command (`autobench-cli`)
 
 `autobench-cli` is a stdlib-only client that performs §7.0 end to end — token, pre-clean,
-deploy, the readiness-stability and agent-card gates, run, 424 retry, poll, artifact listing and
-local mirror — and exits non-zero if the run did not succeed.
+deploy, the readiness-stability gate, run, 424 retry, poll, artifact listing and local mirror — and
+exits non-zero if the run did not succeed.
 
 ```bash
 export BM_BASE="https://autobench-rossoctl-system.apps.ykt3.example.com"
-export BM_ISS="https://keycloak-keycloak.apps.ykt2.example.com/realms/rossoctl"
+export BM_ISS="https://keycloak-keycloak.apps.ykt3.example.com/realms/rossoctl"
 export BM_PASSWORD_FILE="$HOME/.rossoctl-ykt3/benchmarker.pass"     # chmod 600
-export BM_INSECURE=1
-export BM_CARD_TEMPLATE="https://{service}-{namespace}.apps.ykt2.example.com/.well-known/agent-card.json"
+export BM_INSECURE=1                                                # the Route's edge TLS cert
 
 # See "What you need on the client side" above for install options; the shortest is:
 #   uv tool install "rossoctl-autobench @ git+https://github.com/rossoctl/autobench"
 autobench-cli all --benchmark gsm8k --tasks 1 --timeout 300 --mirror /tmp/autobench
 ```
 
-Which prints, for the run above:
+Which prints, for a v1.35 run on ykt3 (`--insecure` here stands in for `BM_INSECURE=1`):
 
 ```
-[17:56:12]   agent card 200 (https://exgentic-a2a-tool-calling-gsm8k-team1.apps.ykt2...)
-[17:56:28] run_id=20260902215628-79e0713a
-[17:56:38] terminal=succeeded summary={"total": 1, ..., "pass_rate": 1.0, "wall_seconds": 5.4}
-[17:56:38] artifacts_prefix=ykt3-to-ykt2/benchmarker/keycloak-...-rossoctl/gsm8k/20260902215628-79e0713a
-  json           468  https://rossoctl-benchmarking.s3.us-east-1.amazonaws.com/.../run.json
+[15:20:29] run_id=20261004192029-5beb2676
+[15:20:40] terminal=succeeded summary={"total": 1, ..., "pass_rate": 1.0, "wall_seconds": 3.1}
+…          artifacts_prefix=ykt3/benchmarker/keycloak-...-rossoctl/gsm8k/20261004192029-5beb2676
+  json           469  https://rossoctl-benchmarking.s3.us-east-1.amazonaws.com/.../run.json
   ...
-[17:56:39] mirrored 8/8 -> /tmp/autobench/ykt3-to-ykt2/.../20260902215628-79e0713a
-  -rw-r--r--      3002  Sep 02 17:56  manifest.json
-  -rw-r--r--      1035  Sep 02 17:56  report.ndjson
-  -rw-r--r--     11984  Sep 02 17:56  report.parquet
-  -rw-r--r--       468  Sep 02 17:56  run.json
-  -rw-r--r--     52578  Sep 02 17:56  span_report.ndjson
-  -rw-r--r--     10878  Sep 02 17:56  span_report.parquet
-  -rw-r--r--       371  Sep 02 17:56  token_report.ndjson
-  -rw-r--r--      4425  Sep 02 17:56  token_report.parquet
-  8 files, 84,741 bytes
+…          mirrored 8/8 -> /tmp/autobench/ykt3/.../20261004192029-5beb2676
+  -rw-r--r--      2882  Oct 04 15:20  manifest.json
+  -rw-r--r--      1023  Oct 04 15:20  report.ndjson
+  -rw-r--r--     11984  Oct 04 15:20  report.parquet
+  -rw-r--r--       469  Oct 04 15:20  run.json
+  -rw-r--r--     49972  Oct 04 15:20  span_report.ndjson
+  -rw-r--r--     10394  Oct 04 15:20  span_report.parquet
+  -rw-r--r--       370  Oct 04 15:20  token_report.ndjson
+  -rw-r--r--      4425  Oct 04 15:20  token_report.parquet
+  8 files, 81,519 bytes
 
-  cd /tmp/autobench/ykt3-to-ykt2/.../20260902215628-79e0713a
+  cd /tmp/autobench/ykt3/.../20261004192029-5beb2676
 
   status      succeeded
   pass_rate   1.0   (1/1)
-  wall        5s
+  wall        3s
 ```
 
 The trailing `cd` is there because the mirror path is absolute and deeply nested — retyping it
@@ -1494,7 +1473,7 @@ autobench-cli whoami                                  # GET /hello
 autobench-cli list                                    # GET /benchmarks
 autobench-cli mlflow-health                           # GET /mlflow/health (§5.1); exit 8 = not healthy
 autobench-cli deploy    --benchmark gsm8k
-autobench-cli wait      --benchmark gsm8k             # stability + card gates
+autobench-cli wait      --benchmark gsm8k             # the readiness-stability gate
 autobench-cli run       --benchmark gsm8k --tasks 1    # prints the run_id
 autobench-cli poll      --benchmark gsm8k --run "$RUN"
 autobench-cli report    --benchmark gsm8k --run "$RUN" # GET …/report (needs MLflow)
@@ -1511,7 +1490,7 @@ Every option is catalogued in §7.2. Switching to KinD needs only three lines:
 ```bash
 export BM_BASE="http://autobench.localtest.me:8080"
 export BM_ISS="http://keycloak.localtest.me:8080/realms/rossoctl"
-export BM_PASSWORD_FILE="$HOME/.rossoctl-kind/benchmarker.pass"; unset BM_INSECURE BM_CARD_TEMPLATE
+export BM_PASSWORD_FILE="$HOME/.rossoctl-kind/benchmarker.pass"; unset BM_INSECURE
 ```
 
 > For the full 12-run matrix use `reference/run-12.py` instead — see §7.4. It implements the same
@@ -1535,7 +1514,7 @@ tool serves "just run it" and "show me one HTTP call".
 | `mlflow-health` | `GET /mlflow/health` (§5.1) — run this **before** trusting a report. Exits `8` when any stage failed, so a bring-up script can gate on `$?`; `--no-round-trip` reads only |
 | `deploy` / `teardown` | create / delete the MCP tool + A2A agent |
 | `delete-agent` / `delete-tool` | `DELETE /agents/{ns}/{name}` / `/tools/{ns}/{name}` — one AgentRuntime by its exact `--name`; `404` counts as gone. `teardown` addresses a benchmark and experiment, and stops at a missing agent without reaching its MCP tool; these clean up what that leaves behind |
-| `wait` | block on the readiness-stability and agent-card gates |
+| `wait` | block on the readiness-stability gate |
 | `run` | `POST …/runs`, prints the `run_id` |
 | `poll` | follow one run to a terminal status |
 | `report` | `GET …/report` (needs MLflow configured, else empty) |
@@ -1609,7 +1588,7 @@ usually easier because the same values drive `reference/run-12.py`.
 | Flag | Env | Default |
 |---|---|---|
 | `--base` | `BM_BASE` | *(required)* Service base URL |
-| `--iss` | `BM_ISS` | *(required)* the instance's **own** issuer — for a cross-cluster setup this is the **workload** cluster's Keycloak, not the Service's |
+| `--iss` | `BM_ISS` | *(required)* the instance's **own** issuer — the Keycloak on the cluster the Service runs on |
 | `--user` | `BM_USER` | `benchmarker` |
 | `--client` | `BM_CLIENT` | `rossoctl` |
 | `--insecure` | `BM_INSECURE=1` | off — set it for OpenShift's self-signed edge routes |
@@ -1618,8 +1597,6 @@ Two settings are **environment-only**, with no flag:
 
 - **`BM_PASSWORD_FILE`** (a `chmod 600` file) or `BM_PASSWORD`. One is mandatory; the CLI exits
   rather than prompting. Prefer the file so the secret never reaches your shell history.
-- **`BM_CARD_TEMPLATE`** — when set, `wait` additionally polls the agent card until it returns 200.
-  Needed for cross-cluster runs where the agent is reachable only via an edge Route.
 
 **Exit codes.** `0` success · `8` `mlflow-health` found a stage that failed · `7` the run reached a
 terminal state that was **not** `succeeded` ·
@@ -1669,13 +1646,12 @@ separate one-line commands, see §7.5.)
 ```bash
 git clone https://github.com/rossoctl/autobench && cd autobench
 
-# Same five variables as §7.1 — plus a label, which names the state file and the reports.
+# Same four variables as §7.1 — plus a label, which names the state file and the reports.
 export BM_BASE=https://autobench-rossoctl-system.apps.ykt3.example.com
-export BM_ISS=https://keycloak-keycloak.apps.ykt2.example.com/realms/rossoctl
+export BM_ISS=https://keycloak-keycloak.apps.ykt3.example.com/realms/rossoctl
 export BM_PASSWORD_FILE="$HOME/.rossoctl-ykt3/benchmarker.pass"
 export BM_INSECURE=1
-export BM_CARD_TEMPLATE="https://{service}-{namespace}.apps.ykt2.example.com/.well-known/agent-card.json"
-export BM_LABEL=ocp-dev146
+export BM_LABEL=ykt3-v135
 
 # Space the legs that share prompts past the LLM gateway's completion cache, and interleave the
 # cache groups so the gaps overlap real work instead of being slept through. Without these two the
@@ -1683,7 +1659,7 @@ export BM_LABEL=ocp-dev146
 export BM_CACHE_GAP=900
 export BM_ORDER=1,12,2,10,3,11,5,9,6,4,7,8
 
-python3 reference/run-12.py            # ~2h10m; log it: ... 2>&1 | tee /tmp/run12-ocp.log
+python3 reference/run-12.py            # ~2h05m; log it: ... 2>&1 | tee /tmp/run12-ykt3.log
 ```
 
 **`BM_CACHE_GAP` defaults to `0`, and that default silently costs you two columns.** The gateway
@@ -1693,17 +1669,18 @@ prompts — a later leg is served the earlier leg's completions, replaying its `
 cache lookup instead of a call. Input tokens and pass rates are unaffected; **per-call latency and
 output tokens are not comparable across those legs** unless they are spaced. `900` gives a 50%
 margin, only the *shortfall* is slept, and an interleaving `BM_ORDER` is what keeps the cost down:
-the v1.28 matrices slept **33 minutes** per platform on top of ~1h35m of leg time, where the
+the v1.35 matrices slept **~40 minutes** per platform, on top of about an hour of run time, where the
 spec-file order would have slept about twice that. **Latency is the wrong detector for a replay** —
 one measured replay took 3.0 s, the same as a miss — so compare response `id`s, not durations.
 
 **What the gap does not cover: tau2's opening call, task to task inside one leg.** `BM_CACHE_GAP`
 spaces *legs*; it cannot help where consecutive tasks collide seconds apart. Inside a task nothing
 can collide — every call after the first re-sends the accumulated history, so each body is strictly
-larger than the last, and across all 268 tasks of the v1.28 matrix no task repeats even an
-input-token count among its own calls (unequal counts imply unequal bodies, so that is a proof, not
-just an absence). But **every tau2 task issues a byte-identical *first* request** — 5054 input
-tokens on all 60 tasks, both platforms — because for tau2 the prompt text is the same for every
+larger than the last. In the v1.35 pair, 279 of 281 tasks never repeat even an input-token count
+among their own calls (unequal counts imply unequal bodies, so for those it is a proof, not just an
+absence); the other two are appworld tasks on KinD where the agent re-sent an identical request, 22 s
+and 2 min apart. But **every tau2 task issues a byte-identical *first* request** — 5054 input
+tokens on every tau2 task, both platforms — because for tau2 the prompt text is the same for every
 task: the scenario lives in the MCP server's user simulator, which only speaks after the agent
 opens, and the task identity travels in the session metadata rather than the prompt (see
 [One task, end to end](#one-task-end-to-end)). So one generation serves the leg and the rest are
@@ -1713,20 +1690,20 @@ comparison the matrix exists to make still holds; just do not read a tau2 first-
 measurement. Closing it would need a `no-cache` directive on the agent's requests, which AutoBench
 does not control.
 
-That residual is also the cleanest confirmation of the TTL. Two slow serial legs flip their
-first-call output token count mid-leg (46→63 at task 6, 44→64 at task 8) at **+641 s and +632 s** —
-deterministic decoding on an identical body could never do that, and the two fast legs, which got
-through all 20 first calls in under 370 s, never flip. Both numbers land on the ~10 min measured by
-survival curve, from an entirely independent signal.
+You can see it in the artifacts. In the v1.35 pair every tau2 leg sent all its first calls within
+460 s, inside the TTL, and each leg's first-call output token count is constant across the leg (64
+on both serial legs) — one generation, replayed. At 4-way parallelism the opening wave can race the
+cache and produce a second generation (ykt3's #10 has two values, 61 and 41, six seconds apart). A
+leg that ran longer than ~10 min would show its first-call count change at the TTL.
 
 It ends with a per-leg summary and the state file path:
 
 ```
-[21:03:57] === done in 7845s; 12 runs -> /tmp/autobench/run12-ocp-dev146.json
-[21:03:57]   #1  gsm8k     succeeded      pass=1.0   tasks=1
-[21:03:57]   #2  gsm8k     succeeded      pass=1.0   tasks=10
+[20:27:29] === done in 7475s; 12 runs -> /tmp/autobench/run12-ykt3-v135-20261004.json
+[20:27:29]   #1  gsm8k     succeeded      pass=1.0   tasks=1
+[20:27:29]   #12 appworld  succeeded      pass=0.0   tasks=20
+[20:27:29]   #2  gsm8k     succeeded      pass=1.0   tasks=10
 ...
-[21:03:57]   #12 appworld  succeeded      pass=0.0   tasks=20
 ```
 
 Then turn that state file into the two documents (all numbers derived from the mirrored
@@ -1734,15 +1711,15 @@ artifacts — nothing transcribed):
 
 ```bash
 # 1. the 12-run report. <date> is the date the RUNS executed, from the modal run_id prefix.
-python3 reference/gen-12run-report.py /tmp/autobench/run12-ocp-dev146.json v1.28 \
-  "OpenShift — ykt3 Service, ykt2 workloads (cross-cluster)" \
-  results/12run-report-v1.28-20260915-ocp.md
+python3 reference/gen-12run-report.py /tmp/autobench/run12-ykt3-v135-20261004.json v1.35 \
+  "OpenShift — ykt3, single-cluster Helm install, agent runner direct (ETE-ext gateway)" \
+  results/12run-report-v1.35-20261004-ocp.md
 
-# 2. OCP vs KinD, once both matrices exist
-python3 reference/gen-12run-comparison.py \
-  /tmp/autobench/run12-ocp-dev146.json "OpenShift (ykt3 Service, ykt2 workloads)" \
-  /tmp/autobench/run12-kind-dev146.json "KinD (single-node local)" v1.28 \
-  results/12run-comparison-v1.28-20260915.md
+# 2. OCP vs KinD, once both matrices exist. --gateway same: both sent their model calls to one gateway.
+python3 reference/gen-12run-comparison.py --gateway same \
+  /tmp/autobench/run12-ykt3-v135-20261004.json "OpenShift (ykt3, single-cluster)" \
+  /tmp/autobench/run12-kind-v135-20261004.json "KinD (single-node local)" v1.35 \
+  results/12run-comparison-v1.35-20261004.md
 ```
 
 **Do not mine plugin overhead out of this matrix.** `reference/gen-plugin-overhead.py` does exactly
@@ -1756,7 +1733,7 @@ replicates and n=50 — see [PLUGIN_OVERHEAD.md](PLUGIN_OVERHEAD.md) for the fin
 `reference/gen-plugin-study.py` / `gen-plugin-study-xplat.py` for the generators:
 
 ```bash
-BM_SPECS=reference/plugin_study_specs.json BM_LABEL=pstudy-ocp-v128 \
+BM_SPECS=reference/plugin_study_specs.json BM_LABEL=pstudy-ocp-v135 \
   BM_CACHE_GAP=900 BM_ORDER=111,112,101,102,103,104,105,113,106,107,108,109,110 \
   python3 reference/run-12.py        # ~3h40m, most of it cache gaps; detach it
 
@@ -1764,10 +1741,10 @@ BM_SPECS=reference/plugin_study_specs.json BM_LABEL=pstudy-ocp-v128 \
 # without it, per-preset medians mix judged and unjudged calls and mislead.
 oc -n rossoctl-system logs deploy/ibac-judge --since=6h --timestamps \
   | grep -vi healthz | awk '{print $1}' > /tmp/judge-ocp.ts
-python3 reference/gen-plugin-study.py /tmp/autobench/run12-pstudy-ocp-v128.json \
-  reference/plugin_study_specs.json v1.28 \
-  "OpenShift — ykt3 Service / ykt2 workloads" \
-  results/12run-plugin-study-v1.28-20260915-ocp.md /tmp/judge-ocp.ts
+python3 reference/gen-plugin-study.py /tmp/autobench/run12-pstudy-ocp-v135.json \
+  reference/plugin_study_specs.json v1.35 \
+  "OpenShift — ykt3, single-cluster" \
+  results/12run-plugin-study-v1.35-ocp.md /tmp/judge-ocp.ts
 ```
 
 Switching to KinD is the same three-line change as §7.1 plus a new label:
@@ -1776,9 +1753,9 @@ Switching to KinD is the same three-line change as §7.1 plus a new label:
 export BM_BASE=http://autobench.localtest.me:8080
 export BM_ISS=http://keycloak.localtest.me:8080/realms/rossoctl
 export BM_PASSWORD_FILE="$HOME/.rossoctl-kind/benchmarker.pass"
-unset BM_INSECURE BM_CARD_TEMPLATE
-export BM_LABEL=kind-dev146
-python3 reference/run-12.py            # ~2h13m on a single node too
+unset BM_INSECURE
+export BM_LABEL=kind-v135
+python3 reference/run-12.py            # ~2h08m on a single node too
 ```
 
 **Run the two platforms sequentially, not in parallel.** Each platform has its *own* litellm
@@ -1791,7 +1768,7 @@ Other knobs, all optional:
 | Variable | Default | Use |
 |---|---|---|
 | `BM_CACHE_GAP` | `0` | seconds a (benchmark, model) prompt set must rest between legs so the gateway's completion cache expires. **Set it to `900`** — the default measures replays on legs #1–#3 and #5–#8 |
-| `BM_ORDER` | the spec file's | comma-separated execution order. Interleave the cache groups (`1,12,2,10,3,11,5,9,6,4,7,8`) so `BM_CACHE_GAP` overlaps real work: 33 min slept instead of ~68 |
+| `BM_ORDER` | the spec file's | comma-separated execution order. Interleave the cache groups (`1,12,2,10,3,11,5,9,6,4,7,8`) so `BM_CACHE_GAP` overlaps real work: ~40 min slept instead of about twice that |
 | `BM_SPECS` | `reference/run12_specs.json` | an alternate spec file, so an experiment reuses this driver without touching the canonical matrix. Accepts a bare list of legs or `{"order": [...], "legs": [...]}` |
 | `BM_ONLY` | all 12 | comma-separated leg numbers, e.g. `BM_ONLY=7` to re-run one leg, `BM_ONLY=1,2,3` for a smoke pass |
 | `BM_STABLE_POLLS` | `4` | consecutive ready polls required before a run is submitted |
@@ -1799,9 +1776,10 @@ Other knobs, all optional:
 | `BM_USER` / `BM_CLIENT` | `benchmarker` / `rossoctl` | non-default realm identity |
 | `BM_PASSWORD` | — | the password inline, instead of `BM_PASSWORD_FILE`. Prefer the file (`chmod 600`): an exported variable leaks into `env`, process listings and shell history |
 
-`BM_ONLY` is how you repair a matrix without redoing it: a leg that failed to deploy can be re-run
-on its own and merged into the state file, which is exactly what happened to leg #7 of the v1.24
-OCP matrix (a transient `DELETE -> 500` left a stale tool behind and the deploy hit `409`).
+`BM_ONLY` is how you repair a matrix without redoing it: a leg that failed can be re-run on its own
+(`BM_ONLY=7`) under a new `BM_LABEL`, and its entry merged into the original state file. Merge only a
+re-run whose tasks actually passed, not one that merely reached `succeeded`, which a run that lost
+every task can still do.
 
 ### 7.5 The 12 legs as individual `autobench-cli` commands
 
@@ -1971,11 +1949,11 @@ published artifacts is a manual browser print or a hand-edited table.
 
 | Artifact | Generated by | Source of truth |
 |---|---|---|
-| `docs/DEVELOPER_GUIDE.pdf`, `docs/ADMIN_GUIDE.pdf`, `docs/12_RUNS_CROSS_CLUSTER.pdf` | `python3 reference/gen_pdf.py` | the `.md` beside it |
+| `docs/DEVELOPER_GUIDE.pdf`, `docs/ADMIN_GUIDE.pdf` | `python3 reference/gen_pdf.py` | the `.md` beside it |
 | the table of contents in this file (and in the Admin Guide) | `python3 reference/gen_toc.py docs/DEVELOPER_GUIDE.md` | that file's own headings |
 | §7.5's 12 one-line commands | `reference/run12_specs.json` | the same specs `reference/run-12.py` executes |
 | the tool-selection table in §2 and in the primer | `python3 reference/gen-shortlist-audit.py <run12.json> "<label>" …` | `span_report.ndjson` in each leg's mirror |
-| `docs/AutoBench.pptx` | `uv run --with python-pptx python docs/generate_pptx.py` | `results/12run-*.md` + this guide |
+| `docs/AutoBench.pptx` | `uv run --with python-pptx python docs/generate_pptx.py` | `docs/results/v1.35-2026-10-04/` + this guide |
 | `docs/AutoBench.pdf` | `python3 reference/gen_pdf.py` (LibreOffice) | `docs/AutoBench.pptx` |
 
 `gen_pdf.py` with no arguments rebuilds every PDF in its `PAIRS` list (~10 s). It dispatches on extension:
@@ -1985,7 +1963,7 @@ do a subset, `-o` to write elsewhere:
 ```bash
 python3 reference/gen_pdf.py                                  # every pair in PAIRS
 python3 reference/gen_pdf.py docs/DEVELOPER_GUIDE.md          # just this guide
-python3 reference/gen_pdf.py docs/12_RUNS_CROSS_CLUSTER.md -o /tmp/draft.pdf
+python3 reference/gen_pdf.py docs/ADMIN_GUIDE.md -o /tmp/draft.pdf
 ```
 
 **Every generated PDF carries a bookmarks outline** (the navigation sidebar), and each run prints
