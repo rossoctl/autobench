@@ -190,11 +190,11 @@ to its last, with the span each step appears as:
 Service:  create_session(task_id)                    → MCP pod     [MCP.CreateSession]
 Service:  send_prompt(task text; session_id in A2A   → agent       [Agent.Call]
           request metadata)                                        ── ONE message, once per task
-  agent:    connect_mcp — tools/list                 → MCP pod     [connect_mcp]     ~27–38 ms
-  agent:    create_agent                                           [create_agent]    6.7 ms warm,
-                                                                    up to 6.5 s on a cold pod
+  agent:    connect_mcp — tools/list                 → MCP pod     [connect_mcp]     ~40–50 ms
+  agent:    create_agent                                           [create_agent]    ~12–15 ms warm,
+                                                                    up to 5.2 s on a cold pod
   agent:    initial_observation — local, no I/O                    [execute_tool initial_observation]
-                                                                    ~50 µs, never counted
+                                                                    ~70 µs, never counted
   agent:    LOOP  chat(model) → execute_tool(…)      → MCP pod     [chat <model>]
                   → observation → chat → …                         [execute_tool <tool>]
   agent:    returns its final message, when the model asks for no further tool
@@ -206,8 +206,8 @@ Five things that trace makes concrete:
 
 - **One A2A turn per task.** Everything the agent does — every model call, every tool call — happens
   inside that single streaming request. The agent-side `POST /` span brackets it, so `Agent.Call −
-  POST /` is the Service's own per-task cost: **16.9 ms of a 10.4 s gsm8k task, 13.2 ms of a 70.3 s
-  tau2 one**.
+  POST /` is the Service's own per-task cost: a median **16.3 ms of a 2.5 s gsm8k task, 15.9 ms of a
+  40 s tau2 one** (v1.35 pair).
 - **The Service issues no tool call.** Its MCP traffic is `list_tasks`, `create_session`,
   `evaluate_session`, `delete_session`. `execute_tool` is the agent's outbound call, named by the
   agent; the Service never learns a tool's name.
@@ -1085,10 +1085,10 @@ spans — `Agent.Session` (`kind=root`) and `MCP.CreateSession` / `Agent.Call` /
 (`kind=phase`) — and emits nothing else, because it carries no OTEL auto-instrumentation. Everything
 at **depth ≥ 2 comes from inside the agent pod**: the spans its runtime names (`invoke_agent`,
 `chat <model>`, `execute_tool <tool>`) plus the A2A/ASGI internals that dominate the count. On one
-gsm8k task, 4 of 109 spans were the Service's and 106 sat under `Agent.Call`. That gives a free
-measurement worth knowing: the agent-side `POST /` span brackets the whole agent-side task, so
-`Agent.Call − POST /` is the Service's own per-task cost — **16.9 ms of a 10.4 s gsm8k task, 13.2 ms
-of a 70.3 s tau2 task**.
+gsm8k task, 4 of 96 spans were the Service's and the other 92 came from the agent pod. That gives a
+free measurement worth knowing: the agent-side `POST /` span brackets the whole agent-side task, so
+`Agent.Call − POST /` is the Service's own per-task cost — a median **16.3 ms of a 2.5 s gsm8k task,
+15.9 ms of a 40 s tau2 task**.
 
 #### Error text is classified, not published
 
