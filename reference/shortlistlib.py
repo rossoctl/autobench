@@ -27,8 +27,11 @@ exactly zero. They do. `appworld` is above the threshold and pairs 1:1, every as
 preceded by a selection call. Read a non-zero figure on a sub-threshold benchmark as the rule
 misfiring, not as a discovery.
 
-`request_max_tokens == 1` chat spans are excluded: those are the capability probes agents up to
-`exgentic 0.3.5.dev131` issued once per task, not turns. Tool spans are matched on `kind == "tool"`
+Two kinds of chat span are excluded because neither is a turn. `request_max_tokens == 1`: the
+capability probes agents up to `exgentic 0.3.5.dev131` issued once per task. And a chat span with
+`status_code == "ERROR"`: a call the gateway failed, which the agent then retries — the retry is
+the turn, and counting the failure would make it look like a selection call, since it is followed
+by another chat. Tool spans are matched on `kind == "tool"`
 (equivalent to a `name` starting `execute_tool` on every matrix measured — 0 disagreements across
 the v1.28 pair, both ways), and `counted` is deliberately ignored, because a tool span the
 aggregator cannot see still marks the boundary between two model turns.
@@ -53,7 +56,8 @@ def roles(spans) -> list[tuple[dict, str]]:
     """
     seq = sorted((s for s in spans
                   if s.get("kind") in ("chat", "tool")
-                  and s.get("request_max_tokens") != 1),
+                  and s.get("request_max_tokens") != 1
+                  and not (s.get("kind") == "chat" and s.get("status_code") == "ERROR")),
                  key=lambda s: s.get("start_time") or "")
     out = []
     for i, s in enumerate(seq):

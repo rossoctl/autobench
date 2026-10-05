@@ -1,6 +1,6 @@
 # 12-Run Comparison — OpenShift (ykt3, single-cluster) vs KinD (single-node local), both Service v1.35
 
-**Report generated:** 2026-10-05T01:19:49Z
+**Report generated:** 2026-10-05T01:37:39Z
 
 **Platforms compared:** OpenShift (ykt3, single-cluster) vs KinD (single-node local)
 
@@ -132,10 +132,10 @@ Not every LLM call works on the task. The agent image defaults to `enable_tool_s
 | bench | calls/task OpenShift (ykt3, single-cluster) | select OpenShift (ykt3, single-cluster) | IN% OpenShift (ykt3, single-cluster) | calls/task KinD (single-node local) | select KinD (single-node local) | IN% KinD (single-node local) |
 |---|---:|---:|---:|---:|---:|---:|
 | gsm8k | 1.1 | 0.0 (0%) | 0% | 1.1 | 0.0 (0%) | 0% |
-| tau2 | 11.0 | 0.0 (0%) | 0% | 11.2 | 0.1 (1%) | 0% |
-| appworld | 30.3 | 15.2 (50%) | 67% | 30.1 | 15.1 (50%) | 67% |
+| tau2 | 11.0 | 0.0 (0%) | 0% | 11.1 | 0.0 (0%) | 0% |
+| appworld | 30.3 | 15.2 (50%) | 67% | 30.0 | 15.0 (50%) | 67% |
 
-`gsm8k` stay at **zero** on both sides — they advertise fewer tools than the threshold, so shortlisting cannot fire, which is the control that keeps ordinary multi-turn traffic from being counted as selection. `appworld` spends **half its calls** selecting on both platforms, and the input-token share agrees to within a few points (67% on OpenShift (ykt3, single-cluster) vs 67% on KinD (single-node local)). So the selection overhead is a property of the tool surface, not of the cluster: it inflates both sides' appworld token totals equally and does not bias the comparison — but it does mean a per-task token or dollar figure for that benchmark is mostly the price of choosing tools.
+`gsm8k` and `tau2` stay at **zero** on both sides — they advertise fewer tools than the threshold, so shortlisting cannot fire, which is the control that keeps ordinary multi-turn traffic from being counted as selection. `appworld` spends **half its calls** selecting on both platforms, and the input-token share agrees to within a few points (67% on OpenShift (ykt3, single-cluster) vs 67% on KinD (single-node local)). So the selection overhead is a property of the tool surface, not of the cluster: it inflates both sides' appworld token totals equally and does not bias the comparison — but it does mean a per-task token or dollar figure for that benchmark is mostly the price of choosing tools.
 
 ## Totals
 

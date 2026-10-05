@@ -1,6 +1,6 @@
 # AutoBench Service — 12 Parameterized Runs (OpenShift — ykt3, single-cluster Helm install, agent runner direct (ETE-ext gateway))
 
-**Report generated:** 2026-10-05T01:19:48Z  
+**Report generated:** 2026-10-05T01:37:38Z  
 **Service version:** `v1.35`  
 **Platform:** OpenShift — ykt3, single-cluster Helm install, agent runner direct (ETE-ext gateway)  
 **Runs executed:** 12

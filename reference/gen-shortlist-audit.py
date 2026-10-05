@@ -2,8 +2,8 @@
 """How much of a leg's inference goes on picking tools rather than doing the task.
 
     python3 reference/gen-shortlist-audit.py \\
-        results/v1.28-dev146/run12-ocp-dev146.json "OpenShift (ykt3 Service, ykt2 workloads)" \\
-        results/v1.28-dev146/run12-kind-dev146.json "KinD (single-node local)"
+        /tmp/autobench/run12-ykt3-v135-20261004.json "OpenShift (ykt3, single-cluster)" \\
+        /tmp/autobench/run12-kind-v135-20261004.json "KinD (single-node local)"
 
 Writes, and owns completely, the <!-- shortlist --> block in
   docs/BENCHMARKS_PRIMER.md
@@ -90,7 +90,7 @@ def block(pooled: dict[str, dict], sides: list[tuple[str, dict[str, dict]]]) -> 
             f"{pct(s[bench]['sel_in'], s[bench]['sel_in'] + s[bench]['as_in'])} on {lab}"
             for lab, s in sides for bench in [hits[0]] if bench in s and s[bench]["tasks"])
         say.append(
-            f"Measured over the **{tot} task rows that carry chat spans** in the v1.28 matrices, "
+            f"Measured over the **{tot} task rows that carry chat spans** in the two matrices, "
             f"both platforms. "
             f"{' and '.join('`' + b + '`' for b in zero)} expose fewer than the agent's "
             f"`max_selected_tools = {THRESHOLD}` and so measure **exactly zero** selection calls — "
