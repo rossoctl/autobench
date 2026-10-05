@@ -1222,7 +1222,7 @@ traps = [
     ("Task selection is deterministic",
      "A run takes the first max_tasks tasks, so the same task_id is the same task across runs "
      "and clusters, and a smaller run is a prefix of a larger one. That is what makes cross-platform "
-     "comparison like-for-like — six legs matched to the byte."),
+     "comparison like-for-like — seven legs matched to the byte."),
 ]
 y = inch(1.32)
 for i, (head, body_text) in enumerate(traps, 1):
