@@ -1330,14 +1330,14 @@ grid(s, inch(6.90), inch(1.30), inch(5.95), inch(2.60), [
 ], col_w=[inch(2.55), inch(1.70), inch(1.70)], font=10.5)
 
 box(s, inch(6.90), inch(4.10), inch(5.95), inch(1.75),
-    "Same five tasks: gpt-4.1 costs 4.1× gpt-5-mini",
+    "Same five tasks: gpt-4.1 costs 4.6× gpt-5-mini",
     LTPURPLE, ROSSO, font=13.5, font_color=ROSSO,
-    sub="Mean of its 2 legs against gpt-5-mini's 7; leg-to-leg the ratio spans 2.5×–6.7×, because "
+    sub="Mean of its 2 legs against gpt-5-mini's 8; leg-to-leg the ratio spans 3.3×–6.6×, because "
         "gpt-5-mini's output length swings with reasoning effort. The reasoning model answers in ONE "
         "call; gpt-4.1 needs ~3 tool round-trips. On our card the INPUT side decides it alone — 2.6× "
         "the tokens at 8× the price is a 21× input bill, and the output side cannot offset it "
-        "(gpt-5-mini emits 3.6× more output at a quarter the rate, so the two output bills land "
-        "within 10% of each other).",
+        "(gpt-5-mini emits 3.3× more output at a quarter the rate, so the two output bills land "
+        "within 24% of each other).",
     sub_color=INK)
 
 _ban = box(s, inch(0.45), inch(6.00), inch(12.4), inch(0.95),
@@ -1379,7 +1379,7 @@ box(s, inch(0.45), inch(4.55), inch(6.15), inch(2.35),
     sub="The judge makes ~1 completion per authorized tool call, on Azure/gpt-4.1 — the dearest "
         "model on the card — against a FIXED 1,577-char system prompt that does not shrink with the "
         "task. That is ≥ $0.00111 per call, which is 2.6× the entire gsm8k task it is authorizing "
-        "($0.00043), and 1.4×–4.4× the agent's whole bill across legs #6–#8. On the plugin legs IBAC "
+        "($0.00043), and 1.7×–3.4× the agent's whole bill across legs #6–#8. On the plugin legs IBAC "
         "is not overhead on the bill; it IS the bill.  tau2's user simulator is invisible the same "
         "way: same model as the agent, but inside the uninstrumented MCP pod.",
     sub_color=INK)
@@ -1463,7 +1463,7 @@ grid(s, inch(0.45), inch(1.25), inch(12.4), inch(3.30), [
      "the pipeline is stable and DETERMINISTIC: 7 of 12 legs have byte-identical input-token\n"
      "totals across two unlike clusters — the strongest like-for-like check available"),
     ("#4", "gsm8k on Azure/gpt-4.1\n(model swap, identical tasks)",
-     "the only clean model comparison in the matrix: gpt-4.1 costs 4.1× gpt-5-mini for no\n"
+     "the only clean model comparison in the matrix: gpt-4.1 costs 4.6× gpt-5-mini for no\n"
      "pass-rate gain at this difficulty, and the INPUT side decides it alone (7.7)"),
     ("#5–#8", "AuthBridge auth-only / ibac-only / full /\nfull + per-plugin override, same 5 tasks",
      "plugin cost is PLATFORM-SPECIFIC: OpenShift pays in the sidecar (+13.68 s/task), KinD in\n"

@@ -459,17 +459,17 @@ IBAC judge adds.
 
 ![Money climbs the ladder faster than tokens](img/ladder-amplification.png)
 
-**Money climbs the difficulty ladder faster than tokens do: tau2 is 178× a gsm8k task in tokens but 279× in dollars, appworld is 564× a gsm8k task in tokens but 1,069× in dollars — so a budget scaled off the token ratios is short by 1.6–1.9×.**
+**Money climbs the difficulty ladder faster than tokens do: tau2 is 175× a gsm8k task in tokens but 282× in dollars, appworld is 621× a gsm8k task in tokens but 1,195× in dollars — so a budget scaled off the token ratios is short by 1.6–1.9×.**
 
-Each rung is a different model, which is why the dollar bar outruns the token bar: climbing the ladder also buys a dearer model. Wall-clock climbs SLOWEST of the three (17× tau2, 54× appworld), because the harder benchmarks parallelize their turns while their bills add up.
+Each rung is a different model, which is why the dollar bar outruns the token bar: climbing the ladder also buys a dearer model. Wall-clock climbs SLOWEST of the three (19× tau2, 87× appworld), because the harder benchmarks parallelize their turns while their bills add up.
 
-<sub>gsm8k baseline: 523 tokens, $0.00055, 4.9 s median, over 171 task rows.</sub>
+<sub>gsm8k baseline: 513 tokens, $0.00053, 2.5 s median, over 172 task rows.</sub>
 
 #### Figure 2 — Efficiency only means anything per SUCCESS
 
 ![Efficiency only means anything per SUCCESS](img/cost-per-pass.png)
 
-**Dividing by the pass rate is what turns a token count into an efficiency figure: gsm8k $0.00055 per task becomes $0.00056 per PASS; tau2 $0.1538 per task becomes $0.1846 per PASS — and appworld has no finite cost per success at all, because it passed nothing.**
+**Dividing by the pass rate is what turns a token count into an efficiency figure: gsm8k $0.00053 per task becomes $0.00054 per PASS; tau2 $0.1494 per task becomes $0.1660 per PASS — and appworld has no finite cost per success at all, because it passed nothing.**
 
 A change that halves your token use and halves your pass rate has gained you nothing, which is why we never quote tokens per task as an efficiency number on its own. The unbounded row is not a rendering artifact: it is the honest way to report a benchmark that runs to completion, records every token, and then fails evaluation.
 
@@ -547,12 +547,12 @@ input and emits roughly a third of the output. The two are close in latency (3.6
 2.5–4.0 s), so tripling the calls costs gpt-4.1 little time — the one call gpt-5-mini makes carries
 its reasoning.
 
-**gpt-4.1 costs 4.1× gpt-5-mini for the same five tasks** — mean of its 2 legs against gpt-5-mini's
-7, with the ratio spanning 2.5–6.7× depending on which pair of legs you compare, because gpt-5-mini's
+**gpt-4.1 costs 4.6× gpt-5-mini for the same five tasks** — mean of its 2 legs against gpt-5-mini's
+8, with the ratio spanning 3.3–6.6× depending on which pair of legs you compare, because gpt-5-mini's
 output length swings with how much it reasons. On our card the input side decides it single-handedly:
 2.6× the tokens at 8× the price is a **21×** input bill, which the output side cannot offset —
-gpt-5-mini emits 3.6× more output but pays a quarter the rate, so the two models' output bills are
-within 10% of each other.
+gpt-5-mini emits 3.3× more output but pays a quarter the rate, so the two models' output bills are
+within 24% of each other.
 
 **So the token ranking and the money ranking disagree, and which wins is a property of the price
 list, not of the models.** gpt-5-mini uses fewer total tokens *and* costs less here, but only because
@@ -577,7 +577,7 @@ cost per task  =  (input_tokens × P_in  +  output_tokens × P_out) / 1e6
 - **Plugins add billed calls of their own** — one IBAC judge completion per authorized tool call,
   outside the agent's spans, because the sidecar makes them and not the instrumented agent. The judge
   runs `Azure/gpt-4.1` on a fixed 1,577-char system prompt, so **≥ $0.00111 per call** — which is
-  **2.6× the entire gsm8k task it is authorizing** ($0.00043), and 1.4–4.4× the agent's whole bill
+  **2.6× the entire gsm8k task it is authorizing** ($0.00043), and 1.7–3.4× the agent's whole bill
   across legs #6–#8. On the plugin legs IBAC is not overhead on the bill; it *is* the bill. See
   [`PLUGIN_OVERHEAD.md`](PLUGIN_OVERHEAD.md).
 - **Input cost is an upper bound.** The gateway *reports* cached input
