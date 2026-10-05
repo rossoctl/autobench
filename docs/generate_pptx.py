@@ -13,14 +13,15 @@ model, the benchmark catalog + run lifecycle, three benchmark slides, four resul
 enact/report boundaries.
 
 Content is sourced from docs/SERVICE_DESIGN_DECISIONS.md, docs/BENCHMARKS_PRIMER.md,
-docs/PLUGIN_OVERHEAD.md and the generated docs/results/v1.28-2026-09-15/ documents. Every
-measured figure comes from our own runs -- the benchmark and 12-run slides from the v1.28
-matrices' mirrored artifacts, the AuthBridge slide from the designed 13-leg plugin study on the
-same image -- not from the benchmarks' published papers.
+docs/PLUGIN_OVERHEAD.md and the generated docs/results/v1.35-2026-10-04/ documents. Every
+measured figure comes from our own runs -- the benchmark and 12-run slides from the v1.35
+matrices' mirrored artifacts (OpenShift and KinD, both single-cluster installs), the AuthBridge
+slide from the designed 13-leg plugin study on the same image -- not from the benchmarks'
+published papers.
 
 Figures are hardcoded literals here rather than read from artifacts at build time, because the
 deck has to render on a machine that has never seen a run. That makes them go stale silently:
-when a new matrix supersedes v1.28, grep this file for the bare numbers, not just for the
+when a new matrix supersedes v1.35, grep this file for the bare numbers, not just for the
 version string.
 
 Slide titles carry their agenda number, so keep the agenda list and the title_band() prefixes
@@ -215,7 +216,7 @@ except FileNotFoundError:
     _FIGS = {}
     print("WARNING: docs/img/takeaways.json missing -- skipping the chart slides.\n"
           "         uv run --with matplotlib python reference/gen-cost-charts.py "
-          "results/v1.28-dev146/run12-{ocp,kind}-dev146.json")
+          "/tmp/autobench/run12-{ykt3,kind}-v135-20261004.json")
 
 
 def figure(slide, key, x, y, w, accent, light, cap_h=inch(1.95)):
@@ -256,7 +257,7 @@ textbox(s, inch(0.9), inch(3.5), inch(11.5), inch(0.8),
         [("Architecture & Design Overview", 22, False, RGBColor(0xC9, 0xD9, 0xEC))])
 textbox(s, inch(0.9), inch(4.7), inch(11.5), inch(1.4),
         [("A pure-Python, HTTP-only service that deploys and evaluates agent benchmarks", 16, False, RGBColor(0xD8, 0xE3, 0xF0)),
-         ("across multiple cluster-specific Rossoctl instances.", 16, False, RGBColor(0xD8, 0xE3, 0xF0))])
+         ("on a Rossoctl cluster, alongside the workloads it benchmarks.", 16, False, RGBColor(0xD8, 0xE3, 0xF0))])
 textbox(s, inch(0.9), inch(6.25), inch(11.5), inch(0.4),
         [(f"Last modified {_dt.datetime.now().astimezone().strftime('%Y-%m-%d %H:%M %Z')}",
           12, False, RGBColor(0x9A, 0xB4, 0xD0))])
@@ -320,7 +321,7 @@ textbox(s, inch(0.5), inch(1.95), inch(5.85), inch(4.9),
          ("Objectives", 14, True, BLUE),
          ("• Automate benchmarking lifecycle operations", 13.5, False, INK, 1),
          ("• Cross-user/cluster sharing of benchmark run results", 13.5, False, INK, 1),
-         ("• Easy to configure in-cluster & cross-cluster benchmark runs", 13.5, False, INK, 1),
+         ("• Easy to install on a cluster and run against it: KinD or OpenShift", 13.5, False, INK, 1),
          ("• Asynchronous parallel benchmark runs", 13.5, False, INK, 1),
          ("• Secure, scalable, auditable & resilient", 13.5, False, INK, 1),
          ("3 benchmarks", 14, True, BLUE),
@@ -338,7 +339,7 @@ decisions = [
     ("Two-token auth model", "Caller JWT attributes + routes only (never forwarded); Service mints its own benchmarker (ROPC) token to Rossoctl."),
     ("iss is the trust anchor", "The JWT issuer selects the per-instance config — no separate instance argument, so no confused-deputy escape."),
     ("Per-request ROPC login", "Fresh Service token every request — no expiry handling."),
-    ("iss-keyed per-instance config", "One file per issuer: Rossoctl URL, benchmarker cred, MLflow/S3, optional Keycloak backchannel + workload route templates."),
+    ("iss-keyed per-instance config", "One file per issuer: Rossoctl URL, benchmarker cred, MLflow/S3, optional Keycloak backchannel."),
     ("Enact only what the API allows", "Deploy/run/report/export — now including AuthBridge plugin presets (layer-3). Only workload Secrets remain out-of-band: prechecked and reported (424), never silently ignored."),
     ("MLflow with Service; S3 in the cloud", "MLflow is co-located with the Service (per-service traces it emits + reads), not in the workload cluster; S3 is an external cloud service — the shared cross-service sink."),
 ]
@@ -704,8 +705,8 @@ textbox(s, inch(0.62), inch(5.46), inch(7.0), inch(0.28),
 COLS = ((inch(0.62), inch(1.15)), (inch(1.80), inch(2.50)),
         (inch(4.35), inch(2.15)), (inch(6.55), inch(1.15)))
 ROWS = [
-    # tool-call figures are MEDIANS per task, measured over the v1.28 matrices on both platforms
-    # (gsm8k n=172 → 1, tau2 n=60 → 11, appworld n=35 → 15; appworld's spread is wide).
+    # tool-call figures are MEDIANS per task, measured over the v1.35 matrices on both platforms
+    # (gsm8k n=172 → 1, tau2 n=60 → 11, appworld n=49 → 15; appworld's spread is wide).
     ("benchmark", "MCP tool image", "LLMs per task", "tool calls"),
     ("gsm8k", "exgentic-mcp-gsm8k", "1  (agent)", "~1"),
     ("tau2", "exgentic-mcp-tau2", "2  (+ user simulator)", "~11"),
@@ -747,7 +748,7 @@ for i, item in enumerate(flows):
 # mechanism is two env vars and an allowlist, and every part of it is invertible by a config that
 # looks correct — which is exactly how we shipped a matrix whose ibac legs never called the judge.
 # Sources: docs/DEVELOPER_GUIDE.md §1 "The run-time data path", docs/SERVICE_DESIGN_DECISIONS.md
-# (workload_llm.disable_proxy / no_proxy), and the measured double-bypass on KinD + ykt2.
+# (workload_llm.disable_proxy / no_proxy), and the double-bypass as measured on KinD and OpenShift.
 s = prs.slides.add_slide(BLANK)
 title_band(s, "4.2  How Interception Is Wired — and How It Silently Isn't",
            "The sidecar sees traffic only because of two env vars; a plausible config takes it "
@@ -958,7 +959,7 @@ _ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
 # ===================================== SLIDE 7c: ONE TASK, END TO END
 # Slides 2-4 draw the system spatially; nothing showed it in TIME, and the agent-side interior
 # (connect_mcp / create_agent / initial_observation / the loop) appeared nowhere. Latencies are
-# measured from the v1.28 mirrors. Mirrors DEVELOPER_GUIDE.md 1 "One task, end to end".
+# medians over the v1.35 mirrors. Mirrors DEVELOPER_GUIDE.md 1 "One task, end to end".
 s = prs.slides.add_slide(BLANK)
 title_band(s, "6.3  One Task, End to End",
            "The same system in time — and every model call and tool call lives inside ONE A2A turn")
@@ -967,10 +968,10 @@ grid(s, inch(0.45), inch(1.25), inch(12.4), inch(3.95), [
     ("Service", "create_session(task_id)  →  MCP pod", "MCP.CreateSession"),
     ("Service", "send_prompt(task text; session_id in A2A request metadata)  →  agent   "
                 "— ONE message, once per task", "Agent.Call"),
-    ("agent", "connect_mcp — tools/list  →  MCP pod   (per task, not per pod; ~27–38 ms)",
+    ("agent", "connect_mcp — tools/list  →  MCP pod   (per task, not per pod; ~40–50 ms)",
      "connect_mcp"),
-    ("agent", "create_agent   (6.7 ms warm, up to 6.5 s on a cold pod)", "create_agent"),
-    ("agent", "initial_observation — local, no I/O, ~50 µs",
+    ("agent", "create_agent   (~12–15 ms warm, up to 5.2 s on a cold pod)", "create_agent"),
+    ("agent", "initial_observation — local, no I/O, ~70 µs",
      "execute_tool initial_observation  (never counted)"),
     ("agent", "LOOP:  chat(model)  →  execute_tool(…)  →  MCP pod  →  observation  →  chat  →  …",
      "chat <model>  ·  execute_tool <tool>"),
@@ -984,8 +985,8 @@ grid(s, inch(0.45), inch(1.25), inch(12.4), inch(3.95), [
 box(s, inch(0.45), inch(5.45), inch(4.00), inch(1.45),
     "One A2A turn per task", LTBLUE, BLUE, font=13.5, font_color=BLUE,
     sub="Everything the agent does happens inside that single streaming request. Its POST / span "
-        "brackets it, so Agent.Call − POST / is the Service's own cost: 16.9 ms of a 10.4 s gsm8k "
-        "task, 13.2 ms of a 70.3 s tau2 one.", sub_color=INK)
+        "brackets it, so Agent.Call − POST / is the Service's own cost: a median 16.3 ms of a 2.5 s "
+        "gsm8k task, 15.9 ms of a 40 s tau2 one.", sub_color=INK)
 box(s, inch(4.65), inch(5.45), inch(4.00), inch(1.45),
     "The Service issues no tool call", LTTEAL, WORK, font=13.5, font_color=WORK,
     sub="Its MCP traffic is list_tasks / create_session / evaluate_session / delete_session. "
@@ -1001,7 +1002,7 @@ box(s, inch(8.85), inch(5.45), inch(4.00), inch(1.45),
 # ============================= SLIDE 7d: WHO DECIDES WHAT HAPPENS INSIDE A TASK
 # The deck explains the wiring (slides 2-4) and the catalog (6.x) but never said who DECIDES the
 # sequence of calls -- and the common wrong guess is that the MCP pod, or our prompt, prescribes it.
-# Counts are measured over every mirrored span_report.ndjson of the v1.28 matrix, both platforms.
+# Counts are measured over every mirrored span_report.ndjson of the v1.35 matrix, both platforms.
 # Mirrors DEVELOPER_GUIDE.md 1 "Who decides what happens inside a task" -- keep the two in step.
 s = prs.slides.add_slide(BLANK)
 title_band(s, "6.4  Who Decides What Happens Inside a Task",
@@ -1028,18 +1029,19 @@ grid(s, inch(0.45), inch(1.30), inch(12.4), inch(2.75), [
 box(s, inch(0.45), inch(4.35), inch(6.05), inch(1.55),
     "Selection is deterministic.  Execution is not.",
     LTBLUE, BLUE, font=14, font_color=BLUE,
-    sub="Same task id, same model, same platform, two different legs: tau2 task 2 took 13 chat / 13 "
-        "tool in one and 9 / 9 in the other; appworld 3d9a636_3 took 20 / 10 and 26 / 13. Of tasks "
-        "appearing in more than one leg, 8 of 10 tau2 and 3 of 3 appworld differ — the 10 that agree "
-        "are all gsm8k, where 1 chat / 1 tool leaves nothing to vary.",
+    sub="Same task id, same model, same platform, two different legs: tau2 task 7 took 12 chat / 12 "
+        "tool in one and 10 / 10 in the other; appworld 3d9a636_3 took 24 / 12 and 20 / 10. Of tasks "
+        "appearing in more than one leg, 14 of 20 tau2 and 10 of 10 appworld differ, while all 20 "
+        "gsm8k tasks agree — 1 chat / 1 tool leaves nothing to vary.",
     sub_color=INK)
 box(s, inch(6.80), inch(4.35), inch(6.05), inch(1.55),
     "The stop signal comes from the MCP pod, not from us",
     LTTEAL, WORK, font=14, font_color=WORK,
     sub="No terminal tool name exists anywhere in the Service. The agent reads the tool "
         "declarations at connect_mcp, and gsm8k's whole first model call is 320 input tokens — "
-        "system prompt, task text and every schema. It lands: submit 173/173 on gsm8k, finish 34/35 "
-        "on appworld (the miss timed out), while tau2 has NO terminal tool — 60/60 end on message.",
+        "system prompt, task text and every schema. It lands: submit 172/172 on gsm8k, finish 41/49 "
+        "on appworld (the rest stopped on the agent's own defect), while tau2 has NO terminal tool — "
+        "60/60 end on message.",
     sub_color=INK)
 
 _ban = box(s, inch(0.45), inch(6.15), inch(12.4), inch(0.85),
@@ -1052,7 +1054,7 @@ _ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
 
 
 # ================================ SECTION 7: THE THREE BENCHMARKS (from BENCHMARKS_PRIMER.md)
-# Every figure is measured from our own v1.28 runs (both platforms pooled, 267 task rows, none with
+# Every figure is measured from our own v1.35 runs (both platforms pooled, 281 task rows, none with
 # lost telemetry) -- not quoted from the benchmarks' published papers.
 s = prs.slides.add_slide(BLANK)
 title_band(s, "7.1  The Three Benchmarks — a Difficulty Ladder",
@@ -1062,25 +1064,25 @@ grid(s, inch(0.45), inch(1.30), inch(12.4), inch(4.35), [
     ("MODEL (the default)", "Azure/gpt-5-mini", "aws/claude-sonnet-5", "gemini-2.5-pro"),
     ("its rate, in / out $ per 1M", "0.25 / 2.00", "1.52 / 7.60", "1.25 / 10.00"),
     ("What it tests", "multi-step arithmetic", "multi-turn dialogue + tools", "long-horizon app automation"),
-    ("Task rows measured", "172 of 172", "60 of 60", "35 of 50 (15 timed out)"),
+    ("Task rows measured", "172 of 172", "60 of 60", "49 of 50 (1 timed out)"),
     ("Rows with lost telemetry", "0", "0", "0"),
-    ("Pass rate", "0.97", "0.83", "0.00"),
-    ("Input tokens / task", "341", "90,902", "269,953"),
-    ("Output tokens / task", "180", "2,061", "25,140"),
-    ("Cost / task, at those rates", "$0.00055", "$0.154", "$0.589"),
-    ("LLM calls / task", "1.1", "11.4", "29.2"),
-    ("Tool calls / task", "1.1", "11.4", "14.6"),
-    ("Median task latency", "4.9 s", "84 s", "264 s"),
-    ("Slowest task seen", "39 s", "136 s", "592 s"),
+    ("Pass rate", "0.98", "0.90", "0.00"),
+    ("Input tokens / task", "343", "87,935", "291,509"),
+    ("Output tokens / task", "170", "2,071", "26,950"),
+    ("Cost / task, at those rates", "$0.00053", "$0.149", "$0.634"),
+    ("LLM calls / task", "1.1", "11.1", "30.2"),
+    ("Tool calls / task", "1.1", "11.1", "14.9"),
+    ("Median task latency", "2.5 s", "48 s", "222 s"),
+    ("Slowest task seen", "15 s", "75 s", "591 s"),
     ("Task pool", "1,319 (main/test split)", "114 (retail domain)", "168 (test_normal split)"),
 ], col_w=[inch(2.5), inch(3.3), inch(3.3), inch(3.3)], font=11)
 _ban = box(s, inch(0.45), inch(6.05), inch(12.4), inch(0.95),
     "Read the MODEL row before any dollar figure: the three rungs do not run the same model, and "
     "each default is dearer than the one below it — so no cost here transfers to another model. The "
-    "scale gap is the headline: a tau2 task costs ~267× the input tokens of a gsm8k task, an "
-    "appworld task ~792× — and in MONEY 279× and 1,069×, because that model change compounds with "
-    "the token growth (7.6, 7.8). A 50-task gsm8k run is a minute and 2 cents; a 20-task appworld "
-    "run is 30-45 minutes, millions of tokens and dollars. Budget by benchmark, not by task count.",
+    "scale gap is the headline: a tau2 task costs ~256× the input tokens of a gsm8k task, an "
+    "appworld task ~850× — and in MONEY 282× and 1,195×, because that model change compounds with "
+    "the token growth (7.6, 7.8). A 50-task gsm8k run is half a minute and 2 cents; a 20-task "
+    "appworld run is ~25 minutes, millions of tokens and dollars. Budget by benchmark, not by task count.",
     LTGRAY, STORE, font=12.5, bold=True, font_color=INK)
 _ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
 
@@ -1097,7 +1099,7 @@ cards = [
         "Saturates near 1.0, so it cannot discriminate models. Never read it as one.",
         "Deterministic enough that task 0 costs 320 input tokens on every cluster —"
         " we use that to prove two environments are comparable.",
-        "Cheap enough to run often: a 50-task leg is 25 K tokens — 0.4% of the whole"
+        "Cheap enough to run often: a 50-task leg is ~24 K tokens — 0.1% of the whole"
         " 12-run matrix's bill, and less than a SINGLE appworld task (see 7.5).",
     ]),
     ("tau2", "the discriminator", ROSSO, LTPURPLE, [
@@ -1109,20 +1111,20 @@ cards = [
         "Episodes are nondeterministic: the same 10 tasks scored 0.90 on one cluster"
         " and 1.00 on the other, in the same matrix.",
         "At n=10 one task moves pass_rate by 0.10 — it cannot resolve less than that.",
-        "27% of a task's wall time sits INSIDE tool calls — that is the simulator"
+        "22% of a task's wall time sits INSIDE tool calls — that is the simulator"
         " generating, server-side, and its tokens appear in no report of ours.",
     ]),
     ("appworld", "the stress test", KC, LTORANGE, [
         "Realistic chores across simulated apps: discover APIs, chain many calls.",
-        "~29 LLM calls, ~15 tool calls, ~270k input, ~4.5 min per task.",
+        "~30 LLM calls, ~15 tool calls, ~290k input, ~3.7 min per task.",
         "Evaluation is PROGRAMMATIC unit tests over final app state — no LLM judge.",
         "Pass rate 0.0 is honest, not broken: runs complete and tokens record —"
         " the agent just does not finish the job.",
-        "34 of 35 measured tasks call finish: it believes it is done and the"
+        "41 of 49 measured tasks call finish: it believes it is done and the"
         " assertions disagree. No verification pass.",
         "Its job here is pipeline stress: long contexts, big traces, real timeouts.",
         "Two model calls per tool call — tool shortlisting, which only bites with an"
-        " API surface this large. The first carries 68% of the input tokens.",
+        " API surface this large. The first carries 67% of the input tokens.",
     ]),
 ]
 x = inch(0.45)
@@ -1165,7 +1167,7 @@ grid(s, inch(0.45), inch(1.25), inch(12.4), inch(4.70), [
      "one multi-app scenario automated\nthrough an API surface"),
     ("Turn structure", "1 model call, ~1 tool call",
      "~11 calls alternating with a\nUSER SIMULATOR in character",
-     "~29 calls, each re-sending the\nwhole conversation"),
+     "~30 calls, each re-sending the\nwhole conversation"),
     ("Ends when", "the answer is emitted",
      "the dialogue resolves, or policy\nis violated",
      "the goal state is reached — or the\n600 s task timeout kills it"),
@@ -1176,14 +1178,14 @@ grid(s, inch(0.45), inch(1.25), inch(12.4), inch(4.70), [
      "that the agent HOLDS STATE\nacross turns and uses tools\nunder a policy",
      "that the agent survives LONG\nHORIZONS: context growth,\ntimeouts, partial failure"),
     ("A result is worth", "a go/no-go on infrastructure.\nIt saturates near 1.0, so it\ncannot rank models",
-     "a genuine model/config\ncomparison — it discriminates,\nand 0.83 leaves headroom both ways",
+     "a genuine model/config\ncomparison — it discriminates,\nand 0.90 leaves headroom both ways",
      "a stress signal, not a capability\nscore: at 0.00 it tells you what\nBREAKS, not who is better"),
     ("Watch out for", "1.0 proves nothing about\nthe agent",
      "its user simulator is billed\nbut NOT in our telemetry",
-     "15 of 50 tasks time out, and a\nkilled task leaves NO report row"),
+     "long tasks can hit the 600 s\ntimeout, and a killed task\nleaves NO report row"),
 ], col_w=[inch(2.20), inch(3.35), inch(3.45), inch(3.40)], font=10.5)
 _ban = box(s, inch(0.45), inch(6.15), inch(12.4), inch(0.85),
-    "gsm8k is a SMOKE TEST WITH A SCORE — reading its 0.97 as a model measurement is the most "
+    "gsm8k is a SMOKE TEST WITH A SCORE — reading its 0.98 as a model measurement is the most "
     "common misreading of these numbers.  tau2 is the only rung that discriminates, and it fails "
     "informatively: a wrong answer, a policy violation and a dropped thread are different "
     "failures.  appworld earns its place precisely BECAUSE it fails — it is the only leg that has "
@@ -1201,22 +1203,21 @@ traps = [
      "\u201cfailed the task\u201d or \u201cnever got judged\u201d. Check the error column too."),
     ("The llm column changed meaning between agent versions — never compare across it",
      "Agents up to exgentic 0.3.5.dev131 issued a max_tokens=1 capability probe counted as a chat "
-     "span, so THEIR llm=2 on gsm8k means ONE real call. From dev145 the probe is an unbilled "
-     "GET /v1/models that emits no span — verified absent across all 1,895 chat spans of these two "
-     "matrices. Current runs count real calls 1:1, with no offset to subtract."),
+     "span, so THEIR llm=2 on gsm8k means ONE real call. The current agent sends no such probe — "
+     "verified absent across all 2,338 chat spans of these two matrices. Current runs count real "
+     "calls 1:1, with no offset to subtract."),
     ("Implausibly small tokens = lost telemetry, and tokens == 0 will not catch it",
      "Use the structural test: llm <= 1 with tool >= 2 is impossible, since each tool call needs a "
      "preceding model turn. A zero-check misses the cases that matter — while the probe existed it "
      "was the span that SURVIVED the loss, carrying 8/1 on claude-sonnet-5 and 1/0 on gemini. The "
      "structural pair holds across agent versions; it is what the generators use."),
-    # 15-of-22 is the v1.28 re-measurement (legs that ran more than one task). It replaces an
-    # earlier 27-of-33 taken from v1.23+v1.24, where legs #1-#3 and #5-#8 shared prompts inside the
-    # gateway's ~10 min completion TTL -- some of those output columns were replayed usage rather
-    # than fresh generations, which understates output spread. Do not restore the older figure.
+    # 16-of-22 is measured on the v1.35 pair (legs that ran more than one task), whose legs were
+    # spaced past the gateway's ~10 min completion TTL. Unspaced matrices replay usage across legs
+    # that share prompts, which understates output spread -- never take this figure from one.
     ("Output varies MORE than input, in most runs",
-     "Measured OUT CV > IN CV in 15 of the 22 legs that ran more than one task. On a one-call model "
-     "gsm8k's prompt is near-constant while answer length swings (IN 0.06-0.09 vs OUT 0.52-0.86); "
-     "gpt-4.1 needs tool round-trips and varies on the input side too (IN 0.39-0.44). Only "
+     "Measured OUT CV > IN CV in 16 of the 22 legs that ran more than one task. On a one-call model "
+     "gsm8k's prompt is near-constant while answer length swings (IN 0.06-0.09 vs OUT 0.55-0.99); "
+     "gpt-4.1 needs tool round-trips and varies on the input side too (IN 0.38-0.44). Only "
      "long-horizon appworld is input-led, in all four of its legs. Read the CV, not the mechanism."),
     ("Task selection is deterministic",
      "A run takes the first max_tasks tasks, so the same task_id is the same task across runs "
@@ -1239,7 +1240,7 @@ for i, (head, body_text) in enumerate(traps, 1):
 
 # ---- 7.5 which one to pick, and what that leg costs ------------------------------------------
 # The right-hand table is the measured token total of each leg, not an estimate: summed over the
-# mirrored report.ndjson rows of the v1.28 pair (docs/results/v1.28-2026-09-15/). It is the answer
+# mirrored report.ndjson rows of the v1.35 pair (docs/results/v1.35-2026-10-04/). It is the answer
 # to "what will this cost me", which the difficulty ladder on 7.1 gives only per task.
 s = prs.slides.add_slide(BLANK)
 title_band(s, "7.5  Picking a Benchmark — and What That Leg Costs",
@@ -1249,42 +1250,42 @@ grid(s, inch(0.45), inch(1.30), inch(6.55), inch(2.55), [
     ("If you want to …", "use", "costs"),
     ("check a cluster / deploy / auth / telemetry path works", "gsm8k, 1–10 tasks", "< $0.01"),
     ("exercise concurrency and volume cheaply", "gsm8k, 50 tasks at p=4", "$0.02"),
-    ("compare models meaningfully", "tau2 — it discriminates; gsm8k saturates", "$1.70 / 10"),
-    ("stress long contexts, long tasks, timeouts", "appworld", "$1.90–2.80 / 5"),
+    ("compare models meaningfully", "tau2 — it discriminates; gsm8k saturates", "$1.60 / 10"),
+    ("stress long contexts, long tasks, timeouts", "appworld", "$3.10–3.40 / 5"),
     ("get a fast signal that nothing regressed", "gsm8k — if it fails, fix infrastructure", "< $0.01"),
 ], col_w=[inch(3.15), inch(2.30), inch(1.10)], font=10.5, first_col_bold=False)
 
 grid(s, inch(7.30), inch(1.30), inch(5.55), inch(2.55), [
-    ("leg (v1.28)", "tok OCP", "$ OCP", "tok KinD", "$ KinD"),
-    ("#1  gsm8k, 1 task", "470", "$0.0004", "790", "$0.0010"),
+    ("leg (v1.35)", "tok OCP", "$ OCP", "tok KinD", "$ KinD"),
+    ("#1  gsm8k, 1 task", "406", "$0.0003", "406", "$0.0003"),
     ("#2  gsm8k, 10 tasks", "5.1 K", "$0.005", "5.1 K", "$0.005"),
-    ("#3  gsm8k, 50 tasks p=4", "25 K", "$0.023", "24 K", "$0.021"),
-    ("#9  tau2, 10 tasks", "1.01 M", "$1.66", "1.04 M", "$1.73"),
-    ("#10  tau2, 20 tasks p=4", "1.74 M", "$2.90", "1.78 M", "$2.94"),
-    ("#11  appworld, 5 tasks", "1.49 M", "$2.79", "0.93 M", "$1.90"),
-    ("#12  appworld, 20 tasks p=4", "5.71 M", "$11.52", "2.20 M", "$4.40"),
-    ("all 12 legs", "10.0 M", "$18.91", "6.0 M", "$11.02"),
+    ("#3  gsm8k, 50 tasks p=4", "24 K", "$0.020", "25 K", "$0.022"),
+    ("#9  tau2, 10 tasks", "0.96 M", "$1.59", "0.94 M", "$1.56"),
+    ("#10  tau2, 20 tasks p=4", "1.74 M", "$2.88", "1.77 M", "$2.93"),
+    ("#11  appworld, 5 tasks", "1.55 M", "$3.10", "1.71 M", "$3.39"),
+    ("#12  appworld, 20 tasks p=4", "6.47 M", "$12.63", "5.87 M", "$11.94"),
+    ("all 12 legs", "10.8 M", "$20.25", "10.3 M", "$19.87"),
 ], col_w=[inch(2.15), inch(0.85), inch(0.85), inch(0.85), inch(0.85)], font=10.5)
 
 box(s, inch(0.45), inch(4.05), inch(6.55), inch(1.35),
     "Budget by benchmark, not by task count",
     LTTEAL, WORK, font=14, font_color=WORK,
-    sub="The eight gsm8k legs together are 0.2% of the matrix's bill on OpenShift (0.4% on KinD). "
-        "appworld's two legs are 76% of it (57%); tau2's two are 24% (42%). A 50-task gsm8k leg "
-        "costs 2 cents — less than a twenty-fifth of a SINGLE appworld task.",
+    sub="The eight gsm8k legs together are 0.2% of the matrix's bill on both platforms. "
+        "appworld's two legs are 78% of it on OpenShift (77% on KinD); tau2's two are 22% (23%). A "
+        "50-task gsm8k leg costs 2 cents — about a thirtieth of a SINGLE appworld task.",
     sub_color=INK)
 box(s, inch(7.30), inch(4.05), inch(5.55), inch(1.35),
-    "Two legs of the same size are not the same bill",
+    "The same work, close to the same bill — not by law",
     LTORANGE, KC, font=14, font_color=KC,
-    sub="#12 cost 2.6× more on OpenShift than on KinD for the same 20 requested tasks: appworld "
-        "turn counts are nondeterministic, and the slower cluster's tasks ran longer before the "
-        "600 s timeout. So the two $18.91 / $11.02 totals are NOT a platform comparison — OpenShift "
-        "completed 18 appworld tasks against KinD's 10. Size appworld on YOUR cluster.",
+    sub="The two totals land within 2% ($20.25 / $19.87), #12 within 6%: the same request bodies "
+        "through one gateway. But appworld turn counts are nondeterministic (21 tasks completed on "
+        "OpenShift, 20 on KinD), and a cluster whose tasks run longer before the 600 s timeout bills "
+        "more for the same work. Size appworld on YOUR cluster.",
     sub_color=INK)
 
 _ban = box(s, inch(0.45), inch(5.60), inch(12.4), inch(1.30),
     "And the totals UNDERSTATE it three ways:  a task killed by the per-task timeout burns tokens "
-    "but leaves no report row, so appworld's 15 timed-out tasks are missing from the numbers above."
+    "but leaves no report row, so appworld's one timed-out task is missing from the numbers above."
     "  tau2's user simulator runs in the MCP pod, which is not instrumented — its inference is "
     "billed by the gateway and counted nowhere here.  And a leg that replays the gateway's "
     "completion cache re-reports stored usage for calls that were never made upstream.  7.7 puts a "
@@ -1294,7 +1295,7 @@ _ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
 
 # ---- 7.6 the cost model: tokens, models, money ----------------------------------------------
 # Every dollar figure on 7.6 and 7.7 is computed by reference/gen-cost-analysis.py from the mirrored
-# report.ndjson rows of the v1.28 pair times reference/model_prices.json — the ONE place a price
+# report.ndjson rows of the v1.35 pair times reference/model_prices.json — the ONE place a price
 # lives. Nothing here is hand-arithmetic; regenerate rather than patch a number.
 s = prs.slides.add_slide(BLANK)
 title_band(s, "7.6  The Cost Model — Tokens, Models, Money",
@@ -1303,29 +1304,29 @@ grid(s, inch(0.45), inch(1.30), inch(6.15), inch(4.55), [
     ("per task, pooled", "gsm8k", "tau2", "appworld"),
     ("MODEL (the default)", "gpt-5-mini", "claude-sonnet-5", "gemini-2.5-pro"),
     ("its rate, in / out $ per 1M", "0.25 / 2.00", "1.52 / 7.60", "1.25 / 10.00"),
-    ("LLM calls", "1.10", "11.38", "29.20"),
-    ("input tokens", "341", "90,902", "269,953"),
-    ("output tokens", "180", "2,061", "25,140"),
-    ("total tokens", "520", "92,963", "295,093"),
-    ("× a gsm8k task, in TOKENS", "1×", "178×", "564×"),
-    ("cost at our gateway's rates", "$0.00055", "$0.154", "$0.589"),
-    ("× a gsm8k task, in DOLLARS", "1×", "279×", "1,069×"),
-    ("cost of 100 tasks", "$0.06", "$15.38", "$58.88"),
-    ("input share of tokens", "66%", "98%", "92%"),
-    ("input share of COST", "31%", "90%", "57%"),
-    ("median task latency", "4.9 s", "84 s", "264 s"),
-    ("… of it inside model calls", "90%", "58%", "96%"),
-    ("pass rate", "0.97", "0.83", "0.00"),
+    ("LLM calls", "1.11", "11.10", "30.22"),
+    ("input tokens", "343", "87,935", "291,509"),
+    ("output tokens", "170", "2,071", "26,950"),
+    ("total tokens", "513", "90,006", "318,459"),
+    ("× a gsm8k task, in TOKENS", "1×", "175×", "621×"),
+    ("cost at our gateway's rates", "$0.00053", "$0.149", "$0.634"),
+    ("× a gsm8k task, in DOLLARS", "1×", "282×", "1,195×"),
+    ("cost of 100 tasks", "$0.05", "$14.94", "$63.39"),
+    ("input share of tokens", "67%", "98%", "92%"),
+    ("input share of COST", "32%", "89%", "57%"),
+    ("median task latency", "2.5 s", "48 s", "222 s"),
+    ("… of it inside model calls", "82%", "60%", "95%"),
+    ("pass rate", "0.98", "0.90", "0.00"),
 ], col_w=[inch(2.40), inch(1.25), inch(1.25), inch(1.25)], font=10.5)
 
 grid(s, inch(6.90), inch(1.30), inch(5.95), inch(2.60), [
     ("same 5 gsm8k tasks, p=4", "gpt-4.1", "gpt-5-mini"),
-    ("pass rate  (OCP / KinD)", "0.80 / 1.00", "1.00 / 1.00"),
+    ("pass rate  (OCP / KinD)", "0.80 / 0.80", "1.00 / 1.00"),
     ("LLM calls per task", "2.8 – 3.0", "1.0"),
-    ("input tokens per task", "775 – 837", "313"),
-    ("output tokens per task", "57 – 63", "125 – 368"),
-    ("total tokens per task", "832 – 900", "438 – 681"),
-    ("cost per task", "$0.0020 – 0.0022", "$0.00033 – 0.00081"),
+    ("input tokens per task", "782 – 835", "313"),
+    ("output tokens per task", "63", "201 – 214"),
+    ("total tokens per task", "844 – 898", "514 – 527"),
+    ("cost per task", "$0.0021 – 0.0022", "$0.00048 – 0.00051"),
 ], col_w=[inch(2.55), inch(1.70), inch(1.70)], font=10.5)
 
 box(s, inch(6.90), inch(4.10), inch(5.95), inch(1.75),
@@ -1342,8 +1343,8 @@ box(s, inch(6.90), inch(4.10), inch(5.95), inch(1.75),
 _ban = box(s, inch(0.45), inch(6.00), inch(12.4), inch(0.95),
     "cost per task  =  (input tokens × P_in  +  output tokens × P_out) / 1 M     — which model is "
     "cheaper is a property of the PRICE LIST, not of the models: compute it for your own rates.  "
-    "Money AMPLIFIES the difficulty ladder rather than tracking it (tau2 178× a gsm8k task in "
-    "tokens but 279× in dollars; appworld 564× but 1,069×), because the harder benchmarks also run "
+    "Money AMPLIFIES the difficulty ladder rather than tracking it (tau2 175× a gsm8k task in "
+    "tokens but 282× in dollars; appworld 621× but 1,195×), because the harder benchmarks also run "
     "the dearer models — a budget scaled off the token ratios is short by 1.6–1.9×.",
     LTGRAY, STORE, font=12, bold=True, font_color=INK)
 _ban.text_frame.margin_left = _ban.text_frame.margin_right = Pt(18)
@@ -1377,8 +1378,8 @@ box(s, inch(0.45), inch(4.55), inch(6.15), inch(2.35),
     LTORANGE, KC, font=13.5, font_color=KC,
     sub="The judge makes ~1 completion per authorized tool call, on Azure/gpt-4.1 — the dearest "
         "model on the card — against a FIXED 1,577-char system prompt that does not shrink with the "
-        "task. That is ≥ $0.00111 per call, which is 2.4× the entire gsm8k task it is authorizing "
-        "($0.00045), and 1.4×–4.4× the agent's whole bill across legs #6–#8. On the plugin legs IBAC "
+        "task. That is ≥ $0.00111 per call, which is 2.6× the entire gsm8k task it is authorizing "
+        "($0.00043), and 1.4×–4.4× the agent's whole bill across legs #6–#8. On the plugin legs IBAC "
         "is not overhead on the bill; it IS the bill.  tau2's user simulator is invisible the same "
         "way: same model as the agent, but inside the uninstrumented MCP pod.",
     sub_color=INK)
@@ -1390,7 +1391,7 @@ box(s, inch(6.90), inch(4.55), inch(5.95), inch(2.35),
         "probe) but publishes no cached-input rate, and report.ndjson stores one undifferentiated "
         "llm_input_tokens — so no past run can be re-priced. The exposure is capped by input's share "
         "of the bill: if cached input were FREE, tau2 would floor at $0.0157 a task instead of "
-        "$0.154 and appworld at $0.251 instead of $0.589, while gsm8k barely moves. That ordering is "
+        "$0.149 and appworld at $0.270 instead of $0.634, while gsm8k barely moves. That ordering is "
         "structural — caching pays off on a long re-sent prefix, which is what makes input dominate.",
     sub_color=INK)
 
@@ -1405,7 +1406,7 @@ if _FIGS:
 
     s = prs.slides.add_slide(BLANK)
     title_band(s, "7.8  Token- and Cost-Efficiency — Where the Money Actually Goes",
-               "Measured on the v1.28 pair (267 task rows) at the rate card in 7.7 — "
+               "Measured on the v1.35 pair (281 task rows) at the rate card in 7.7 — "
                "one take-away per figure")
     for _k, _x, (_a, _l) in zip(["ladder-amplification", "cost-composition", "model-choice"],
                                 _COL_X, _TINT):
@@ -1420,8 +1421,8 @@ if _FIGS:
         figure(s, _k, _x, inch(1.35), _COL_W, _a, _l, cap_h=inch(2.35))
 
 # ============================ SECTION 8: THE 12-RUN MATRIX AND WHAT IT SHOWED
-# Every figure is read from the v1.28 matrices' own mirrored artifacts
-# (docs/results/v1.28-2026-09-15/12run-*.md).
+# Every figure is read from the v1.35 matrices' own mirrored artifacts
+# (docs/results/v1.35-2026-10-04/12run-*.md).
 s = prs.slides.add_slide(BLANK)
 title_band(s, "8.1  The Canonical 12-Run Matrix",
            "One fixed set of 12 request bodies — the same on every platform, every version")
@@ -1444,10 +1445,9 @@ grid(s, inch(0.45), inch(1.30), inch(12.4), inch(3.95), [
 _m = box(s, inch(0.45), inch(5.45), inch(12.4), inch(1.55),
     "Why a FIXED matrix: task selection is deterministic, so the same leg run anywhere executes the "
     "same tasks in the same order. That is what makes a difference attributable to the platform "
-    "rather than to the workload. Every leg deploys fresh — originally because a warm agent lost "
-    "telemetry (fixed in agent dev145), now because only a NEWLY CREATED pod re-pulls :latest. "
-    "Driven by one command (reference/run-12.py): ~1h35m of leg wall time per platform, plus the "
-    "deploys and ~33 min of gateway-cache gaps. The generated documents in docs/results/ derive "
+    "rather than to the workload. Every leg deploys fresh, because only a NEWLY CREATED pod "
+    "re-pulls :latest. Driven by one command (reference/run-12.py): about an hour of run time per "
+    "platform, plus the deploys and ~40 min of gateway-cache gaps. The generated documents in docs/results/ derive "
     "every number from the mirrored artifacts.",
     LTGRAY, STORE, font=12, bold=False, font_color=INK)
 _m.text_frame.margin_left = _m.text_frame.margin_right = Pt(18)
@@ -1460,7 +1460,7 @@ title_band(s, "8.2  The 12 Runs Compared — What Each Band Established",
 grid(s, inch(0.45), inch(1.25), inch(12.4), inch(3.30), [
     ("legs", "what they parameterize", "what having run them established"),
     ("#1–#3", "gsm8k 1 → 10 → 50 tasks, p=1 → 4\n(volume, then concurrency)",
-     "the pipeline is stable and DETERMINISTIC: 6 of 12 legs have byte-identical input-token\n"
+     "the pipeline is stable and DETERMINISTIC: 7 of 12 legs have byte-identical input-token\n"
      "totals across two unlike clusters — the strongest like-for-like check available"),
     ("#4", "gsm8k on Azure/gpt-4.1\n(model swap, identical tasks)",
      "the only clean model comparison in the matrix: gpt-4.1 costs 4.1× gpt-5-mini for no\n"
@@ -1470,20 +1470,20 @@ grid(s, inch(0.45), inch(1.25), inch(12.4), inch(3.30), [
      "the judge (+1.54 s) — never quote a per-task overhead without naming the cluster"),
     ("#9–#10", "tau2 10 → 20 tasks, p=1 → 4\n(multi-turn, then under load)",
      "multi-turn works end to end, user simulator included — and tau2 is where pass rates\n"
-     "carry information (0.75–1.00 across sides)"),
+     "carry information (0.85–1.00 across sides)"),
     ("#11–#12", "appworld 5 → 20 tasks, p=1 → 4\n(long horizon, then under load)",
-     "the limits are real and they are UPSTREAM: 15 timeouts, a 0.00 pass rate, and 76% of\n"
-     "the whole matrix's bill in two legs"),
+     "the limits are real and they are UPSTREAM: a 0.00 pass rate, the matrix's only timeout,\n"
+     "and ~77% of the whole matrix's bill in two legs"),
 ], col_w=[inch(1.05), inch(4.35), inch(7.00)], font=10.5)
 
 box(s, inch(0.45), inch(4.75), inch(6.15), inch(2.25),
     "What the matrix as a whole is worth",
     LTTEAL, WORK, font=13.5, font_color=WORK,
     sub="Not the pass rates — that the SAME 12 request bodies produce comparable measurements on "
-        "two unlike clusters. On the v1.28 pair: token capture complete (0 of 267 rows lost their "
-        "usage span), every task reached the model (0 health-probe losses), 7 of 12 pass rates "
-        "identical. The 5 that differ are mostly arithmetic on small runs — one task moves a "
-        "5-task leg by 0.20.",
+        "two unlike clusters. On the v1.35 pair: token capture complete (0 of 281 rows lost their "
+        "usage span), every task reached the model (0 health-probe losses), nothing lost to "
+        "infrastructure, 8 of 12 pass rates identical. The 4 that differ are each one task — one "
+        "task moves a 5-task leg by 0.20.",
     sub_color=INK)
 
 box(s, inch(6.90), inch(4.75), inch(5.95), inch(2.25),
@@ -1491,8 +1491,7 @@ box(s, inch(6.90), inch(4.75), inch(5.95), inch(2.25),
     LTORANGE, KC, font=13.5, font_color=KC,
     sub="A task lost to a socket and a task lost to a wrong answer land in the same denominator "
         "and only one says anything about the agent — which is why every report buckets them "
-        "(OCP/KinD: transport 1/0, per-task timeout 4/11, upstream agent defect 1/0, wrong answer "
-        "2/1). Two further limits: absolute LATENCY does not travel (4–93× apart between our "
+        "(OCP/KinD: per-task timeout 0/1, upstream agent defect 4/4, wrong answer 1/1). Two further limits: absolute LATENCY does not travel (4–93× apart between our "
         "clusters), and the DEPLOY, not the task, is the unit of replication — adding tasks "
         "tightens the wrong interval.",
     sub_color=INK)
@@ -1501,38 +1500,37 @@ box(s, inch(6.90), inch(4.75), inch(5.95), inch(2.25),
 # ---- 8.3 what it measured ----
 s = prs.slides.add_slide(BLANK)
 title_band(s, "8.3  What the 12 Runs Measured",
-           "v1.28 on OpenShift (Service on ykt3, workloads on ykt2) — 141 tasks, all 12 legs succeeded")
+           "v1.35 on OpenShift (single-cluster, ykt3) — 141 tasks, all 12 legs succeeded")
 grid(s, inch(0.45), inch(1.30), inch(6.05), inch(4.15), [
     ("#", "bench", "pass", "err", "wall", "input tokens"),
-    ("1", "gsm8k", "1.00", "0/1", "7 s", "320"),
-    ("2", "gsm8k", "1.00", "0/10", "41 s", "3,166"),
-    ("3", "gsm8k", "1.00", "0/50", "46 s", "15,684"),
-    ("4", "gsm8k", "0.80", "0/5", "16 s", "3,874"),
-    ("5", "gsm8k", "1.00", "0/5", "25 s", "1,564"),
-    ("6", "gsm8k", "0.60", "2/5", "39 s", "1,258"),
-    ("7", "gsm8k", "0.80", "1/5", "30 s", "1,564"),
-    ("8", "gsm8k", "1.00", "0/5", "23 s", "1,564"),
-    ("9", "tau2", "0.90", "0/10", "803 s", "988,110"),
-    ("10", "tau2", "0.75", "0/20", "436 s", "1,703,460"),
-    ("11", "appworld", "0.00", "2/5", "2433 s", "1,387,383"),
-    ("12", "appworld", "0.00", "3/20", "1818 s", "5,211,584"),
+    ("1", "gsm8k", "1.00", "0/1", "4 s", "320"),
+    ("2", "gsm8k", "1.00", "0/10", "29 s", "3,166"),
+    ("3", "gsm8k", "1.00", "0/50", "34 s", "15,684"),
+    ("4", "gsm8k", "0.80", "0/5", "9 s", "3,908"),
+    ("5", "gsm8k", "1.00", "0/5", "6 s", "1,564"),
+    ("6", "gsm8k", "1.00", "0/5", "6 s", "1,564"),
+    ("7", "gsm8k", "0.80", "1/5", "9 s", "1,564"),
+    ("8", "gsm8k", "1.00", "0/5", "7 s", "1,564"),
+    ("9", "tau2", "0.90", "0/10", "511 s", "936,612"),
+    ("10", "tau2", "0.90", "0/20", "282 s", "1,695,959"),
+    ("11", "appworld", "0.00", "1/5", "1284 s", "1,420,531"),
+    ("12", "appworld", "0.00", "3/20", "1402 s", "5,949,228"),
 ], col_w=[inch(0.55), inch(1.4), inch(0.9), inch(0.85), inch(1.05), inch(1.3)], font=10.5,
    first_col_bold=False)
 notes = [
-    ("gsm8k does not quite saturate here: 5 of 8 legs at 1.00",
-     "#4's gpt-4.1 swap and #7 lose one task of five, #6 two — five of 86. Read the CAUSE, not the "
-     "rate: one of #6's was a dropped socket, not the model. The runner retries those now."),
-    ("tau2 is the leg that moves", "0.90 and 0.75 here, 1.00 and 0.80 on KinD. Episodes are "
+    ("gsm8k nearly saturates: 6 of 8 legs at 1.00",
+     "#4's gpt-4.1 swap and #7 each lose one task of five — two of 86, both the model's own "
+     "answers. Read the CAUSE, not the rate: nothing on this side was lost to the plumbing."),
+    ("tau2 is the leg that moves", "0.90 and 0.90 here, 1.00 and 0.85 on KinD. Episodes are "
      "nondeterministic: at n=10 one task is worth 0.10, so it cannot resolve less."),
     ("appworld 0.00 is the honest result", "Runs complete, tokens record, evaluation says the goal "
-     "was not met — 34 of 35 tasks self-declare finish. The per-task TIMEOUT dominates: 4 of 25 "
-     "tasks left no report row, so err reads run.json."),
-    ("0 rows lost attribution, 0 tasks lost to the health probe",
-     "The dev145 agent's per-task GET /v1/models probe (10 s cap, no retry) killed 12 of 141 KinD "
-     "tasks; dev146 fixed it. An earlier matrix's 15 damaged rows passed a tokens == 0 check as "
-     "clean — hence the structural detector."),
-    ("9.3M input / 683k output tokens", "over 5,719 s of leg wall time — appworld alone is 71% of "
-     "the input, on 21 of 137 rows."),
+     "was not met — most tasks self-declare finish (41 of 49, both platforms). All 4 errors here "
+     "are the agent's own defect; none hit the 600 s timeout. err reads run.json."),
+    ("0 rows lost attribution, 0 tasks lost to infrastructure",
+     "No task died to the health probe, the gateway, the judge or transport. v1.35 caps each "
+     "agent LLM call at 120 s, so a stalled gateway call is cut and retried, not waited out."),
+    ("10.0M input / 728k output tokens", "over 3,583 s of run time — appworld alone is 73% of "
+     "the input, on 25 of 141 rows."),
 ]
 y = inch(1.30)
 for head, body_text in notes:
@@ -1547,7 +1545,7 @@ for head, body_text in notes:
     y += inch(1.01)
 
 
-# ---- 8.1 cross-platform ----
+# ---- 9.1 cross-platform ----
 s = prs.slides.add_slide(BLANK)
 title_band(s, "9.1  OpenShift vs KinD — Like-for-Like",
            "Same 12 request bodies, same Service version, verified-identical instance config")
@@ -1556,33 +1554,32 @@ grid(s, inch(0.45), inch(1.30), inch(7.55), inch(4.20), [
     ("1", "gsm8k", "1.00", "1.00", "320", "320", "identical"),
     ("2", "gsm8k", "1.00", "1.00", "3,166", "3,166", "identical"),
     ("3", "gsm8k", "1.00", "1.00", "15,684", "15,684", "identical"),
-    ("4", "gsm8k", "0.80", "1.00", "3,874", "4,183", ""),
+    ("4", "gsm8k", "0.80", "0.80", "3,908", "4,177", ""),
     ("5", "gsm8k", "1.00", "1.00", "1,564", "1,564", "identical"),
-    ("6", "gsm8k", "0.60", "0.80", "1,258", "1,564", ""),
+    ("6", "gsm8k", "1.00", "0.80", "1,564", "1,564", "identical"),
     ("7", "gsm8k", "0.80", "1.00", "1,564", "1,564", "identical"),
     ("8", "gsm8k", "1.00", "1.00", "1,564", "1,564", "identical"),
-    ("9", "tau2", "0.90", "1.00", "988,110", "1,019,232", ""),
-    ("10", "tau2", "0.75", "0.80", "1,703,460", "1,743,312", ""),
-    ("11", "appworld", "0.00", "0.00", "1,387,383", "840,030", ""),
-    ("12", "appworld", "0.00", "0.00", "5,211,584", "2,009,348", ""),
+    ("9", "tau2", "0.90", "1.00", "936,612", "916,576", ""),
+    ("10", "tau2", "0.90", "0.85", "1,695,959", "1,726,957", ""),
+    ("11", "appworld", "0.00", "0.00", "1,420,531", "1,564,276", ""),
+    ("12", "appworld", "0.00", "0.00", "5,949,228", "5,349,900", ""),
 ], col_w=[inch(0.55), inch(1.25), inch(0.95), inch(1.0), inch(1.35), inch(1.35), inch(1.1)],
    font=10, first_col_bold=False)
 find = [
-    ("7 of 12 pass rates identical, and all 5 deltas favour KinD",
-     "So read the per-CAUSE table instead of the rate: wrong answers split 2 (OCP) to 1 (KinD), "
-     "per-task timeouts 4 to 11 — all appworld — and one dropped socket, OCP #6."),
-    ("6 legs byte-identical on input tokens", "320 / 3,166 / 15,684 / 1,564 x3. Deterministic task "
+    ("8 of 12 pass rates identical; the 4 deltas split 2–2",
+     "Each is one task. The per-CAUSE table says why: wrong answers 1 to 1, agent defects 4 to 4, "
+     "one appworld timeout on KinD — and nothing lost to infrastructure on either side."),
+    ("7 legs byte-identical on input tokens", "320 / 3,166 / 15,684 / 1,564 ×4. Deterministic task "
      "selection plus the same model means identical work — the strongest available proof this is a "
      "like-for-like comparison, not merely a similar one."),
-    ("#7 is in that set at 0.80 vs 1.00", "Identical input tokens with different pass rates is not a "
-     "contradiction: same prompts, different answers. Tokens prove the WORK matched; they say "
-     "nothing about whether it was right."),
-    ("Wall time: 5,719 s OCP vs 5,975 s KinD", "Within 5% overall, but individual legs differ by up "
-     "to 2.3× in either direction, and appworld — which dominates the total — inverts: #11 is faster "
-     "on KinD, #12 is slower."),
+    ("#6 and #7 are in that set with different pass rates", "Identical input tokens with different "
+     "pass rates is not a contradiction: same prompts, different answers. Tokens prove the WORK "
+     "matched; they say nothing about whether it was right."),
+    ("Wall time: 3,583 s OCP vs 3,791 s KinD", "Within 6% overall. The short gsm8k legs differ by up "
+     "to 2× either way (seconds, mostly startup); the long tau2 and appworld legs stay within 15%."),
     ("0 lost-attribution rows and 0 probe failures on both sides",
-     "137 OCP rows against 130 KinD. The 7-row gap is appworld tasks that timed out before the "
-     "Service wrote a row (4 OCP, 11 KinD) — not lost telemetry."),
+     "141 OCP rows against 140 KinD. The one-row gap is a KinD appworld task that timed out before "
+     "the Service wrote a row — not lost telemetry."),
 ]
 y = inch(1.30)
 for head, body_text in find:
@@ -1685,8 +1682,8 @@ textbox(s, inch(7.0), inch(2.0), inch(5.8), inch(4.6),
          ("precheck (424) or reject (422), with an actionable reason", 11.5, False, RGBColor(0x3A, 0x46, 0x54), 2)])
 
 box(s, inch(1.6), inch(5.75), inch(10.1), inch(0.75),
-    "Cluster-agnostic by construction: works on kind / vanilla k8s / OpenShift; "
-    "cross-cluster runs use per-instance route templates + a reachable internal issuer.",
+    "Cluster-agnostic by construction: the same chart installs on KinD and OpenShift, "
+    "with the Service and its workloads on one cluster.",
     LTGRAY, STORE, font=12.5, bold=True, font_color=INK)
 
 # ---- page numbers ----------------------------------------------------------
