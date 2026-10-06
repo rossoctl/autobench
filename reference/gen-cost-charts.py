@@ -8,9 +8,10 @@
 Writes, and owns completely:
 
   docs/img/*.png              the six figures
-  docs/img/takeaways.json     {key: {title, takeaway, caption, note}} -- read by
-                              docs/generate_pptx.py so a slide caption cannot drift from
-                              the figure it sits under
+  docs/img/takeaways.json     {key: {title, takeaway, caption, note, data}} -- read by
+                              docs/deck/make_autobench_pptx.py, which draws each figure as
+                              a NATIVE chart from `data` (never the PNG), so a slide can
+                              drift from neither the figure nor its sentence
   the <!-- charts --> block in docs/DEVELOPER_GUIDE.md and docs/BENCHMARKS_PRIMER.md,
                               rewritten in place the way gen_toc.py rewrites <!-- toc -->
 
@@ -41,7 +42,8 @@ from costlib import money, name, short  # noqa: E402
 REPO = pathlib.Path(__file__).resolve().parent.parent
 IMG = REPO / "docs" / "img"
 
-# Deck palette (docs/generate_pptx.py), so a figure dropped on a slide does not look imported.
+# The figures' own palette, for the PNGs the guides embed. The deck does not use these PNGs: it
+# redraws each figure natively from `data` in takeaways.json, in the deck's palette.
 INK, NAVY, BLUE, TEAL, RUST, PURPLE, GRAY = (
     "#1F2A37", "#1B3A5C", "#2E6FB5", "#3D6E70", "#B55A2E", "#8E44AD", "#6B6B6B")
 ACCENT, GRID, LTGRAY = "#E87A1E", "#D8DEE5", "#EEEFF1"
@@ -59,14 +61,15 @@ plt.rcParams.update({
 TAKEAWAYS: dict[str, dict] = {}
 
 
-def emit(key, fig, title, takeaway, caption, note=""):
-    """Save one figure and register the sentence that must travel with it."""
+def emit(key, fig, title, takeaway, caption, note="", data=None):
+    """Save one figure and register the sentence that must travel with it. `data` is the
+    figure's own series, so the deck can redraw it natively from the same numbers."""
     IMG.mkdir(parents=True, exist_ok=True)
     path = IMG / f"{key}.png"
     fig.savefig(path, dpi=200, bbox_inches="tight", pad_inches=0.12)
     plt.close(fig)
     TAKEAWAYS[key] = {"title": typo(title), "takeaway": typo(takeaway),
-                      "caption": typo(caption), "note": typo(note)}
+                      "caption": typo(caption), "note": typo(note), "data": data or {}}
     print(f"  docs/img/{key}.png  -- {takeaway}")
 
 
@@ -158,7 +161,13 @@ def chart_ladder(platforms):
          "(" + ", ".join(f"{ratios[(r, 'wall-clock')]:,.0f}x {r}" for r in rungs) + "), because "
          "the harder benchmarks parallelize their turns while their bills add up.",
          note=f"gsm8k baseline: {base['mean_tok']:,.0f} tokens, {money(base['mean_cost'])}, "
-              f"{base['median_lat']:.1f} s median, over {base['n']} task rows.")
+              f"{base['median_lat']:.1f} s median, over {base['n']} task rows.",
+         data={"categories": [f"{r} ({short(b[r]['dom_model'])})" for r in rungs],
+               # rounded with the SAME format as the sentence above, so a chart label
+               # cannot read 176x beside a take-away that says 175x
+               "series": {lab: [int(f"{ratios[(r, lab)]:.0f}") for r in rungs]
+                          for lab, _, _ in metrics},
+               "base": f"one gsm8k task on {short(base['dom_model'])}"})
 
 
 # ------------------------------------------------------- 2. tokens vs money, input vs output
@@ -199,7 +208,10 @@ def chart_composition(platforms):
          "says where to look for savings: only tau2 is genuinely input-dominated in money, so it "
          "is the one benchmark where a cheaper-input model beats a terser one -- everywhere else "
          "verbosity is the thing to control.",
-         note="Both bars are per-task means over every priced row of that benchmark and model.")
+         note="Both bars are per-task means over every priced row of that benchmark and model.",
+         data={"categories": [f"{b} ({short(m)})" for b, m in keys],
+               "series": {"of the tokens": [round(agg[k]["in_share_tok"] * 100, 1) for k in keys],
+                          "of the bill": [round(agg[k]["in_share_cost"] * 100, 1) for k in keys]}})
 
 
 # -------------------------------------------------------- 3. two models, the identical tasks
@@ -261,7 +273,14 @@ def chart_model_choice(platforms):
          f"one call and emits MORE output, {short(dear)} takes ~3 tool round-trips and sends far "
          f"more input. Which one is cheaper is a property of the price list, not of the models.",
          note="The task set is identical and task selection is deterministic, so this is the one "
-              "comparison in the matrix with no workload difference to explain away.")
+              "comparison in the matrix with no workload difference to explain away.",
+         data={"categories": [short(m) for m in order],
+               "series": {"paid for input": [mean[m]["mean_ci"] for m in order],
+                          "paid for output": [mean[m]["mean_co"] for m in order]},
+               "total": [mean[m]["mean_cost"] for m in order],
+               "tokens": [[round(mean[m]["mean_in"]), round(mean[m]["mean_out"])] for m in order],
+               "pass_rate": [mean[m]["pass_rate"] for m in order],
+               "ratio": ratio, "tasks": len(ids), "bench": bench})
 
 
 # ------------------------------------------------------------- 4. where the matrix's bill is
@@ -317,7 +336,11 @@ def chart_leg_pareto(platforms):
          "rounding error on one appworld leg.",
          note=f"{platform(P['label'])}; the ordering reproduces on the other platform, the "
               f"absolute "
-              f"appworld figures do not (nondeterministic turn counts).")
+              f"appworld figures do not (nondeterministic turn counts).",
+         data={"platform": platform(P["label"]), "total": total, "top2_pct": top2,
+               "categories": [f"#{l['n']} {l['bench']}" for l in legs],
+               "bench": [l["bench"] for l in legs],
+               "series": {"dollars per leg": [l["cost"] for l in legs]}})
 
 
 # --------------------------------------------------------------- 5. efficiency per SUCCESS
@@ -377,7 +400,10 @@ def chart_cost_per_pass(platforms):
          "that runs to completion, records every token, and then fails evaluation.",
          note="Pass rates here are over PRICED rows; the headline rates in the reports use the "
               "tasks attempted, which is a lower number for appworld because a timed-out task "
-              "leaves no row.")
+              "leaves no row.",
+         data={"rows": [{"bench": k, "per_task": b[k]["mean_cost"], "pass_rate": b[k]["pass_rate"],
+                         "per_pass": (b[k]["mean_cost"] / b[k]["pass_rate"]
+                                      if b[k]["pass_rate"] else None)} for k in keys]})
 
 
 # ------------------------------------------------------- 6. the consumer we cannot see billing
@@ -428,7 +454,11 @@ def chart_judge(platforms):
          f"every other figure in this section is a FLOOR.",
          note="Judge cost is tool calls x the floor per call; the proposed-action block that "
               "follows the fixed prompt is not counted. tau2's user simulator is invisible the "
-              "same way, inside the uninstrumented MCP pod.")
+              "same way, inside the uninstrumented MCP pod.",
+         data={"categories": [lab for lab, _, _ in bars],
+               "series": {"the agent's own calls": [a for _, a, _ in bars],
+                          "the IBAC judge (floor)": [j for _, _, j in bars]},
+               "per_call": per_call})
 
 
 # --------------------------------------------------------------------------- doc integration
@@ -511,7 +541,7 @@ def main(argv):
     rewrite_block(REPO / "docs" / "DEVELOPER_GUIDE.md", markdown_block("img/"))
     rewrite_block(REPO / "docs" / "BENCHMARKS_PRIMER.md",
                   markdown_block("img/", heading="####", keys=PRIMER_FIGS))
-    print("\nNext: docs/generate_pptx.py (reads takeaways.json), then reference/gen_pdf.py")
+    print("\nNext: docs/deck/make_autobench_pptx.py (reads takeaways.json), then reference/gen_pdf.py")
 
 
 if __name__ == "__main__":

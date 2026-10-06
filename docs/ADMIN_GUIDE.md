@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-10-06T03:10:37Z
+**Last modified:** 2026-10-06T04:43:23Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -99,7 +99,7 @@ AutoBench separates the **Service** from the **workloads** it benchmarks. The Se
 request by the caller's JWT issuer (`iss`) to an **instance**: a per-cluster record naming that
 cluster's Keycloak, its Rossoctl backend, and where its agents and MCP servers can be reached. The
 workloads land wherever that instance's Rossoctl puts them, on the Service's own cluster or on
-another one. Chart 3 of [`AutoBench.pptx`](./AutoBench.pptx) draws the layout.
+another one. Slide 7 of [`AutoBench.pptx`](./AutoBench.pptx) draws the layout.
 
 | piece | where it lives | set by |
 |---|---|---|

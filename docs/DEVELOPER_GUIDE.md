@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-10-06T03:10:37Z
+**Last modified:** 2026-10-06T04:43:23Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -109,7 +109,7 @@ Each instance (one per Keycloak issuer, §4.1) names a Keycloak, a Rossoctl back
 the workloads that Rossoctl deploys. MLflow lives with the Service, which writes its own
 `Agent.Session` spans there and reads every trace back. The agents' own spans travel through an OTEL
 collector **on the workload cluster**, which forwards them to that MLflow. S3 is external and shared
-by all instances. Chart 3 of [`AutoBench.pptx`](./AutoBench.pptx) draws it.
+by all instances. Slide 7 of [`AutoBench.pptx`](./AutoBench.pptx) draws it.
 
 ### Endpoint map
 
@@ -126,7 +126,7 @@ by all instances. Chart 3 of [`AutoBench.pptx`](./AutoBench.pptx) draws it.
 ### The run-time data path
 
 The endpoint map above is the **control** plane — what you call. During a run a different set of
-**flows** carries the actual work, and none of them are HTTP calls you make. Chart 6 of
+**flows** carries the actual work, and none of them are HTTP calls you make. Slide 8 of
 [`AutoBench.pptx`](./AutoBench.pptx) draws this; the same eight flows in text, numbered identically:
 
 ```
@@ -1969,11 +1969,12 @@ published artifacts is a manual browser print or a hand-edited table.
 | the table of contents in this file (and in the Admin Guide) | `python3 reference/gen_toc.py docs/DEVELOPER_GUIDE.md` | that file's own headings |
 | §7.5's 12 one-line commands | `reference/run12_specs.json` | the same specs `reference/run-12.py` executes |
 | the tool-selection table in §2 and in the primer | `python3 reference/gen-shortlist-audit.py <run12.json> "<label>" …` | `span_report.ndjson` in each leg's mirror |
-| `docs/AutoBench.pptx` | `uv run --with python-pptx python docs/generate_pptx.py` | `docs/results/v1.35-2026-10-04/` + this guide |
-| `docs/AutoBench.pdf` | `python3 reference/gen_pdf.py` (LibreOffice) | `docs/AutoBench.pptx` |
+| `docs/AutoBench.pptx`, `docs/AutoBench.pdf` | `docs/deck/.venv/bin/python docs/deck/make_autobench_pptx.py` (PDF via PowerPoint; `DECK_PDF_VIA=soffice` for LibreOffice) | `docs/results/v1.35-2026-10-04/`, `docs/img/takeaways.json` + this guide |
+
+The deck has its own venv, never the project's: `python3 -m venv docs/deck/.venv && docs/deck/.venv/bin/pip install -r docs/deck/requirements.txt`. Edit the generator, never the `.pptx`; a hand edit is lost at the next build.
 
 `gen_pdf.py` with no arguments rebuilds every PDF in its `PAIRS` list (~10 s). It dispatches on extension:
-`.md` goes through pandoc → CSS → headless Chrome, `.pptx` through LibreOffice. Pass paths to
+`.md` goes through pandoc → CSS → headless Chrome, an ad-hoc `.pptx` through LibreOffice. Pass paths to
 do a subset, `-o` to write elsewhere:
 
 ```bash
@@ -1990,10 +1991,9 @@ mechanisms produce it, which is why both needed fixing:
 - **`.md` → Chrome** builds the outline from the `h1`–`h6` tree, but only with
   `--generate-pdf-document-outline` (Chrome ≥ 122). Without that switch Chrome emits no outline at
   all, and it ignores the unknown flag silently on older builds.
-- **`.pptx` → LibreOffice** names each bookmark after the slide's **name**, not its title text.
-  python-pptx leaves `<p:cSld name>` unset, so the deck's outline read `Slide 1 … Slide 16`;
-  `generate_pptx.py` now names every slide after its own title in a final pass, next to the
-  page-numbering pass. Regenerate the `.pptx` before the `.pdf` or the old names persist.
+- **The deck** gets its bookmarks from `make_autobench_pptx.py` itself: neither PowerPoint nor
+  LibreOffice writes useful ones, so the build rewrites them with pypdf from its `SECTIONS` list
+  ("1. Section", its slides beneath), and stops if the page count differs from the slide count.
 
 The CSS lives in the script rather than in a theme file for one reason worth knowing before you
 change it: **long code lines must wrap, not clip.** A 190-char `autobench-cli` line or a 185-char
