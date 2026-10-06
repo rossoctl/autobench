@@ -1,18 +1,20 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-10-06T01:16:09Z
+**Last modified:** 2026-10-06T03:10:37Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
 
 A task-oriented guide to driving the AutoBench Service over its RESTful API. Every
 `curl` below is derived from the flows we exercised end-to-end (gsm8k single-turn, tau2
-multi-turn) on two single-cluster installs, OpenShift (`ykt3`) and KinD (`kind-rossoctl`), where
-the Service and the benchmark workloads it deploys run on the same cluster.
+multi-turn) on OpenShift (`ykt3`) and KinD (`kind-rossoctl`).
 
-- **The deployment model is one install per cluster, with all benchmark workloads in one
-  namespace** — `team1` in every example below. Several people can drive one install; the rules for
-  sharing it are in the [Admin Guide, §1](./ADMIN_GUIDE.md#the-deployment-model-one-install-per-cluster-all-workloads-in-one-namespace).
+- **One Service, many clusters.** The issuer of your token selects the instance, and with it the
+  cluster your benchmark workloads run on — every agent and MCP server in one namespace, `team1` in
+  every example below. The layout, and the rules for sharing one Service, are in the
+  [Admin Guide, §1](./ADMIN_GUIDE.md#how-the-pieces-are-laid-out). The examples run where the
+  install scripts put things, the workloads on the Service's own cluster
+  ([Admin Guide, §5](./ADMIN_GUIDE.md#what-the-scripts-install-one-cluster)).
 - Reference the machine-readable contract in [`openapi.json`](./openapi.json) /
   [`openapi.yaml`](./openapi.yaml).
 - Installing and operating the Service — prerequisites, environment variables, the Helm chart for
@@ -34,6 +36,7 @@ the Service and the benchmark workloads it deploys run on the same cluster.
 **Contents**
 
 - [1. Mental model (read this first)](#1-mental-model-read-this-first)
+  - [Where things run](#where-things-run)
   - [Endpoint map](#endpoint-map)
   - [The run-time data path](#the-run-time-data-path)
   - [One task, end to end](#one-task-end-to-end)
@@ -62,7 +65,7 @@ the Service and the benchmark workloads it deploys run on the same cluster.
   - [6.7 Tear down](#67-tear-down)
 - [7. End-to-end examples (validated flows)](#7-end-to-end-examples-validated-flows)
   - [What you need on the client side](#what-you-need-on-the-client-side)
-  - [7.0 Run #1 start to finish, on ykt3 (OpenShift, single-cluster)](#70-run-1-start-to-finish-on-ykt3-openshift-single-cluster)
+  - [7.0 Run #1 start to finish, on ykt3 (OpenShift)](#70-run-1-start-to-finish-on-ykt3-openshift)
   - [7.1 The same thing in one command (`autobench-cli`)](#71-the-same-thing-in-one-command-autobench-cli)
   - [7.2 `autobench-cli` options](#72-autobench-cli-options)
   - [7.3 Other validated flows](#73-other-validated-flows)
@@ -98,6 +101,15 @@ Two consequences shape everything below:
    runs benchmarks, reads reports, and exports to S3. It **cannot** create cluster Secrets
    or overlay per-agent ConfigMaps — those are provisioned out-of-band, and the Service
    reports on them (see §4 onboarding and the `424` / `422` responses).
+
+### Where things run
+
+The Service sits outside the clusters it benchmarks, conceptually even when it shares one with them.
+Each instance (one per Keycloak issuer, §4.1) names a Keycloak, a Rossoctl backend and how to reach
+the workloads that Rossoctl deploys. MLflow lives with the Service, which writes its own
+`Agent.Session` spans there and reads every trace back. The agents' own spans travel through an OTEL
+collector **on the workload cluster**, which forwards them to that MLflow. S3 is external and shared
+by all instances. Chart 3 of [`AutoBench.pptx`](./AutoBench.pptx) draws it.
 
 ### Endpoint map
 
@@ -571,7 +583,7 @@ token endpoint are derived from the instance `iss`
 ```bash
 # --- Environment (pick the block for your target cluster) ---
 
-# Option A — ykt3 (OpenShift, single-cluster; realm/client "rossoctl"):
+# Option A — ykt3 (OpenShift; realm/client "rossoctl"):
 export SVC="https://autobench-rossoctl-system.apps.ykt3.example.com"   # AutoBench Service base URL
 export KC="https://keycloak-keycloak.apps.ykt3.example.com"            # Keycloak base (iss origin)
 export REALM="rossoctl"                                                # realm from the iss
@@ -646,8 +658,11 @@ One file per instance keys the whole thing to the `iss`. Loaded at startup from
 - `service_credential` is the ROPC identity the Service presents to Rossoctl (must exist in
   the realm with `firstName`/`lastName` set, or Keycloak 400s with "Account is not fully set
   up").
-- `mcp_endpoint_template` / `agent_endpoint_template` stay `null`: the workloads run on the same
-  cluster, so the Service reaches them over in-cluster service DNS.
+- `mcp_endpoint_template` / `agent_endpoint_template` stay `null` when the workloads run on the
+  Service's own cluster, as in every example here: the Service reaches them over in-cluster service
+  DNS. When they run on another cluster, set both to that cluster's Route shape,
+  `https://{service}-{namespace}.apps.<cluster>.example.com`
+  ([Admin Guide, §5](./ADMIN_GUIDE.md#what-the-scripts-install-one-cluster)).
 - `mlflow` / `s3` can be seeded here or set later via `PUT /config` (§5).
 
 ### 4.2 Infrastructure resources (baked into the benchmark definitions)
@@ -723,8 +738,8 @@ same binary every time.
 
 Reporting is fail-soft: if MLflow client-creds aren't configured, runs still succeed and
 export to S3, but `report.ndjson` is empty and the report endpoints return `409`. To enable,
-provision an OTEL collector (forwards agent spans to MLflow) out-of-band and set the MLflow
-read creds via `PUT /config`.
+provision an OTEL collector **on the workload cluster** (it forwards the agents' spans to the MLflow
+beside the Service) out-of-band, and set the MLflow read creds via `PUT /config`.
 
 ---
 
@@ -1310,14 +1325,14 @@ import autobench.cli, sys
 print([m for m in ('fastapi','httpx','boto3','pydantic') if m in sys.modules] or 'no server deps loaded')"
 ```
 
-### 7.0 Run #1 start to finish, on ykt3 (OpenShift, single-cluster)
+### 7.0 Run #1 start to finish, on ykt3 (OpenShift)
 
 Run #1 of the canonical matrix: gsm8k, 1 task, no gateway, no plugins. The `run_id` and numbers
 are from leg #1 of the published v1.35 OpenShift matrix (`docs/results/v1.35-2026-10-04/`), which
 made these same API calls through `reference/run-12.py`. Paste the block, then the steps.
 
 ```bash
-# ---- 0. environment (single-cluster: the Service and its workloads both on ykt3, team1) ----
+# ---- 0. environment (the Service and its workloads both on ykt3, team1) ----
 export SVC="https://autobench-rossoctl-system.apps.ykt3.example.com"
 export KC="https://keycloak-keycloak.apps.ykt3.example.com"   # the instance's iss origin
 export REALM=rossoctl KC_CLIENT=rossoctl KC_USER=benchmarker

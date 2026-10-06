@@ -286,16 +286,19 @@ items = [
     ("Cross-platform & plugin overhead",
      "9.1 OpenShift vs KinD, like-for-like · 9.2 what AuthBridge costs"),
     ("What the Service can & cannot enact", "the HTTP-only boundary, made explicit"),
+    ("Installing & uninstalling",
+     "what the scripts automate (one cluster), and the cross-cluster setup they leave to you"),
 ]
 # Two columns: a single column left ~54% of a 16:9 canvas empty. Split 4 + 3 and set the row pitch
 # so the taller column reaches roughly the same depth as the content on the other slides.
-SPLIT = 5  # 10 items, five per column
+SPLIT = 6  # 11 items: six left, five right
 COLS = ((inch(0.75), inch(1.40), inch(4.95)), (inch(7.10), inch(7.75), inch(5.10)))
 for idx, (head, sub) in enumerate(items):
     col = 0 if idx < SPLIT else 1
     row = idx if col == 0 else idx - SPLIT
     chip_x, text_x, text_w = COLS[col]
-    y = inch(1.42) + row * inch(1.04)
+    # six rows on the left need a tighter pitch; the right keeps room for item 7's three lines
+    y = inch(1.42) + row * (inch(0.92) if col == 0 else inch(1.04))
     chip = s.shapes.add_shape(MSO_SHAPE.OVAL, chip_x, y + inch(0.06), inch(0.46), inch(0.46))
     chip.fill.solid(); chip.fill.fore_color.rgb = ACCENT
     chip.line.color.rgb = WHITE; chip.line.width = Pt(1.25); chip.shadow.inherit = False
@@ -321,7 +324,7 @@ textbox(s, inch(0.5), inch(1.95), inch(5.85), inch(4.9),
          ("Objectives", 14, True, BLUE),
          ("• Automate benchmarking lifecycle operations", 13.5, False, INK, 1),
          ("• Cross-user/cluster sharing of benchmark run results", 13.5, False, INK, 1),
-         ("• One install per cluster, all benchmark workloads in one namespace (team1)", 13.5, False, INK, 1),
+         ("• One Service, many clusters — the JWT iss picks the instance", 13.5, False, INK, 1),
          ("• Asynchronous parallel benchmark runs", 13.5, False, INK, 1),
          ("• Secure, scalable, auditable & resilient", 13.5, False, INK, 1),
          ("3 benchmarks", 14, True, BLUE),
@@ -1682,8 +1685,43 @@ textbox(s, inch(7.0), inch(2.0), inch(5.8), inch(4.6),
          ("precheck (424) or reject (422), with an actionable reason", 11.5, False, RGBColor(0x3A, 0x46, 0x54), 2)])
 
 box(s, inch(1.6), inch(5.75), inch(10.1), inch(0.75),
-    "One install per cluster, with all benchmark workloads in one namespace \u2014 "
-    "the same chart on KinD and OpenShift.",
+    "Cluster-agnostic: the same chart on KinD and OpenShift \u2014 "
+    "the iss-keyed instance picks where workloads run.",
+    LTGRAY, STORE, font=12.5, bold=True, font_color=INK)
+
+# ============================================ SLIDE 17: INSTALL / UNINSTALL
+s = prs.slides.add_slide(BLANK)
+title_band(s, "11.  Installing & Uninstalling",
+           "What the scripts automate — one cluster — and the cross-cluster setup they leave to you")
+
+box(s, inch(0.5), inch(1.35), inch(5.9), inch(0.5), "reference/autobench-install.sh", BLUE, BLUE,
+    font=15, font_color=WHITE, shape=MSO_SHAPE.RECTANGLE)
+textbox(s, inch(0.6), inch(2.0), inch(5.8), inch(4.6),
+        [("• One env file, one command, on KinD or OpenShift", 13, False, INK, 1),
+         ("• Preflight first — 0 failures, or it stops", 13, False, INK, 1),
+         ("• MLflow read path, instance file, Secret, Helm, restart", 13, False, INK, 1),
+         ("• Verify: /healthz, the S3 block, preflight + MLflow round trip", 13, False, INK, 1),
+         ("• --ibac-judge adds the judge for the plugin legs", 13, False, INK, 1),
+         ("reference/autobench-uninstall.sh", 13.5, True, BLUE),
+         ("• Workloads first, through the Service; then helm uninstall", 13, False, INK, 1),
+         ("• Verify every owned object is gone; judge fields restored", 13, False, INK, 1),
+         ("• Removes only what the installer recorded creating", 13, False, INK, 1)])
+
+box(s, inch(6.9), inch(1.35), inch(5.9), inch(0.5), "Scope: one cluster", WORK, WORK,
+    font=15, font_color=WHITE, shape=MSO_SHAPE.RECTANGLE)
+textbox(s, inch(7.0), inch(2.0), inch(5.8), inch(4.6),
+        [("• Service and its workloads on the same cluster", 13, False, INK, 1),
+         ("instance file for that cluster's own iss; endpoint templates null", 11.5, False, RGBColor(0x3A, 0x46, 0x54), 2),
+         ("Cross-cluster service–workload: supported, not scripted", 13.5, True, KC),
+         ("• Instance file keyed to the workload cluster's iss", 13, False, INK, 1),
+         ("Rossoctl URL, endpoint templates, workload_otel, Service-side MLflow", 11.5, False, RGBColor(0x3A, 0x46, 0x54), 2),
+         ("• Collector on the workload cluster → the Service's MLflow", 13, False, INK, 1),
+         ("• IBAC judge on the workload cluster", 13, False, INK, 1),
+         ("• Caller token from the workload cluster's Keycloak", 13, False, INK, 1)])
+
+box(s, inch(1.6), inch(5.75), inch(10.1), inch(0.75),
+    "The Service needs no change for a cross-cluster setup \u2014 only provisioning, "
+    "which the scripts do not yet do.",
     LTGRAY, STORE, font=12.5, bold=True, font_color=INK)
 
 # ---- page numbers ----------------------------------------------------------

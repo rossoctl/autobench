@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-10-06T01:16:09Z
+**Last modified:** 2026-10-06T03:10:37Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -35,7 +35,7 @@ install, §6 is the only verification that means anything.
 **Contents**
 
 - [1. What you install, and what you don't](#1-what-you-install-and-what-you-dont)
-  - [The deployment model: one install per cluster, all workloads in one namespace](#the-deployment-model-one-install-per-cluster-all-workloads-in-one-namespace)
+  - [How the pieces are laid out](#how-the-pieces-are-laid-out)
 - [2. Prerequisites](#2-prerequisites)
   - [2.1 Rossoctl v0.8.0 or later](#21-rossoctl-v080-or-later)
   - [2.2 Workstation tooling](#22-workstation-tooling)
@@ -51,6 +51,7 @@ install, §6 is the only verification that means anything.
   - [3.7 MLflow: already there, or installed by us — and how you find out which](#37-mlflow-already-there-or-installed-by-us--and-how-you-find-out-which)
 - [4. The instance-config Secret](#4-the-instance-config-secret)
 - [5. Installing with Helm](#5-installing-with-helm)
+  - [What the scripts install: one cluster](#what-the-scripts-install-one-cluster)
   - [5.1 OpenShift](#51-openshift)
   - [5.2 KinD](#52-kind)
   - [5.3 Adopting an install made from the raw manifests](#53-adopting-an-install-made-from-the-raw-manifests)
@@ -92,22 +93,30 @@ install is useful:
   `reference/run12_specs.json` name it;
 - an OTEL collector that writes to an MLflow the Service can read (§3.4).
 
-### The deployment model: one install per cluster, all workloads in one namespace
+### How the pieces are laid out
 
-This guide covers the **single-cluster** deployment: the Service and the benchmark workloads it
-deploys run on the same cluster — KinD, or OpenShift (`ykt3` in the examples). The agents reach the
-collector over service DNS, and nothing needs an extra ingress. Concretely:
+AutoBench separates the **Service** from the **workloads** it benchmarks. The Service routes every
+request by the caller's JWT issuer (`iss`) to an **instance**: a per-cluster record naming that
+cluster's Keycloak, its Rossoctl backend, and where its agents and MCP servers can be reached. The
+workloads land wherever that instance's Rossoctl puts them, on the Service's own cluster or on
+another one. Chart 3 of [`AutoBench.pptx`](./AutoBench.pptx) draws the layout.
 
-| piece | the model | set by |
+| piece | where it lives | set by |
 |---|---|---|
-| AutoBench Service | **one install per cluster** — Helm release `autobench` in `rossoctl-system` | `reference/autobench-install.sh` |
-| benchmark workloads | **every agent and MCP server in one namespace**, `team1` | every leg of `reference/run12_specs.json`; preflight checks that namespace; the uninstaller's `--teams` defaults to it |
+| AutoBench Service | one Helm release `autobench` in `rossoctl-system` | the chart (§5) |
+| instances | one file per issuer in the `autobench-instances` Secret, next to the Service | §4 |
+| benchmark workloads | **every agent and MCP server in one namespace**, `team1`, on the instance's cluster | every leg of `reference/run12_specs.json`; preflight checks that namespace; the uninstaller's `--teams` defaults to it |
 | model-gateway and HuggingFace keys | `openai-secret` and `hf-secret` in that namespace | provisioned out-of-band (§2) |
-| MLflow (OpenShift) | workspace `team1` | the instance file (§4) |
-| IBAC judge | one per cluster, in `rossoctl-platform-config` | the chart (§5.4) |
-| Keycloak | realm `rossoctl`; the Service acts as `benchmarker` (realm role `rossoctl-operator`), and any realm user can call it | the instance file's `service_credential` |
+| OTEL collector | on the **workload** cluster; forwards the agents' spans to the MLflow beside the Service | the platform (§3.4) |
+| MLflow | on the **Service's** cluster; the Service writes its own spans there and reads the traces back. Workspace `team1` on OpenShift | the instance file (§4) |
+| S3 | an external cloud service, shared by every instance | the instance file (§4) |
+| IBAC judge | one per **workload** cluster, named in its `rossoctl-platform-config` | the chart (§5.4) |
+| Keycloak | the workload cluster's realm `rossoctl`; the Service acts there as `benchmarker` (realm role `rossoctl-operator`), and any realm user can call it | the instance file's `service_credential` |
 
-One install serves several people: every run is attributed to the caller's own token, and its S3
+What the install scripts set up, and what they leave to you, is in
+[§5, "What the scripts install"](#what-the-scripts-install-one-cluster).
+
+One Service serves several people: every run is attributed to the caller's own token, and its S3
 keys carry the caller's username. Two rules keep shared use clean — never deploy the **same
 benchmark into the same namespace at the same time** (the workload names are fixed per benchmark, so
 the second deploy collides with the first), and run **one measurement campaign at a time**, because
@@ -440,8 +449,8 @@ trap: botocore reads it too, so it redirects the S3 client's trust store at the 
 artifact upload then fails to validate AWS's public cert — turning an empty report into no artifacts
 at all. `preflight.py` checks both halves, and matches the RoleBinding on the **grant** rather than
 its name, because a cluster set up before the chart existed has an equivalent binding under a
-different one. `mlflowTraceWriter.namespaces` lists MLflow **workspaces**, which on a single-cluster
-install are the same strings as the namespaces the agents run in. A workspace missing from the list
+different one. `mlflowTraceWriter.namespaces` lists MLflow **workspaces** on the Service's cluster,
+which are the same strings as the agents' namespaces when the workloads share that cluster. A workspace missing from the list
 reproduces the empty report for that workspace only.
 
 **`insecure_tls` is a read-side lever, and turning it off hardens nothing while breaking the read.**
@@ -973,8 +982,44 @@ If the live release runs the IBAC judge, an install that does not ask for the ju
 Pass `--ibac-judge` to keep it, or `--no-ibac-judge` to remove it. Losing the judge on an upgrade
 is otherwise silent until the plugin legs fail.
 
-The subsections below are the manual equivalent: what the script runs, for when you need a single
-step.
+The numbered subsections below are the manual equivalent: what the script runs, for when you need a
+single step.
+
+### What the scripts install: one cluster
+
+`autobench-install.sh` and `autobench-uninstall.sh` automate **one layout: the Service and its
+workloads on the same cluster.** One run of the installer puts everything in §1's table onto the
+cluster its `KUBE_CONTEXT` names:
+- the `autobench` release in `rossoctl-system`;
+- an instance file for that cluster's own `iss`, with the endpoint templates left `null` because the
+  Service reaches the workloads over in-cluster DNS;
+- the MLflow read path the instance file needs;
+- with `--ibac-judge`, the judge;
+- on KinD, the CoreDNS fix.
+
+Running it on a second cluster gives that cluster its own, independent install.
+
+**A cross-cluster service–workload setup is supported by the Service, but beyond the scope of these
+scripts.** In that layout the Service runs on one cluster and benchmarks workloads on another. Nothing
+in the Service changes; what the scripts would have to do differently is provisioning, and today it
+is done by hand. It needs:
+- **An instance file keyed to the workload cluster's issuer**, added to the Service's
+  `autobench-instances` Secret next to the Service's own. It carries:
+  - that cluster's `rossoctl_base_url`;
+  - `mcp_endpoint_template` and `agent_endpoint_template` set to the workload cluster's Route shape
+    (`https://{service}-{namespace}.apps.<cluster>.example.com`);
+  - `workload_otel` aimed at the workload cluster's collector;
+  - an `mlflow` block naming the MLflow beside the Service.
+- **A collector on the workload cluster** that forwards to that MLflow, with the bearer token and
+  `x-mlflow-*` headers the MLflow requires.
+- **The IBAC judge on the workload cluster**, because AuthBridge consults its own cluster's
+  `rossoctl-platform-config`.
+- **Callers that take their token from the workload cluster's Keycloak**, since the issuer is what
+  selects the instance.
+
+The rationale and the residual infrastructure requirements are in
+[`SERVICE_DESIGN_DECISIONS.md`](./SERVICE_DESIGN_DECISIONS.md) ("per-instance workload endpoints" and
+"Getting the agent's own LLM/tool spans").
 
 ### 5.1 OpenShift
 
@@ -1214,7 +1259,10 @@ credential the chart never created.
 `helm upgrade` instead, so the apply hook reconciles the fields.
 
 **`reference/autobench-uninstall.sh` is the uninstall.** It takes the same env file, and it does
-the parts that a bare `helm uninstall` leaves to you:
+the parts that a bare `helm uninstall` leaves to you. Its scope is the installer's: one cluster
+([§5, "What the scripts install"](#what-the-scripts-install-one-cluster)). Step 1 lists workloads on
+the Service's own cluster, so in a cross-cluster setup, tear the remote workloads down through the
+Service *before* uninstalling it.
 
 ```bash
 reference/autobench-uninstall.sh --env-file ~/.rossoctl-ykt3/autobench.env --dry-run   # lists only
