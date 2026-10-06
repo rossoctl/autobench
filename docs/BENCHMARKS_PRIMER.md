@@ -386,10 +386,10 @@ Three more that apply specifically to the **latency** columns, all measured in t
 study ([docs/PLUGIN_OVERHEAD.md](PLUGIN_OVERHEAD.md)):
 
 - **Warm-up is exactly the first concurrency wave** — the first `num_parallel` tasks — not "the first
-  few tasks". Splitting the no-sidecar baseline legs at the wave gives a penalty that is consistent
-  within a cluster — 2.46/2.05× on OpenShift, 8.38/22.55× on KinD, whose ~0.1 s steady state makes the
-  same startup cost a bigger multiple; splitting at a fixed 10 tasks instead gives 1.18/1.22× and
-  1.52/**0.94**× — the last one below 1, reporting warm-up as a speed-up. The consequence for small
+  few tasks". Splitting the no-sidecar baseline legs at the wave gives a clear penalty —
+  3.68/8.51× on OpenShift, 5.51/10.65× on KinD, whose ~0.1 s steady state makes the same startup cost
+  a bigger multiple; splitting at a fixed 10 tasks instead gives 0.95/1.12× and 1.17/**0.88**× — two of
+  them below 1, reporting warm-up as a speed-up. The consequence for small
   runs is blunt: at `p=4`, a
   5-task leg spends four of its five tasks inside the transient, so its per-task average is mostly
   measuring startup.
@@ -397,10 +397,11 @@ study ([docs/PLUGIN_OVERHEAD.md](PLUGIN_OVERHEAD.md)):
   so a per-task interval answers "how variable are tasks within this deploy?" — not "how variable is
   this configuration?". The real noise floor is the spread between two independent deploys of the
   same condition, and on both clusters it exceeded every effect we were trying to resolve except the
-  single dominant one. Adding tasks tightens the wrong interval; add deploys.
-- **Absolute latencies are not portable across clusters.** The same condition on the same image
-  measured 4–93× apart on our two clusters, and the two disagreed about *which* component the cost
-  belonged to. Pass rates and token counts do travel; seconds do not. Always name the cluster.
+  single dominant one (the IBAC judge). Adding tasks tightens the wrong interval; add deploys.
+- **Absolute latencies travel only approximately.** The same condition on the same image measured
+  up to 1.7× apart on our two clusters — closest where the judge dominates, furthest on the
+  no-sidecar baseline. Pass rates and token counts travel exactly; seconds do not. Always name the
+  cluster.
 
 ## What a run costs
 

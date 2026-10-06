@@ -534,7 +534,7 @@ a difference has one candidate explanation:
 |---|---|---|
 | **#1–#3** gsm8k 1 → 10 → 50 tasks, `p=1 → 4` | volume, then concurrency | the pipeline is stable and **deterministic**: 7 of 12 legs have byte-identical input-token totals across two clusters, which is the strongest like-for-like check available |
 | **#4** gsm8k on gpt-4.1 | model swap on **identical** tasks | the only clean model comparison in the matrix — `gpt-4.1` costs **4.6×** `gpt-5-mini` for no pass-rate gain at this difficulty |
-| **#5–#8** gsm8k under AuthBridge: auth-only, ibac-only, full, full + per-plugin override | one security layer at a time, same five tasks | plugin cost is **platform-specific**: OpenShift pays in the sidecar (+13.68 s/task), KinD in the judge (+1.54 s) — so a per-task overhead figure is meaningless without naming the cluster ([`PLUGIN_OVERHEAD.md`](./PLUGIN_OVERHEAD.md)) |
+| **#5–#8** gsm8k under AuthBridge: auth-only, ibac-only, full, full + per-plugin override | one security layer at a time, same five tasks | plugin cost lands in the **IBAC judge** on both clusters: +1.36 s/task on OpenShift, +1.48 s on KinD; the sidecar's presence and every other layer are below the noise floor ([`PLUGIN_OVERHEAD.md`](./PLUGIN_OVERHEAD.md)) |
 | **#9–#10** tau2 10 → 20 tasks, `p=1 → 4` | multi-turn, then multi-turn under load | multi-turn works end to end, including the user simulator — and tau2 is where pass rates carry information (0.85–1.00 across sides) |
 | **#11–#12** appworld 5 → 20 tasks, `p=1 → 4` | long horizon, then long horizon under load | the limits are real and they are **upstream**: a 0.00 pass rate, the matrix's only timeout, and ~77% of its bill in two legs |
 
@@ -548,7 +548,7 @@ lost to a socket and a task lost to a wrong answer land in the same denominator 
 says anything about the agent. Read the cause table, then the rate.
 
 Two limits of the matrix worth stating in the same breath. **Absolute latency does not travel**: the
-same condition on the same image measured 4–93× apart between our clusters, so seconds are always
+same condition on the same image measured up to 1.7× apart between our clusters, so seconds are always
 qualified by cluster while pass rates and token counts travel fine. And **the deploy, not the task, is
 the unit of replication** — every task in a leg shares one deployment, so adding tasks tightens the
 wrong interval; if you need a tighter number, add deploys.
@@ -1734,7 +1734,7 @@ replicates and n=50 — see [PLUGIN_OVERHEAD.md](PLUGIN_OVERHEAD.md) for the fin
 ```bash
 BM_SPECS=reference/plugin_study_specs.json BM_LABEL=pstudy-ocp-v135 \
   BM_CACHE_GAP=900 BM_ORDER=111,112,101,102,103,104,105,113,106,107,108,109,110 \
-  python3 reference/run-12.py        # ~3h40m, most of it cache gaps; detach it
+  python3 reference/run-12.py        # ~3–3.5 h, most of it cache gaps; detach it
 
 # The judge log is what tells the analyzer how many tool calls were actually authorized —
 # without it, per-preset medians mix judged and unjudged calls and mislead.

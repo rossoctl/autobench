@@ -1466,8 +1466,8 @@ grid(s, inch(0.45), inch(1.25), inch(12.4), inch(3.30), [
      "the only clean model comparison in the matrix: gpt-4.1 costs 4.6× gpt-5-mini for no\n"
      "pass-rate gain at this difficulty, and the INPUT side decides it alone (7.7)"),
     ("#5–#8", "AuthBridge auth-only / ibac-only / full /\nfull + per-plugin override, same 5 tasks",
-     "plugin cost is PLATFORM-SPECIFIC: OpenShift pays in the sidecar (+13.68 s/task), KinD in\n"
-     "the judge (+1.54 s) — never quote a per-task overhead without naming the cluster"),
+     "plugin cost lands in the IBAC JUDGE on both clusters: +1.36 s/task on OpenShift, +1.48 s\n"
+     "on KinD — the sidecar and every other layer are below the noise floor (9.2)"),
     ("#9–#10", "tau2 10 → 20 tasks, p=1 → 4\n(multi-turn, then under load)",
      "multi-turn works end to end, user simulator included — and tau2 is where pass rates\n"
      "carry information (0.85–1.00 across sides)"),
@@ -1491,7 +1491,7 @@ box(s, inch(6.90), inch(4.75), inch(5.95), inch(2.25),
     LTORANGE, KC, font=13.5, font_color=KC,
     sub="A task lost to a socket and a task lost to a wrong answer land in the same denominator "
         "and only one says anything about the agent — which is why every report buckets them "
-        "(OCP/KinD: per-task timeout 0/1, upstream agent defect 4/4, wrong answer 1/1). Two further limits: absolute LATENCY does not travel (4–93× apart between our "
+        "(OCP/KinD: per-task timeout 0/1, upstream agent defect 4/4, wrong answer 1/1). Two further limits: absolute LATENCY travels only approximately (up to 1.7× apart between our "
         "clusters), and the DEPLOY, not the task, is the unit of replication — adding tasks "
         "tightens the wrong interval.",
     sub_color=INK)
@@ -1593,49 +1593,49 @@ for head, body_text in find:
     _set_font(r2, 9.5, False, RGBColor(0x3A, 0x46, 0x54))
     y += inch(1.04)
 
-# ---- 8.2 plugin overhead ----
+# ---- 9.2 plugin overhead ----
 s = prs.slides.add_slide(BLANK)
 title_band(s, "9.2  What AuthBridge Costs — and Why It Has No Single Number",
-           "The designed 13-leg experiment (n=50, crossover replicates, gateway cache spaced), v1.28")
+           "The designed 13-leg experiment (n=50, crossover replicates, gateway cache spaced), v1.35")
 grid(s, inch(0.45), inch(1.30), inch(6.35), inch(2.20), [
     ("non-LLM s / task (steady)", "OpenShift", "KinD", "OCP step", "KinD step"),
-    ("baseline (AuthBridge off)", "0.423", "0.099", "—", "—"),
-    ("auth-only", "14.101", "0.152", "+13.68", "+0.05"),
-    ("ibac-only", "14.148", "1.688", "+0.05", "+1.54"),
-    ("full (auth + ibac)", "14.446", "1.824", "+0.30", "+0.14"),
-    ("full + ibac:observe", "14.598", "1.826", "+0.15", "+0.00"),
+    ("baseline (AuthBridge off)", "0.168", "0.097", "—", "—"),
+    ("auth-only", "0.214", "0.130", "+0.05", "+0.03"),
+    ("ibac-only", "1.569", "1.610", "+1.36", "+1.48"),
+    ("full (auth + ibac)", "1.584", "1.602", "+0.01", "−0.01"),
+    ("full + ibac:observe", "1.583", "1.607", "−0.00", "+0.00"),
 ], col_w=[inch(2.45), inch(1.05), inch(0.95), inch(0.95), inch(0.95)], font=10.5)
 grid(s, inch(0.45), inch(3.78), inch(6.35), inch(2.55), [
     ("does the finding travel?", "OpenShift", "KinD", "travels?"),
-    ("Which layer costs anything", "the sidecar", "the judge", "NO"),
+    ("Which layer costs anything", "the judge", "the judge", "YES"),
     ("Serial tool calls judged (p=1)", "10 / 10", "10 / 10", "YES"),
-    ("Judged / tool-call ratio, n=50", "0.90–0.98", "0.90–0.98", "YES"),
-    ("tau2 measured / projected", "0.31×", "2.49×", "NO"),
-    ("Between-deploy noise floor", "0.22 s", "0.155 s", "YES"),
+    ("Judged / tool-call ratio, n=50", "0.94–1.00", "0.96–1.02", "YES"),
+    ("tau2 measured / projected", "1.66×", "2.01×", "PARTLY"),
+    ("Between-deploy noise floor", "0.02 s", "0.12 s", "NO"),
     ("Sidecar CPU / memory", "no data", "no data", "—"),
 ], col_w=[inch(2.45), inch(1.40), inch(1.30), inch(1.20)], font=10.5)
 pts = [
-    ("The two clusters disagree about WHICH layer costs anything",
-     "On OpenShift the whole expense is the sidecar's mere presence and the judge is noise; on KinD "
-     "the sidecar is nearly free and the judge is all of it. Both are right about their own cluster, "
-     "and the same condition on the same image measures 4\u201393× apart. Never quote an absolute "
-     "per-task plugin figure without naming the cluster."),
+    ("Both clusters put the cost in the JUDGE",
+     "+1.36 s/task on OpenShift, +1.48 s on KinD; the sidecar's presence costs 0.03\u20130.05 s and "
+     "every other layer is noise. With the judge engaged the same condition lands within 3% on the "
+     "two clusters (1.57 / 1.61 s). Still name the cluster: on KinD ~0.26 s of each judged call is "
+     "the node's DNS being retried."),
     ("Not a timeout \u2014 we checked",
-     "A timeout piles values on a round number. OpenShift's auth-only runs 8.05\u201317.93 s, SD 1.92, "
-     "broad and unimodal: contention and queueing. On the quiet cluster the tail moves to full "
-     "(median 1.82 s, max 14.00 s) because the judge is itself an LLM call \u2014 so the sidecar "
-     "costs reproducibility, not only latency."),
+     "A timeout piles values on a round number. Judged tasks run 0.21\u20139.63 s (OpenShift) and "
+     "0.12\u20137.75 s (KinD) around a ~1.6 s median, no 0.1 s bin above 12%: variable latency. The "
+     "tail is the judge, itself an LLM call \u2014 so engaging it costs reproducibility, not only "
+     "latency."),
     ("One flag decides whether the study measures anything",
      "Every gsm8k leg sends the SAME 50 prompts and the gateway replays completions for ~10 min: "
      "unspaced, later legs measure the cache, in run order \u2014 the shape of a plugin effect. "
      "BM_CACHE_GAP=900 spaces them. The check needs no statistics: the conditions NEST, so no "
-     "sidecar leg can beat a sidecar-free one. Clear by 41.8× (OCP), 1.4× (KinD)."),
+     "sidecar leg can beat a sidecar-free one. Clear by 1.3× on both clusters."),
     ("The deploy is the unit of replication, not the task",
      "A per-task interval measures variance WITHIN one deploy. The honest floor is between two "
-     "deploys of one condition, and it exceeds every step but the dominant layer \u2014 so presets "
-     "cannot be RANKED at any task count; add deploys, not tasks. Cut the other way: at "
-     "\u03c3 \u2248 0.23 s two deploys already resolve a 1 s effect, so the small steps are "
-     "genuinely small rather than unresolved."),
+     "deploys of one condition, and it exceeds every step but the judge's \u2014 so presets cannot "
+     "be RANKED at any task count; add deploys, not tasks. Cut the other way: at \u03c3 \u2248 "
+     "0.02 s (OpenShift) and 0.13 s (KinD) two deploys already resolve a 1 s effect, so the small "
+     "steps are genuinely small rather than unresolved."),
 ]
 y = inch(1.30)
 for head, body_text in pts:

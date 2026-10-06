@@ -42,8 +42,8 @@ never hand-edited. Earlier versions are archived under [docs/archive/](docs/arch
 
 For the plugin question specifically, read [docs/PLUGIN_OVERHEAD.md](docs/PLUGIN_OVERHEAD.md) first:
 it explains the sidecar/preset/judge vocabulary and carries the conclusions, the headline being that
-our two clusters disagree about *which* plugin layer costs anything — so no absolute per-task figure
-is portable between them.
+on both clusters almost all of the cost is the IBAC judge's own LLM call — about 1.4–1.5 s per task —
+while the sidecar and the other layers are below the noise floor.
 
 ## License
 
