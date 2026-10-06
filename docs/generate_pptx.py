@@ -341,7 +341,7 @@ decisions = [
     ("Per-request ROPC login", "Fresh Service token every request — no expiry handling."),
     ("iss-keyed per-instance config", "One file per issuer: Rossoctl URL, benchmarker cred, MLflow/S3, optional Keycloak backchannel."),
     ("Enact only what the API allows", "Deploy/run/report/export — now including AuthBridge plugin presets (layer-3). Only workload Secrets remain out-of-band: prechecked and reported (424), never silently ignored."),
-    ("MLflow with Service; S3 in the cloud", "MLflow is co-located with the Service (per-service traces it emits + reads), not in the workload cluster; S3 is an external cloud service — the shared cross-service sink."),
+    ("MLflow with Service; S3 in the cloud", "MLflow runs on the Service's own cluster (the traces it emits and reads); S3 is an external cloud service — the shared cross-cluster sink for results."),
 ]
 y = inch(1.95)
 for head, body in decisions:
@@ -1595,7 +1595,7 @@ for head, body_text in find:
 
 # ---- 9.2 plugin overhead ----
 s = prs.slides.add_slide(BLANK)
-title_band(s, "9.2  What AuthBridge Costs — and Why It Has No Single Number",
+title_band(s, "9.2  What AuthBridge Costs — Almost All of It Is the Judge",
            "The designed 13-leg experiment (n=50, crossover replicates, gateway cache spaced), v1.35")
 grid(s, inch(0.45), inch(1.30), inch(6.35), inch(2.20), [
     ("non-LLM s / task (steady)", "OpenShift", "KinD", "OCP step", "KinD step"),
