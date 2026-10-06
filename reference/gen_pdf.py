@@ -453,9 +453,8 @@ def render(md_path: pathlib.Path, pdf_path: pathlib.Path, chrome: str,
     # `ignore_cleanup_errors` because Chrome's helper processes (zygote, renderers, network
     # service) are not our child -- killing the one we launched does not stop them writing to
     # `profile/`, so the rmtree below used to race them and raise `Directory not empty`. That
-    # exception escaped `main()` and killed the whole batch: the .pptx pair is rendered LAST,
-    # so a crash here left docs/AutoBench.pdf silently unregenerated while the three markdown
-    # PDFs beside it were fresh. Starting a new session (below) makes the group kill reliable;
+    # exception escaped `main()` and killed the whole batch, so any pair after the crash was
+    # left silently unregenerated while the PDFs before it were fresh. Starting a new session (below) makes the group kill reliable;
     # this is the belt to that braces, since a leftover temp profile harms nothing.
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         tmp = pathlib.Path(td)
