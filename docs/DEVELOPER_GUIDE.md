@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-10-05T01:32:23Z
+**Last modified:** 2026-10-06T01:16:09Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -10,6 +10,9 @@ A task-oriented guide to driving the AutoBench Service over its RESTful API. Eve
 multi-turn) on two single-cluster installs, OpenShift (`ykt3`) and KinD (`kind-rossoctl`), where
 the Service and the benchmark workloads it deploys run on the same cluster.
 
+- **The deployment model is one install per cluster, with all benchmark workloads in one
+  namespace** — `team1` in every example below. Several people can drive one install; the rules for
+  sharing it are in the [Admin Guide, §1](./ADMIN_GUIDE.md#the-deployment-model-one-install-per-cluster-all-workloads-in-one-namespace).
 - Reference the machine-readable contract in [`openapi.json`](./openapi.json) /
   [`openapi.yaml`](./openapi.yaml).
 - Installing and operating the Service — prerequisites, environment variables, the Helm chart for

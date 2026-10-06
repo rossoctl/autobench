@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-10-05T01:24:27Z
+**Last modified:** 2026-10-06T01:16:09Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -35,7 +35,7 @@ install, §6 is the only verification that means anything.
 **Contents**
 
 - [1. What you install, and what you don't](#1-what-you-install-and-what-you-dont)
-  - [One cluster](#one-cluster)
+  - [The deployment model: one install per cluster, all workloads in one namespace](#the-deployment-model-one-install-per-cluster-all-workloads-in-one-namespace)
 - [2. Prerequisites](#2-prerequisites)
   - [2.1 Rossoctl v0.8.0 or later](#21-rossoctl-v080-or-later)
   - [2.2 Workstation tooling](#22-workstation-tooling)
@@ -92,11 +92,30 @@ install is useful:
   `reference/run12_specs.json` name it;
 - an OTEL collector that writes to an MLflow the Service can read (§3.4).
 
-### One cluster
+### The deployment model: one install per cluster, all workloads in one namespace
 
 This guide covers the **single-cluster** deployment: the Service and the benchmark workloads it
 deploys run on the same cluster — KinD, or OpenShift (`ykt3` in the examples). The agents reach the
-collector over service DNS, and nothing needs an extra ingress.
+collector over service DNS, and nothing needs an extra ingress. Concretely:
+
+| piece | the model | set by |
+|---|---|---|
+| AutoBench Service | **one install per cluster** — Helm release `autobench` in `rossoctl-system` | `reference/autobench-install.sh` |
+| benchmark workloads | **every agent and MCP server in one namespace**, `team1` | every leg of `reference/run12_specs.json`; preflight checks that namespace; the uninstaller's `--teams` defaults to it |
+| model-gateway and HuggingFace keys | `openai-secret` and `hf-secret` in that namespace | provisioned out-of-band (§2) |
+| MLflow (OpenShift) | workspace `team1` | the instance file (§4) |
+| IBAC judge | one per cluster, in `rossoctl-platform-config` | the chart (§5.4) |
+| Keycloak | realm `rossoctl`; the Service acts as `benchmarker` (realm role `rossoctl-operator`), and any realm user can call it | the instance file's `service_credential` |
+
+One install serves several people: every run is attributed to the caller's own token, and its S3
+keys carry the caller's username. Two rules keep shared use clean — never deploy the **same
+benchmark into the same namespace at the same time** (the workload names are fixed per benchmark, so
+the second deploy collides with the first), and run **one measurement campaign at a time**, because
+concurrent runs contend on the shared LLM gateway: pass rates stay valid, latency and cost do not.
+
+The namespace is a request field (`namespace` on every deploy and run, `--namespace` on the CLI), not
+a constant. Using a second one needs its own `openai-secret` and `hf-secret`, and on OpenShift its
+MLflow workspace in `mlflowTraceWriter.namespaces`.
 
 ## 2. Prerequisites
 

@@ -321,7 +321,7 @@ textbox(s, inch(0.5), inch(1.95), inch(5.85), inch(4.9),
          ("Objectives", 14, True, BLUE),
          ("• Automate benchmarking lifecycle operations", 13.5, False, INK, 1),
          ("• Cross-user/cluster sharing of benchmark run results", 13.5, False, INK, 1),
-         ("• Easy to install on a cluster and run against it: KinD or OpenShift", 13.5, False, INK, 1),
+         ("• One install per cluster, all benchmark workloads in one namespace (team1)", 13.5, False, INK, 1),
          ("• Asynchronous parallel benchmark runs", 13.5, False, INK, 1),
          ("• Secure, scalable, auditable & resilient", 13.5, False, INK, 1),
          ("3 benchmarks", 14, True, BLUE),
@@ -1682,8 +1682,8 @@ textbox(s, inch(7.0), inch(2.0), inch(5.8), inch(4.6),
          ("precheck (424) or reject (422), with an actionable reason", 11.5, False, RGBColor(0x3A, 0x46, 0x54), 2)])
 
 box(s, inch(1.6), inch(5.75), inch(10.1), inch(0.75),
-    "Cluster-agnostic by construction: the same chart installs on KinD and OpenShift, "
-    "with the Service and its workloads on one cluster.",
+    "One install per cluster, with all benchmark workloads in one namespace \u2014 "
+    "the same chart on KinD and OpenShift.",
     LTGRAY, STORE, font=12.5, bold=True, font_color=INK)
 
 # ---- page numbers ----------------------------------------------------------
