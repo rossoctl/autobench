@@ -694,7 +694,7 @@ The causes and their fixes:
 | `Invalid user credentials`, password credential **is** set | the password you supplied is not the one Keycloak holds | supply the right one, or re-seed with `reference/keycloak-ensure-user.sh` |
 | `Invalid user credentials`, **no** password credential | the user exists with no password at all | `reference/keycloak-ensure-user.sh` |
 | `Invalid user credentials`, **no such user** | not in this realm | `reference/keycloak-ensure-user.sh`; check you have the right realm |
-| `Account is not fully set up` | the password may be **correct** — a required action is pending, or `firstName`/`lastName` are unset, which this realm's user profile demands before it issues a token | `reference/keycloak-ensure-user.sh`, which fills both where unset and clears required actions |
+| `Account is not fully set up` | the password may be **correct** — a required action is pending, or `firstName`/`lastName` are unset, which this realm's user profile demands before it issues a token | `reference/keycloak-ensure-user.sh`, which fills `firstName`/`lastName`/`email` where unset and clears required actions |
 | `unauthorized_client` / `invalid_client` | the client is confidential, or has `directAccessGrantsEnabled: false` | `KC_SERVICE_CLIENT_SECRET`, or `keycloak-ensure-user.sh`, which enables Direct Access Grants idempotently |
 | login ok, role missing | every `/deploy` will 403 | `reference/keycloak-ensure-user.sh --realm-role rossoctl-operator` |
 
@@ -714,7 +714,7 @@ instead:
 ```
 
 The script is idempotent. It creates the user if it is absent, enables it, fills
-`firstName`/`lastName` where unset (keeping any that are set), clears pending required actions, sets
+`firstName`/`lastName`/`email` where unset (keeping any that are set), clears pending required actions, sets
 the password permanently, grants the role and turns on Direct Access Grants for the client. With
 `--verify` it then logs in the way the Service will. The installer does not run it itself: creating
 an identity in someone's Keycloak needs that Keycloak's admin password, and that should be handed
@@ -723,7 +723,7 @@ over on purpose, not taken.
 #### Where in the flow each script checks
 
 - **`kind-post-setup.sh`** seeds the user through `keycloak-ensure-user.sh --realm-role
-  rossoctl-operator --verify`, which also fills `firstName`/`lastName` where unset and clears
+  rossoctl-operator --verify`, which also fills `firstName`/`lastName`/`email` where unset and clears
   pending required actions — so the login it verifies is the one the Service will make.
 - **`kind-service-bootstrap.sh`** verifies at the end of that chain, immediately before it writes the
   password into the instance file, and **dies** rather than writing an unusable one. It also warns

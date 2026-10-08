@@ -67,7 +67,8 @@ def _handler(kc: FakeKeycloak):
                 [u] = kc.by_name(body["username"]) or [None]
                 if not u or kc.passwords.get(u["id"]) != body["password"]:
                     return self._send(401, {"error": "invalid_grant"})
-                if not u.get("firstName") or not u.get("lastName") or u.get("requiredActions"):
+                if (not u.get("firstName") or not u.get("lastName") or not u.get("email")
+                        or u.get("requiredActions")):
                     return self._send(400, {"error": "invalid_grant",
                                             "error_description": "Account is not fully set up"})
                 return self._send(200, {"access_token": "user-token"})
@@ -157,11 +158,13 @@ def test_fresh_user_ends_up_able_to_log_in_with_the_role(keycloak):
 def test_existing_names_are_kept_and_required_actions_cleared(keycloak):
     kc, server = keycloak(user={"id": "u9", "username": "benchmarker", "enabled": False,
                                 "firstName": "Ada", "lastName": "", "requiredActions": ["UPDATE_PASSWORD"]})
+    # no email at all: the ykt3 realm's profile required it, and an existing user never got one
     r = run(server, "--verify")
     assert r.returncode == 0, r.stderr
     u = kc.users["u9"]
     assert (u["firstName"], u["lastName"], u["requiredActions"], u["enabled"]) == (
         "Ada", "Marker", [], True)
+    assert (u["email"], u["emailVerified"]) == ("benchmarker@example.com", True)
     assert "u9" not in kc.roles  # no --realm-role, no grant
 
 

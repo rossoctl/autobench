@@ -13,9 +13,9 @@ Usage: keycloak-ensure-user.sh [flags]
 
 Idempotently ensures:
   1. the user exists (enabled, email verified)
-  2. its profile is complete: firstName/lastName set (only where unset), no pending required
-     actions. A realm whose user profile requires the names refuses the password grant without
-     them ("Account is not fully set up"), however right the password is
+  2. its profile is complete: firstName/lastName/email set (only where unset), email verified,
+     no pending required actions. A realm whose user profile requires them refuses the password
+     grant without them ("Account is not fully set up"), however right the password is
   3. the user's password is set (permanent)
   4. (with --realm-role) the user holds that realm role, e.g. rossoctl-operator
   5. the target client has directAccessGrantsEnabled=true
@@ -156,13 +156,14 @@ fi
 log "==> Ensuring the user's profile is complete..."
 areq GET "/users/${USER_ID}"
 [ "$HTTP_STATUS" = "200" ] || die "user read failed (HTTP $HTTP_STATUS): $BODY"
-user_body="$(printf '%s' "$BODY" | jq --arg f "$KC_FIRST_NAME" --arg l "$KC_LAST_NAME" \
+user_body="$(printf '%s' "$BODY" | jq --arg f "$KC_FIRST_NAME" --arg l "$KC_LAST_NAME" --arg e "$KC_EMAIL" \
     '.firstName = (if (.firstName // "") == "" then $f else .firstName end)
      | .lastName = (if (.lastName // "") == "" then $l else .lastName end)
-     | .requiredActions = [] | .enabled = true')"
+     | .email = (if (.email // "") == "" then $e else .email end)
+     | .emailVerified = true | .requiredActions = [] | .enabled = true')"
 areq PUT "/users/${USER_ID}" -d "$user_body"
 [ "$HTTP_STATUS" = "204" ] || die "profile update failed (HTTP $HTTP_STATUS): $BODY"
-log "    firstName/lastName set, no required actions, enabled"
+log "    firstName/lastName/email set, no required actions, enabled"
 
 # --- 3. set password (idempotent; permanent) ---
 log "==> Setting user password (permanent)..."
