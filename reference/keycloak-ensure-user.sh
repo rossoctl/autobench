@@ -13,13 +13,18 @@ Usage: keycloak-ensure-user.sh [flags]
 
 Idempotently ensures:
   1. the user exists (enabled, email verified)
-  2. the user's password is set (permanent)
-  3. the target client has directAccessGrantsEnabled=true
-  4. (with --verify) the ROPC password grant actually works
+  2. its profile is complete: firstName/lastName set (only where unset), no pending required
+     actions. A realm whose user profile requires the names refuses the password grant without
+     them ("Account is not fully set up"), however right the password is
+  3. the user's password is set (permanent)
+  4. (with --realm-role) the user holds that realm role, e.g. rossoctl-operator
+  5. the target client has directAccessGrantsEnabled=true
+  6. (with --verify) the ROPC password grant actually works
 
 Secrets are read from the environment (never passed on the command line):
   KC_ADMIN_PASSWORD   admin password                                (required)
-  KC_USER_PASSWORD    password to set on the user                   (required)
+  KC_USER_PASSWORD    password to set on the user                   (required, or:)
+  KC_USER_PASSWORD_FILE  a chmod-600 file holding it; one trailing newline is stripped
   KC_CLIENT_SECRET    target client secret, if it is confidential   (optional)
 
 Flags (each also has an env fallback):
@@ -28,6 +33,9 @@ Flags (each also has an env fallback):
   --client ID        KC_CLIENT       clientId the user logs in through                (required)
   --username NAME    KC_USERNAME     user to create/ensure                            (required)
   --email ADDR       KC_EMAIL        user email             (default: <username>@example.com)
+  --first-name N     KC_FIRST_NAME   set only if unset      (default: Bench)
+  --last-name N      KC_LAST_NAME    set only if unset      (default: Marker)
+  --realm-role R     KC_REALM_ROLE   realm role to grant    (default: none; AutoBench: rossoctl-operator)
   --admin-user NAME  KC_ADMIN_USER   admin username         (default: admin)
   --admin-realm N    KC_ADMIN_REALM  admin realm            (default: master)
   --base-path P      KC_BASE_PATH    path prefix            (default: none; pre-17 Keycloak: /auth)
@@ -49,6 +57,9 @@ KC_REALM="${KC_REALM:-}"
 KC_CLIENT="${KC_CLIENT:-}"
 KC_USERNAME="${KC_USERNAME:-}"
 KC_EMAIL="${KC_EMAIL:-}"
+KC_FIRST_NAME="${KC_FIRST_NAME:-Bench}"
+KC_LAST_NAME="${KC_LAST_NAME:-Marker}"
+KC_REALM_ROLE="${KC_REALM_ROLE:-}"
 KC_ADMIN_USER="${KC_ADMIN_USER:-admin}"
 KC_ADMIN_REALM="${KC_ADMIN_REALM:-master}"
 KC_BASE_PATH="${KC_BASE_PATH:-}"
@@ -62,6 +73,9 @@ while [ $# -gt 0 ]; do
         --client)      KC_CLIENT="$2"; shift 2 ;;
         --username)    KC_USERNAME="$2"; shift 2 ;;
         --email)       KC_EMAIL="$2"; shift 2 ;;
+        --first-name)  KC_FIRST_NAME="$2"; shift 2 ;;
+        --last-name)   KC_LAST_NAME="$2"; shift 2 ;;
+        --realm-role)  KC_REALM_ROLE="$2"; shift 2 ;;
         --admin-user)  KC_ADMIN_USER="$2"; shift 2 ;;
         --admin-realm) KC_ADMIN_REALM="$2"; shift 2 ;;
         --base-path)   KC_BASE_PATH="$2"; shift 2 ;;
@@ -77,7 +91,11 @@ done
 [ -n "$KC_CLIENT" ]        || { usage; die "--client / KC_CLIENT is required"; }
 [ -n "$KC_USERNAME" ]      || { usage; die "--username / KC_USERNAME is required"; }
 [ -n "${KC_ADMIN_PASSWORD:-}" ] || die "KC_ADMIN_PASSWORD must be set in the environment"
-[ -n "${KC_USER_PASSWORD:-}" ]  || die "KC_USER_PASSWORD must be set in the environment"
+if [ -z "${KC_USER_PASSWORD:-}" ] && [ -n "${KC_USER_PASSWORD_FILE:-}" ]; then
+    [ -r "$KC_USER_PASSWORD_FILE" ] || die "KC_USER_PASSWORD_FILE: cannot read $KC_USER_PASSWORD_FILE"
+    KC_USER_PASSWORD="$(cat "$KC_USER_PASSWORD_FILE")"   # $(...) strips the trailing newline
+fi
+[ -n "${KC_USER_PASSWORD:-}" ]  || die "KC_USER_PASSWORD (or KC_USER_PASSWORD_FILE) must be set in the environment"
 KC_EMAIL="${KC_EMAIL:-${KC_USERNAME}@example.com}"
 
 KC_SERVER="${KC_SERVER%/}"                 # strip trailing slash
@@ -134,11 +152,33 @@ else
     log "    user already exists (id ${USER_ID})"
 fi
 
+# --- 2b. complete the profile: names only where unset, required actions cleared, enabled ---
+log "==> Ensuring the user's profile is complete..."
+areq GET "/users/${USER_ID}"
+[ "$HTTP_STATUS" = "200" ] || die "user read failed (HTTP $HTTP_STATUS): $BODY"
+user_body="$(printf '%s' "$BODY" | jq --arg f "$KC_FIRST_NAME" --arg l "$KC_LAST_NAME" \
+    '.firstName = (if (.firstName // "") == "" then $f else .firstName end)
+     | .lastName = (if (.lastName // "") == "" then $l else .lastName end)
+     | .requiredActions = [] | .enabled = true')"
+areq PUT "/users/${USER_ID}" -d "$user_body"
+[ "$HTTP_STATUS" = "204" ] || die "profile update failed (HTTP $HTTP_STATUS): $BODY"
+log "    firstName/lastName set, no required actions, enabled"
+
 # --- 3. set password (idempotent; permanent) ---
 log "==> Setting user password (permanent)..."
 pw_body="$(jq -n --arg p "$KC_USER_PASSWORD" '{type:"password", value:$p, temporary:false}')"
 areq PUT "/users/${USER_ID}/reset-password" -d "$pw_body"
 [ "$HTTP_STATUS" = "204" ] || die "set-password failed (HTTP $HTTP_STATUS): $BODY"
+
+# --- 3b. realm role (re-POSTing an existing mapping is a no-op) ---
+if [ -n "$KC_REALM_ROLE" ]; then
+    log "==> Ensuring realm role '${KC_REALM_ROLE}'..."
+    areq GET "/roles/$(jq -rn --arg r "$KC_REALM_ROLE" '$r|@uri')"
+    [ "$HTTP_STATUS" = "200" ] || die "realm role '${KC_REALM_ROLE}' not found in realm '${KC_REALM}' (HTTP $HTTP_STATUS)"
+    areq POST "/users/${USER_ID}/role-mappings/realm" -d "[${BODY}]"
+    [ "$HTTP_STATUS" = "204" ] || die "granting '${KC_REALM_ROLE}' failed (HTTP $HTTP_STATUS): $BODY"
+    log "    granted"
+fi
 
 # --- 4. ensure client has Direct Access Grants enabled ---
 log "==> Ensuring client '${KC_CLIENT}' has directAccessGrantsEnabled=true..."

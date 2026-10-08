@@ -251,6 +251,11 @@ class Report:
         if not self.quiet:
             print(f"\n{title}", flush=True)
 
+    def hint(self, text: str) -> None:
+        """How to fix what the rows above found. Printed, never counted, never in --json's checks."""
+        if not self.quiet:
+            print("\n".join(f"        {ln}" for ln in text.splitlines()), flush=True)
+
     def count(self, status: str) -> int:
         return sum(1 for r in self.rows if r["status"] == status)
 
@@ -1539,7 +1544,7 @@ def _check_user_via_admin_api(
     if not user_obj.get("enabled", True):
         rep.fail(f"user {username} enabled", "disabled in Keycloak — every ROPC login will fail")
     # The realm's user profile requires both, and without them ROPC 400s "Account is not fully set
-    # up" even though the password is perfectly correct. keycloak-ensure-user.sh does not set them.
+    # up" even though the password is perfectly correct. keycloak-ensure-user.sh sets them.
     missing = [f for f in ("firstName", "lastName") if not user_obj.get(f)]
     if missing:
         rep.fail(
@@ -1571,6 +1576,23 @@ def _check_user_via_admin_api(
     return "no-password"
 
 
+def ensure_user_howto(server: str, realm: str, client_id: str, user: str) -> str:
+    """The command that creates the user, or repairs every way the rows above can find it broken.
+
+    One script covers all of them — absent, no password, no firstName/lastName, a pending required
+    action, disabled, no `rossoctl-operator` role, ROPC off on the client — and it is idempotent, so
+    it is the same command whichever one failed. Placeholders stand in for both secrets.
+    """
+    return (
+        f"To create or repair {user} (idempotent; fixes every failure above):\n"
+        f"  KC_ADMIN_PASSWORD=<Keycloak admin password> KC_USER_PASSWORD_FILE=<chmod-600 file> \\\n"
+        f"    reference/keycloak-ensure-user.sh --server {server} --realm {realm} \\\n"
+        f"    --client {client_id} --username {user} --realm-role rossoctl-operator --verify\n"
+        f"then give the installer the same file: KC_SERVICE_PASSWORD_FILE=<that file>.\n"
+        f"On KinD the admin password is in Secret keycloak-initial-admin (namespace keycloak)."
+    )
+
+
 def check_identity(
     rep: Report, cluster: Cluster, instances: dict[str, dict] | None,
     args: argparse.Namespace, iss_hint: str | None,
@@ -1596,6 +1618,10 @@ def check_identity(
             "not supplied and not in the instance Secret. Give it to this script one of five ways: "
             "KC_SERVICE_PASSWORD in an --env-file, --password-file <chmod-600 file>, "
             "--password-stdin, --password <value> (visible in `ps`), or export KC_SERVICE_PASSWORD",
+        )
+        rep.hint(
+            f"No {user} in Keycloak yet? Create it with reference/keycloak-ensure-user.sh "
+            "(--help); re-run this check with the password and it prints the exact command."
         )
         return
     rep.ok(f"benchmarker password from {source}", f"user {user}, sha8 {sha8(password)}")
@@ -1651,6 +1677,9 @@ def check_identity(
         rep.ok(f"ROPC login as {user}", f"against {iss}")
     else:
         rep.fail(f"ROPC login as {user}", _ropc_cause(status, body, user_state))
+        # Unreachable is a network problem; every other refusal is the user's or the client's state.
+        if status != 0:
+            rep.hint(ensure_user_howto(base, realm, client_id, user))
 
     if token:
         # The realm role every /deploy needs. Without it the Service surfaces the operator's 403 as
@@ -1673,6 +1702,7 @@ def check_identity(
                     "realm role rossoctl-operator",
                     "absent from the token — /deploy will fail with a 502 wrapping a 403",
                 )
+                rep.hint(ensure_user_howto(base, realm, client_id, user))
 
 
 def _discover_iss(cluster: Cluster, args: argparse.Namespace) -> str | None:

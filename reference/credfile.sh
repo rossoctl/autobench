@@ -109,13 +109,14 @@ cred_ropc_cause() {  # $1=status $2=body -> prints a one-line cause
     local status="${1:-0}" body="${2:-}" err desc
     err="$(printf '%s' "$body" | jq -r '.error // empty' 2>/dev/null || true)"
     desc="$(printf '%s' "$body" | jq -r '.error_description // empty' 2>/dev/null || true)"
+    local fix="; create or repair the user with reference/keycloak-ensure-user.sh --realm-role rossoctl-operator --verify (python3 reference/preflight.py prints the command filled in for this realm)"
     case "$(printf '%s %s' "$err" "$desc" | tr 'A-Z' 'a-z')" in
         *"not fully set up"*)
-            printf '%s' "'Account is not fully set up' — the PASSWORD may be correct; the user has a pending required action, or no firstName/lastName, which the rossoctl realm's user profile requires before it will issue a token" ;;
+            printf '%s' "'Account is not fully set up' — the PASSWORD may be correct; the user has a pending required action, or no firstName/lastName, which the rossoctl realm's user profile requires before it will issue a token${fix}" ;;
         *disabled*)
-            printf '%s' "the account is disabled in Keycloak" ;;
+            printf '%s' "the account is disabled in Keycloak${fix}" ;;
         *"invalid user credentials"*|invalid_grant*)
-            printf '%s' "'Invalid user credentials' — the password is wrong, the user has no password credential, or the user does not exist; Keycloak answers all three identically. \`python3 reference/preflight.py --password-file …\` distinguishes them when a Keycloak admin credential is available" ;;
+            printf '%s' "'Invalid user credentials' — the password is wrong, the user has no password credential, or the user does not exist; Keycloak answers all three identically. \`python3 reference/preflight.py --password-file …\` distinguishes them when a Keycloak admin credential is available${fix}" ;;
         unauthorized_client*|invalid_client*)
             printf '%s' "${err} — the client is confidential or has directAccessGrantsEnabled=false; set KC_SERVICE_CLIENT_SECRET, or run reference/keycloak-ensure-user.sh which enables Direct Access Grants idempotently" ;;
         *)

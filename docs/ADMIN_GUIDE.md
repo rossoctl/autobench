@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-10-06T04:43:23Z
+**Last modified:** 2026-10-08T00:04:25Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -694,16 +694,37 @@ The causes and their fixes:
 | `Invalid user credentials`, password credential **is** set | the password you supplied is not the one Keycloak holds | supply the right one, or re-seed with `reference/keycloak-ensure-user.sh` |
 | `Invalid user credentials`, **no** password credential | the user exists with no password at all | `reference/keycloak-ensure-user.sh` |
 | `Invalid user credentials`, **no such user** | not in this realm | `reference/keycloak-ensure-user.sh`; check you have the right realm |
-| `Account is not fully set up` | the password may be **correct** — a required action is pending, or `firstName`/`lastName` are unset, which this realm's user profile demands before it issues a token | set both (`kind-post-setup.sh` patches them), clear the required action |
+| `Account is not fully set up` | the password may be **correct** — a required action is pending, or `firstName`/`lastName` are unset, which this realm's user profile demands before it issues a token | `reference/keycloak-ensure-user.sh`, which fills both where unset and clears required actions |
 | `unauthorized_client` / `invalid_client` | the client is confidential, or has `directAccessGrantsEnabled: false` | `KC_SERVICE_CLIENT_SECRET`, or `keycloak-ensure-user.sh`, which enables Direct Access Grants idempotently |
-| login ok, role missing | every `/deploy` will 403 | grant the `rossoctl-operator` realm role |
+| login ok, role missing | every `/deploy` will 403 | `reference/keycloak-ensure-user.sh --realm-role rossoctl-operator` |
+
+**Every row above has the same fix command**, and preflight prints it under the failure, filled in
+for the realm it checked. Neither secret appears in it; both stay placeholders. A run with no
+`benchmarker` password at all can't name the realm yet, so it points at the script's `--help`
+instead:
+
+```
+  FAIL  ROPC login as benchmarker — 'Invalid user credentials' — and no such user exists in the realm (see above)
+        To create or repair benchmarker (idempotent; fixes every failure above):
+          KC_ADMIN_PASSWORD=<Keycloak admin password> KC_USER_PASSWORD_FILE=<chmod-600 file> \
+            reference/keycloak-ensure-user.sh --server https://keycloak.example.com --realm rossoctl \
+            --client rossoctl --username benchmarker --realm-role rossoctl-operator --verify
+        then give the installer the same file: KC_SERVICE_PASSWORD_FILE=<that file>.
+        On KinD the admin password is in Secret keycloak-initial-admin (namespace keycloak).
+```
+
+The script is idempotent. It creates the user if it is absent, enables it, fills
+`firstName`/`lastName` where unset (keeping any that are set), clears pending required actions, sets
+the password permanently, grants the role and turns on Direct Access Grants for the client. With
+`--verify` it then logs in the way the Service will. The installer does not run it itself: creating
+an identity in someone's Keycloak needs that Keycloak's admin password, and that should be handed
+over on purpose, not taken.
 
 #### Where in the flow each script checks
 
-- **`kind-post-setup.sh`** seeds the user, then patches `firstName`/`lastName`, then grants the role.
-  It deliberately calls `keycloak-ensure-user.sh` *without* `--verify`: before that patch the realm
-  refuses a token no matter how correct the password is, so verifying there would fail on a healthy
-  setup.
+- **`kind-post-setup.sh`** seeds the user through `keycloak-ensure-user.sh --realm-role
+  rossoctl-operator --verify`, which also fills `firstName`/`lastName` where unset and clears
+  pending required actions — so the login it verifies is the one the Service will make.
 - **`kind-service-bootstrap.sh`** verifies at the end of that chain, immediately before it writes the
   password into the instance file, and **dies** rather than writing an unusable one. It also warns
   when the token carries no `rossoctl-operator` role. `SKIP_CRED_CHECK=1` writes the file anyway —

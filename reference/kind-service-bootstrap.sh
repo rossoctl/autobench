@@ -271,9 +271,8 @@ fi
 # This is the one check the script cannot skip without making its output untrustworthy: the password
 # lands in the instance file, the Service presents it on every /deploy, and a wrong one fails no
 # earlier than the first benchmark — as a 502 wrapping Keycloak's 403, which reads like a Rossoctl
-# problem. keycloak-ensure-user.sh sets the password; kind-post-setup.sh then patches the
-# firstName/lastName the realm's user profile requires, and only AFTER that patch can a login
-# succeed — hence the check belongs here, at the end of the chain, not in either of those.
+# problem. keycloak-ensure-user.sh seeds the user and verifies it; this check re-proves it here, at
+# the end of the chain, because it is the password about to be written that has to work.
 log "==> Verifying the ${KC_SERVICE_USERNAME} credential (${CRED_PASSWORD_SOURCE}, sha8 $(printf '%s' "$KC_SERVICE_PASSWORD" | shasum -a 256 | cut -c1-8))..."
 if [ -n "$SKIP_CRED_CHECK" ]; then
     warn "SKIP_CRED_CHECK=1 — not verifying the password; every /deploy will fail if it is wrong"

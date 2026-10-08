@@ -7,8 +7,8 @@
 # Keycloak user are ALL gone, and `--with-all` does NOT redeploy the Service.
 # This script stands it all back up in one step:
 #   1. build + kind-load the autobench image
-#   2. re-seed the `benchmarker` Keycloak user (incl. the firstName/lastName the
-#      realm requires for ROPC — keycloak-ensure-user.sh omits them)
+#   2. re-seed the `benchmarker` Keycloak user (password, the firstName/lastName the realm
+#      requires for ROPC, and the rossoctl-operator role) and verify it can log in
 #   3. stand up the MLflow read path (mlflow-reader + point the collector at it) — unless an MLflow
 #      is already serving the configured tracking URL, which --install-mlflow decides
 #   4. generate the per-instance config + create the autobench-instances secret
@@ -30,9 +30,8 @@
 #                      credential flag is ever needed:
 #                        umask 077; mkdir -p ~/.rossoctl-kind
 #                        printf '%s' '<benchmarker password>' > ~/.rossoctl-kind/benchmarker.pass
-#                      Step 4 logs in with whatever this resolves to, because step 2 CANNOT: the
-#                      realm refuses a token until the firstName/lastName patch below has run, so
-#                      keycloak-ensure-user.sh is deliberately called without --verify.
+#                      Step 2 verifies a ROPC login with it, and step 4 logs in with it again
+#                      immediately before writing it into the instance file.
 #   KC_ADMIN_PASSWORD  Keycloak master admin password       (optional; auto-read
 #                      from the in-cluster keycloak-initial-admin secret if unset)
 #   BM_WORKLOAD_LLM_KEY  the workload LLM key, issued by the gateway this cluster can reach. If
@@ -211,38 +210,17 @@ echo "==> building $IMAGE"
 echo "==> loading into kind cluster $CLUSTER"
 kind load docker-image "$IMAGE" --name "$CLUSTER"
 
-# --- 2. re-seed benchmarker, then set the realm-required firstName/lastName ---
-echo "==> ensuring Keycloak user '$BENCH_USER'"
-"$REFERENCE_DIR/keycloak-ensure-user.sh" \
-  --server "$KC_SERVER" --realm "$REALM" --client "$CLIENT" \
-  --username "$BENCH_USER" --email "$BENCH_EMAIL"
-# keycloak-ensure-user.sh creates {username,enabled,email,emailVerified} only; the
-# rossoctl realm's user-profile also requires firstName+lastName, else ROPC 400s
-# "Account is not fully set up". Patch them via the Admin REST API.
-ATOK="$(curl -sS "$KC_SERVER/realms/master/protocol/openid-connect/token" \
-  -d client_id=admin-cli -d grant_type=password -d username=admin \
-  --data-urlencode "password=${KC_ADMIN_PASSWORD}" | jq -r '.access_token')"
-[ -n "$ATOK" ] && [ "$ATOK" != null ] || { echo "admin token failed" >&2; exit 1; }
-USER_ID="$(curl -sS -H "Authorization: Bearer $ATOK" \
-  "$KC_SERVER/admin/realms/$REALM/users?username=$BENCH_USER&exact=true" | jq -r '.[0].id')"
-curl -sS -o /dev/null -w '' -X PUT -H "Authorization: Bearer $ATOK" -H 'Content-Type: application/json' \
-  "$KC_SERVER/admin/realms/$REALM/users/$USER_ID" \
-  -d "{\"firstName\":\"Bench\",\"lastName\":\"Marker\",\"email\":\"${BENCH_EMAIL}\",\"emailVerified\":true,\"requiredActions\":[]}"
-echo "==> user profile patched (firstName/lastName/email)"
+# --- 2. re-seed benchmarker: password, the firstName/lastName the realm requires, the role ---
 # The realm import does NOT grant benchmarker the operator role, but every Service call that
 # creates workloads needs it: POST /api/v1/tools otherwise 403s "Required role(s):
-# rossoctl-operator" and the Service surfaces that as a 502 on /deploy. Grant it idempotently
-# (re-POSTing an existing mapping is a no-op).
+# rossoctl-operator" and the Service surfaces that as a 502 on /deploy. keycloak-ensure-user.sh
+# grants it (and fails loudly if the realm has no such role), and fills firstName/lastName where
+# unset, without which ROPC 400s "Account is not fully set up". All idempotent.
+echo "==> ensuring Keycloak user '$BENCH_USER'"
 BENCH_ROLE="${BENCH_ROLE:-rossoctl-operator}"
-ROLE_JSON="$(curl -sS -H "Authorization: Bearer $ATOK" \
-  "$KC_SERVER/admin/realms/$REALM/roles/$BENCH_ROLE")"
-if [ -n "$ROLE_JSON" ] && [ "$(printf '%s' "$ROLE_JSON" | jq -r '.id // empty')" != "" ]; then
-  curl -sS -o /dev/null -X POST -H "Authorization: Bearer $ATOK" -H 'Content-Type: application/json' \
-    "$KC_SERVER/admin/realms/$REALM/users/$USER_ID/role-mappings/realm" -d "[${ROLE_JSON}]"
-  echo "==> granted realm role '$BENCH_ROLE' to '$BENCH_USER'"
-else
-  echo "WARNING: realm role '$BENCH_ROLE' not found in realm '$REALM' — /deploy will 502 with a 403" >&2
-fi
+"$REFERENCE_DIR/keycloak-ensure-user.sh" \
+  --server "$KC_SERVER" --realm "$REALM" --client "$CLIENT" \
+  --username "$BENCH_USER" --email "$BENCH_EMAIL" --realm-role "$BENCH_ROLE" --verify
 
 # --- 2b. workload secrets the benchmarks reference by name ---
 # registry.py injects HF_TOKEN from secret `hf-secret` (key `hf-token`) and OPENAI_API_KEY from
