@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-10-12T02:32:11Z
+**Last modified:** 2026-10-12T15:55:55Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -1244,6 +1244,13 @@ What the artifacts record:
 - **The gateway URL appears nowhere.** The bucket is public.
 
 What to know:
+- **Check the gateway from the cluster, not from your laptop.** A gateway's front end may allowlist
+  source addresses. KinD egresses through your machine; an OpenShift cluster does not.
+  - An **HTML `403 Forbidden`** from `GET <base>/v1/models`, with or without the key, means the
+    front end refused the cluster's address, and every task fails in well under a second.
+  - A **JSON `401`** without the key means the request reached LiteLLM.
+  - Probe from a pod in the cluster, e.g. `kubectl exec` into the Service pod and fetch the URL with
+    Python.
 - **The model must be one that key is granted.** `GET /v1/models` with that key lists its grants, not
   the gateway's whole catalogue.
 - **Prices are per gateway.** `reference/model_prices.json` → `gateways.<label>.models`.
