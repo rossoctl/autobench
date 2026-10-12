@@ -1,6 +1,7 @@
+import re
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ServiceCredential(BaseModel):
@@ -63,6 +64,10 @@ class WorkloadLLMConfig(BaseModel):
     out-of-band in the instance file, like `workload_otel` and the endpoint templates. The API
     *key* is unaffected — it stays in the cluster `openai-secret` and is never carried here.
 
+    A deploy can override `api_base` and the key Secret for one deployment
+    (`DeployBenchmarkRequest.llm_*`); `gateway_label` names this instance's own gateway in the
+    published artifacts when a deploy does not.
+
     `api_base` overrides `OPENAI_API_BASE` (tool + agent) and `LLM_API_BASE` (agent). `default_model`
     is the instance default when a deploy/run passes no explicit model (takes precedence over the
     benchmark's own default). `disable_proxy`/`no_proxy` inject egress-proxy-bypass env on the agent
@@ -73,6 +78,29 @@ class WorkloadLLMConfig(BaseModel):
     default_model: str | None = None
     disable_proxy: bool = False  # inject HTTP_PROXY=""/http_proxy="" on the agent
     no_proxy: str | None = None  # inject NO_PROXY/no_proxy bypass list on the agent
+    gateway_label: str | None = None  # published as `llm_gateway`; the URL never is
+
+
+# The label is what the public artifacts carry instead of the gateway's URL, so it is kept to a
+# shape that cannot smuggle a hostname-with-path or whitespace into a report column.
+GATEWAY_LABEL_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
+DEFAULT_GATEWAY_LABEL = "default"
+DEFAULT_KEY_SECRET = "openai-secret"
+DEFAULT_KEY_SECRET_KEY = "apikey"
+# DNS-1123 subdomain for the Secret name; a Secret data key is [-._a-zA-Z0-9]+.
+_SECRET_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$")
+_SECRET_KEY_RE = re.compile(r"^[-._a-zA-Z0-9]{1,253}$")
+
+
+def parse_key_secret(ref: str) -> tuple[str, str]:
+    """`name` or `name:key` -> (name, key); the key defaults to `apikey`, as in `openai-secret`."""
+    name, _, key = ref.partition(":")
+    key = key or DEFAULT_KEY_SECRET_KEY
+    if not _SECRET_NAME_RE.match(name):
+        raise ValueError(f"llm_key_secret: {name!r} is not a valid Secret name (DNS-1123)")
+    if not _SECRET_KEY_RE.match(key):
+        raise ValueError(f"llm_key_secret: {key!r} is not a valid Secret data key")
+    return name, key
 
 
 class S3Config(BaseModel):
@@ -406,6 +434,10 @@ class BenchmarkSummary(BaseModel):
 
 
 class DeployBenchmarkRequest(BaseModel):
+    # Forbid, not ignore: with `ignore` an older image silently dropped a field it did not know,
+    # so a deploy asking for another gateway landed on the default one and still looked right.
+    model_config = ConfigDict(extra="forbid")
+
     agent: str = "tool_calling"
     model: str | None = None
     namespace: str = "team1"
@@ -426,6 +458,42 @@ class DeployBenchmarkRequest(BaseModel):
     # The `--plugin-config-file` flag takes a local filesystem path with no clean HTTP analog, so
     # it stays rejected with a focused 422 (see the deploy route).
     plugin_config_file: str | None = None
+    # Per-deployment LLM gateway, for comparing gateway x model combinations without a reinstall.
+    # The key never travels: `llm_key_secret` names a Secret in `namespace` that holds it (created
+    # out-of-band, once per gateway), mounted exactly as `openai-secret` is. `llm_gateway` is the
+    # label the artifacts publish instead of the URL, and is required with `llm_api_base`.
+    llm_api_base: str | None = None
+    llm_key_secret: str | None = None  # "name" or "name:key"; default openai-secret:apikey
+    llm_gateway: str | None = None
+
+    @field_validator("llm_api_base")
+    @classmethod
+    def _check_base(cls, v: str | None) -> str | None:
+        if v is not None and not re.match(r"^https?://[^\s/]+(/\S*)?$", v):
+            raise ValueError("llm_api_base must be an http(s) URL")
+        return v.rstrip("/") if v else v
+
+    @field_validator("llm_key_secret")
+    @classmethod
+    def _check_secret(cls, v: str | None) -> str | None:
+        if v is not None:
+            parse_key_secret(v)
+        return v
+
+    @field_validator("llm_gateway")
+    @classmethod
+    def _check_gateway(cls, v: str | None) -> str | None:
+        if v is not None and not GATEWAY_LABEL_RE.match(v):
+            raise ValueError(f"llm_gateway must match {GATEWAY_LABEL_RE.pattern}")
+        return v
+
+
+class DeploymentLLM(BaseModel):
+    """What a deployment's LLM calls go to, as far as it may be published: never the URL."""
+
+    gateway: str
+    model: str
+    key_secret: str  # "name:key"
 
 
 class DeployBenchmarkResponse(BaseModel):
@@ -435,6 +503,8 @@ class DeployBenchmarkResponse(BaseModel):
     agent_name: str
     tool: dict
     agent: dict
+    # Echoed so a client can confirm the Service enacted what it asked for (see DeployBenchmarkRequest).
+    llm: DeploymentLLM | None = None
 
 
 class BenchmarkStatusResponse(BaseModel):
@@ -516,6 +586,9 @@ class RunState(BaseModel):
     # Populated after completion when S3 export is configured (bucket set).
     artifacts_prefix: str | None = None
     artifacts: list[RunArtifact] = Field(default_factory=list)
+    # The deployment's gateway/model/key Secret, copied at run start from what this Service deployed.
+    # None when it has no record (it restarted since the deploy, or another one deployed).
+    llm: DeploymentLLM | None = None
 
 
 class MLflowTraceRecord(BaseModel):

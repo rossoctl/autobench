@@ -19,6 +19,7 @@ import statistics as st
 HERE = pathlib.Path(__file__).resolve().parent
 CARD = json.loads((HERE / "model_prices.json").read_text())
 PRICES = CARD["models"]
+GATEWAYS = {k: v for k, v in (CARD.get("gateways") or {}).items() if not k.startswith("_")}
 RATE_CARD_DATE = CARD["_rate_card_date"]
 
 # The judge's system prompt is a fixed 1,577 chars / 231 words, read off the rendered
@@ -43,8 +44,20 @@ def money(x):
     return f"${x:,.2f}"
 
 
-def cost(model, tin, tout):
-    p = PRICES.get(model)
+def price(model, gateway=None):
+    """The rate for `model` as `gateway` charges it, or None.
+
+    A gateway with its own card is priced from that card alone: the same model id on another
+    gateway is another price, and borrowing one would make a comparison quietly wrong. A gateway
+    with no card here (or no label at all) is priced from the top-level card.
+    """
+    if gateway in GATEWAYS:
+        return (GATEWAYS[gateway].get("models") or {}).get(model)
+    return PRICES.get(model)
+
+
+def cost(model, tin, tout, gateway=None):
+    p = price(model, gateway)
     if not p:
         return None
     return (tin * p["input_per_1m"] + tout * p["output_per_1m"]) / 1e6
@@ -78,7 +91,8 @@ def priced(rows):
     carries `model: unknown` and no cost. Counting it would drag every per-task mean toward
     zero, so it is excluded here and reported separately.
     """
-    return [x for x in rows if (x.get("llm_input_tokens") or 0) and x.get("model") in PRICES]
+    return [x for x in rows
+            if (x.get("llm_input_tokens") or 0) and price(x.get("model"), x.get("llm_gateway"))]
 
 
 def load(spec_path, mirror):

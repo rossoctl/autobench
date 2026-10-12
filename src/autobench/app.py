@@ -7,6 +7,7 @@ from fastapi.openapi.utils import get_openapi
 
 from .auth.jwks import JWKSCache
 from .config import settings
+from .deployments import DeploymentRecords
 from .instances import InstanceRegistry
 from .routes import agents, benchmark, benchmarks, config, hello, mlflow, runs, tools
 from .runner.registry import RunRegistry
@@ -21,6 +22,7 @@ async def lifespan(app: FastAPI):
     app.state.jwks = JWKSCache(app.state.http, settings.jwks_cache_seconds)
     app.state.runs = RunRegistry()
     app.state.config_overrides = RuntimeConfigStore()
+    app.state.deployments = DeploymentRecords()
     logging.getLogger(__name__).info(
         "loaded %d instance(s): %s",
         len(app.state.registry),

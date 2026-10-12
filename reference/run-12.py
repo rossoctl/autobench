@@ -30,6 +30,14 @@ Target is selected entirely by env so the same script drives kind and the OCP cl
                      BM_MODEL_TAU2 is also the only way to displace the `model_override` baked into
                      the Service image's tau2 definition without rebuilding the image: an explicit
                      deploy model outranks it (see registry._resolve_model).
+    BM_LLM_API_BASE  run EVERY leg on another LLM gateway (deploy-time, Service v1.36+); needs
+    BM_LLM_GATEWAY   the label the artifacts publish for it (the URL never is), and
+    BM_LLM_KEY_SECRET  the Secret NAME[:KEY] in the legs' namespace holding that gateway's key.
+    BM_MODEL_DEFAULT the model for every leg with no BM_MODEL_<ROLE> of its own. Required with
+                     BM_LLM_API_BASE: a spec file's literal model ids belong to the gateway they
+                     came from, and the instance default model is that gateway's too. One
+                     gateway x model combination per execution; compare executions with
+                     reference/gen-gateway-compare.py.
     BM_CACHE_GAP     seconds a (benchmark, model) prompt set must rest between legs, so the LLM
                      gateway's completion cache expires and every leg pays for real completions.
                      Measured TTL on the internal gateway is ~10 min (hit at 9, miss at 11), so 900
@@ -91,6 +99,10 @@ SETTLE_PLAIN = float(os.environ.get("BM_SETTLE_PLAIN", "15"))
 SETTLE_SIDECAR = float(os.environ.get("BM_SETTLE_SIDECAR", "45"))
 STABLE_POLLS = int(os.environ.get("BM_STABLE_POLLS", "4"))
 CACHE_GAP = float(os.environ.get("BM_CACHE_GAP", "0"))
+LLM_API_BASE = os.environ.get("BM_LLM_API_BASE") or None
+LLM_GATEWAY = os.environ.get("BM_LLM_GATEWAY") or None
+LLM_KEY_SECRET = os.environ.get("BM_LLM_KEY_SECRET") or None
+MODEL_DEFAULT = os.environ.get("BM_MODEL_DEFAULT") or None
 ORDER = ([int(x) for x in os.environ["BM_ORDER"].split(",")]
          if os.environ.get("BM_ORDER") else None)
 MIRROR = pathlib.Path("/tmp/autobench")
@@ -166,9 +178,19 @@ def teardown(bench, H, namespace, agent, attempts=3):
 
 def deploy(bench, H, body, wait_s=1800, sidecar=False):
     st, b = _req(f"{BASE}/benchmarks/{bench}/deploy", body, H, "POST", timeout=900)
-    log(f"  POST deploy {bench} {json.dumps(body)} -> {st}")
+    log(f"  POST deploy {bench} {json.dumps(public_deploy_request(body))} -> {st}")
     if st >= 400:
         return False, b[:400].decode(errors="replace")
+    if body.get("llm_gateway"):
+        # An older Service ignores llm_* and deploys on its own gateway with a 201; only the echo
+        # proves the leg is on the gateway it will be reported under.
+        try:
+            echoed = (json.loads(b) or {}).get("llm") or {}
+        except ValueError:
+            echoed = {}
+        if echoed.get("gateway") != body["llm_gateway"]:
+            return False, (f"the Service did not enact llm_gateway={body['llm_gateway']!r} "
+                           f"(echo: {echoed or 'none — it predates v1.36'})")
     deadline = time.time() + wait_s
     last = ""
     stable = 0
@@ -243,7 +265,8 @@ def execute(spec, H):
     body = dict(spec["run"])
     ns, agent = body.get("namespace", "team1"), body.get("agent", "tool_calling")
     rec = {"n": n, "bench": bench, "title": spec["title"], "run_request": body,
-           "deploy_request": spec.get("deploy_body"), "deploy_note": spec.get("deploy")}
+           "deploy_request": public_deploy_request(spec.get("deploy_body")),
+           "deploy_note": spec.get("deploy")}
 
     if spec.get("deploy_body") is not None:
         if spec.get("teardown", True):
@@ -377,6 +400,48 @@ def apply_model_roles(specs) -> list[str]:
     return changes
 
 
+def apply_gateway(specs) -> list[str]:
+    """Put every leg on BM_LLM_API_BASE's gateway, with a model that gateway grants.
+
+    All-or-nothing on purpose: a matrix with some legs on one gateway and some on another is not a
+    gateway x model data point. Each leg keeps its BM_MODEL_<ROLE> if one is set; every other leg
+    gets BM_MODEL_DEFAULT, including the ones whose spec names a model — that literal belongs to
+    the spec's own gateway. Returns a line per leg.
+    """
+    if not (LLM_API_BASE or LLM_GATEWAY or LLM_KEY_SECRET):
+        return []
+    if LLM_API_BASE and not (LLM_GATEWAY and MODEL_DEFAULT):
+        sys.exit("BM_LLM_API_BASE needs BM_LLM_GATEWAY (the published label) and BM_MODEL_DEFAULT "
+                 "(a model that gateway grants)")
+    lines = []
+    for spec in specs:
+        db = spec.get("deploy_body")
+        if db is None:
+            continue
+        role = model_role(spec)
+        model = (os.environ.get(f"BM_MODEL_{role}") if role else None) or MODEL_DEFAULT
+        for k, v in (("llm_api_base", LLM_API_BASE), ("llm_gateway", LLM_GATEWAY),
+                     ("llm_key_secret", LLM_KEY_SECRET), ("model", model)):
+            if v:
+                db[k] = v
+        if (spec.get("run") or {}).get("model") is not None:
+            spec["run"]["model"] = db.get("model")
+        lines.append(f"#{spec['n']} {spec['bench']}: gateway {db.get('llm_gateway') or '(instance)'}"
+                     f" model {db.get('model') or '(instance default)'}")
+    return lines
+
+
+def public_deploy_request(db):
+    """The deploy body as the run record keeps it: everything but the gateway URL.
+
+    The record feeds the generated reports, which are committed to a public repo; the label in
+    `llm_gateway` identifies the gateway there instead.
+    """
+    if db is None:
+        return None
+    return {k: v for k, v in db.items() if k != "llm_api_base"}
+
+
 def cache_group(spec) -> str:
     """Legs that would hit the LLM gateway's completion cache in each other's wake.
 
@@ -396,7 +461,8 @@ def cache_group(spec) -> str:
     # The canonical specs carry the override as deploy_body["model"]; accept the other spellings so
     # an experiment file cannot silently fall back to "default" and defeat the whole gap mechanism.
     model = db.get("model") or db.get("model_override") or (spec.get("run") or {}).get("model")
-    return f"{spec['bench']}:{model or 'default'}"
+    # Each gateway has its own completion cache, so another gateway is another group.
+    return f"{db.get('llm_gateway') or 'instance'}:{spec['bench']}:{model or 'default'}"
 
 
 def wait_out_cache(spec, last_finish, log_prefix="  ") -> float:
@@ -431,6 +497,8 @@ def main():
     # Before by_n, and before any cache_group call: the group key includes the effective model.
     for line in apply_model_roles(specs):
         log(f"model rebind {line}")
+    for line in apply_gateway(specs):
+        log(f"gateway rebind {line}")
     by_n = {s["n"]: s for s in specs}
     tok = token()
     H = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}

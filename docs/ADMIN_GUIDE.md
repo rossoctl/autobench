@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-10-08T00:04:25Z
+**Last modified:** 2026-10-12T02:32:11Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -407,13 +407,32 @@ in a pod spec:
 
 | variable | source | note |
 |---|---|---|
-| `OPENAI_API_KEY` | `secretKeyRef` → `openai-secret` / `apikey` | never a literal value in the pod spec |
+| `OPENAI_API_KEY` | `secretKeyRef` → `openai-secret` / `apikey`, or the deploy's `llm_key_secret` | never a literal value in the pod spec |
 | `HF_TOKEN` | `secretKeyRef` → `hf-secret` / `hf-token` | gsm8k only; presence is the requirement, not content |
-| `OPENAI_API_BASE`, `LLM_API_BASE` | instance `workload_llm.api_base` | any inherited values are **dropped** and re-injected |
+| `OPENAI_API_BASE`, `LLM_API_BASE` | the deploy's `llm_api_base`, else instance `workload_llm.api_base` | any inherited values are **dropped** and re-injected |
+| `AUTOBENCH_LLM_GATEWAY` | the deploy's `llm_gateway`, else `workload_llm.gateway_label`, else `default` | the label the artifacts publish; from v1.36 |
 | `EXGENTIC_DEFAULT_RUNNER` | instance `workload_agent_runner` | §3.4 |
 | `REQUEST_TIMEOUT` | fixed `120`, from image v1.35 | litellm's per-call ceiling; unset it is 6000 s, so a stalled gateway call was never retried |
 | `EXGENTIC_OTEL_ENABLED` | `true` when `workload_otel.enabled` | |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` / `_PROTOCOL` / `_INSECURE` | instance `workload_otel` | the endpoint is the `:8335` one |
+
+#### A key Secret per extra gateway (for gateway × model comparisons)
+
+A deploy can name another LLM gateway, the Secret holding its key, and a label
+(`llm_api_base` / `llm_key_secret` / `llm_gateway`; Developer Guide §6.8). Nothing gets
+re-installed: the only cluster-side step is **one Secret per extra gateway**, in every namespace you
+deploy into. The Service cannot create the Secret itself, because it has no Kubernetes access.
+
+Create it from a chmod-600 file, so the key never reaches argv or your shell history:
+
+```bash
+kubectl -n team1 create secret generic cb-key --from-file=apikey=$HOME/.rossoctl-llm/cb.key
+```
+
+The data key is `apikey` unless the deploy says `cb-key:<key>`. If the Secret is missing, the agent
+never becomes Ready, and the run's `424` names the Secret. To label the instance's own gateway in
+the artifacts, set `workload_llm.gateway_label` in the instance file; otherwise it is published as
+`default`.
 
 ### 3.4 KinD and OpenShift differ — and the differences fail silently
 

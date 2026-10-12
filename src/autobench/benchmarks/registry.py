@@ -9,6 +9,7 @@ and deploy script.
 from pydantic import BaseModel, Field
 
 from ..models import (
+    DEFAULT_KEY_SECRET,
     AgentCreateRequest,
     AgentResources,
     EnvVar,
@@ -53,8 +54,47 @@ def require_llm_base(llm: WorkloadLLMConfig | None) -> None:
             "instance because no default is correct for every cluster — each reaches its own "
             "OpenAI-compatible LLM or LiteLLM service, and a cluster on the Internet cannot "
             "route to one on an intranet. Set workload_llm.api_base in the instance file, then "
-            "restart the Service."
+            "restart the Service — or pass llm_api_base (with llm_gateway) on this deploy."
         )
+
+
+def effective_llm(llm: WorkloadLLMConfig | None, api_base: str | None) -> WorkloadLLMConfig | None:
+    """The instance's LLM config with one deployment's `api_base` laid over it.
+
+    Only the base changes: the proxy settings and the default model stay the instance's, so a
+    deploy that names another gateway inherits how this cluster reaches gateways in general.
+    """
+    if not api_base:
+        return llm
+    return (llm or WorkloadLLMConfig()).model_copy(update={"api_base": api_base})
+
+
+def _rebind_key(env_vars: list[EnvVar], key_secret: tuple[str, str] | None) -> list[EnvVar]:
+    """Point every `openai-secret` reference at another Secret holding that gateway's key.
+
+    Every benchmark mounts its LLM key from `openai-secret` (tool and agent alike, including tau2's
+    user simulator, which therefore follows the agent onto the same gateway). Rewriting the
+    reference rather than the env name keeps each benchmark's own variable names intact.
+    """
+    if key_secret is None:
+        return env_vars
+    name, key = key_secret
+    out = []
+    for e in env_vars:
+        ref = e.value_from.secret_key_ref if e.value_from is not None else None
+        if ref is not None and ref.name == DEFAULT_KEY_SECRET:
+            e = _secret_env(e.name, name, key)
+        out.append(e)
+    return out
+
+
+def _gateway_env(env_vars: list[EnvVar], gateway: str | None) -> list[EnvVar]:
+    """Label the pod with its gateway, so what a deployment calls can be read off the pod."""
+    if not gateway:
+        return env_vars
+    return [e for e in env_vars if e.name != "AUTOBENCH_LLM_GATEWAY"] + [
+        EnvVar(name="AUTOBENCH_LLM_GATEWAY", value=gateway)
+    ]
 
 
 def _secret_env(name: str, secret: str, key: str) -> EnvVar:
@@ -86,6 +126,13 @@ _AGENT_RUNNER_ENV = EnvVar(name="EXGENTIC_DEFAULT_RUNNER", value="direct")
 # `litellm.Timeout` at the set value, and hangs past 15 s without it. 120 s is 1.5x the slowest
 # successful chat in every mirrored span report (6,698 calls, max 79.4 s, appworld; tau2 32.9 s).
 _AGENT_REQUEST_TIMEOUT_ENV = EnvVar(name="REQUEST_TIMEOUT", value="120")
+
+
+def resolve_model(
+    defn: "BenchmarkDefinition", model: str | None, llm: WorkloadLLMConfig | None
+) -> str:
+    """The model a deploy binds — what `build_agent_request` writes into LLM_MODEL."""
+    return _resolve_model(defn, model, llm)
 
 
 def _resolve_model(
@@ -208,7 +255,9 @@ def agent_url(
     return f"http://{service}.{namespace}.svc.cluster.local:8080"
 
 
-def required_secrets(defn: "BenchmarkDefinition", agent: str) -> list[tuple[str, str]]:
+def required_secrets(
+    defn: "BenchmarkDefinition", agent: str, key_secret: tuple[str, str] | None = None
+) -> list[tuple[str, str]]:
     """(secret_name, key) pairs the tool + chosen agent mount as env, per the definition.
 
     Used to render an actionable error when a workload can't become Ready: the service
@@ -218,6 +267,7 @@ def required_secrets(defn: "BenchmarkDefinition", agent: str) -> list[tuple[str,
     spec = defn.agents.get(agent)
     if spec is not None:
         envs += list(spec.extra_env)
+    envs = _rebind_key(envs, key_secret)
     out: list[tuple[str, str]] = []
     for e in envs:
         ref = e.value_from.secret_key_ref if e.value_from is not None else None
@@ -231,8 +281,10 @@ def build_tool_request(
     namespace: str,
     model: str | None = None,
     llm: WorkloadLLMConfig | None = None,
+    key_secret: tuple[str, str] | None = None,
+    gateway: str | None = None,
 ) -> ToolCreateRequest:
-    env_vars = list(defn.tool_env)
+    env_vars = _rebind_key(list(defn.tool_env), key_secret)
     if defn.user_simulator:
         # The user-simulator LLM shares the run's model with the agent (resolved the same way as
         # build_agent_request). Empty model falls back to the instance/benchmark default.
@@ -242,7 +294,7 @@ def build_tool_request(
                 value=_resolve_model(defn, model, llm),
             )
         )
-    env_vars = _apply_llm(env_vars, llm, agent=False)
+    env_vars = _gateway_env(_apply_llm(env_vars, llm, agent=False), gateway)
     return ToolCreateRequest(
         name=tool_name(defn.name),
         namespace=namespace,
@@ -283,6 +335,8 @@ def build_agent_request(
     plugins: list[str] | None = None,
     on_error: str | None = None,
     agent_runner: str | None = None,
+    key_secret: tuple[str, str] | None = None,
+    gateway: str | None = None,
 ) -> AgentCreateRequest:
     spec = defn.agents[agent]
     resolved_model = _resolve_model(defn, model, llm)
@@ -295,7 +349,8 @@ def build_agent_request(
     ]
     if otel is not None and otel.enabled:
         injected += _otel_env(otel)
-    env_vars = _apply_llm(list(spec.extra_env) + injected, llm, agent=True)
+    env_vars = _apply_llm(_rebind_key(list(spec.extra_env), key_secret) + injected, llm, agent=True)
+    env_vars = _gateway_env(env_vars, gateway)
     if agent_runner:
         # Drop then re-inject so the instance override wins cleanly instead of duplicating a
         # name k8s would warn/drop on (same approach as the LLM-base override).

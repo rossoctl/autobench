@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..benchmarks.registry import (
     BENCHMARKS,
@@ -7,16 +7,23 @@ from ..benchmarks.registry import (
     agent_name,
     build_agent_request,
     build_tool_request,
+    effective_llm,
     require_llm_base,
+    resolve_model,
     tool_name,
 )
 from ..context import RequestContext
 from ..deps import bound_rossoctl_client, require_caller_jwt
 from ..models import (
+    DEFAULT_GATEWAY_LABEL,
+    DEFAULT_KEY_SECRET,
+    DEFAULT_KEY_SECRET_KEY,
     BenchmarkStatusResponse,
     BenchmarkSummary,
     DeployBenchmarkRequest,
     DeployBenchmarkResponse,
+    DeploymentLLM,
+    parse_key_secret,
 )
 from ..rossoctl.client import RossoctlClient, RossoctlError
 
@@ -59,6 +66,7 @@ async def get_benchmark(name: str) -> dict:
 async def deploy_benchmark(
     name: str,
     req: DeployBenchmarkRequest,
+    request: Request,
     client: RossoctlClient = Depends(bound_rossoctl_client),
     ctx: RequestContext = Depends(require_caller_jwt),
 ) -> DeployBenchmarkResponse:
@@ -84,13 +92,28 @@ async def deploy_benchmark(
                 "sidecar must be injected for its plugin pipeline to take effect."
             ),
         )
+    # A deployment on another gateway must be named, or its rows could not be told apart from the
+    # instance gateway's in a cost comparison — and the URL itself is never published.
+    if req.llm_api_base and not req.llm_gateway:
+        raise HTTPException(
+            status_code=422,
+            detail="llm_api_base requires llm_gateway: a label the artifacts publish in its place",
+        )
+    llm = effective_llm(ctx.instance.workload_llm, req.llm_api_base)
     # Reject a missing LLM gateway here rather than letting the workload deploy and then die on an
     # opaque model-health timeout inside the agent. There is no default base by design.
     try:
-        require_llm_base(ctx.instance.workload_llm)
+        require_llm_base(llm)
     except LLMConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    tool_req = build_tool_request(defn, req.namespace, req.model, ctx.instance.workload_llm)
+    key_secret = parse_key_secret(req.llm_key_secret) if req.llm_key_secret else None
+    gateway = req.llm_gateway or (
+        (ctx.instance.workload_llm.gateway_label if ctx.instance.workload_llm else None)
+        or DEFAULT_GATEWAY_LABEL
+    )
+    tool_req = build_tool_request(
+        defn, req.namespace, req.model, llm, key_secret=key_secret, gateway=gateway
+    )
     agent_req = build_agent_request(
         defn,
         req.agent,
@@ -99,17 +122,28 @@ async def deploy_benchmark(
         req.experiment,
         ctx.instance.workload_otel,
         req.authbridge_enabled,
-        ctx.instance.workload_llm,
+        llm,
         req.plugin_preset,
         req.plugins,
         req.on_error,
         ctx.instance.workload_agent_runner,
+        key_secret=key_secret,
+        gateway=gateway,
+    )
+    secret_name, secret_key = key_secret or (DEFAULT_KEY_SECRET, DEFAULT_KEY_SECRET_KEY)
+    deployed_llm = DeploymentLLM(
+        gateway=gateway,
+        model=resolve_model(defn, req.model, llm),
+        key_secret=f"{secret_name}:{secret_key}",
     )
     try:
         tool_resp = await client.create_tool(tool_req.to_rossoctl_body())
         agent_resp = await client.create_agent(agent_req.to_rossoctl_body())
     except RossoctlError as exc:
         raise _http_error(exc) from exc
+    request.app.state.deployments.put(
+        (ctx.instance.iss, req.namespace, name, req.agent, req.experiment), deployed_llm
+    )
     return DeployBenchmarkResponse(
         benchmark=name,
         namespace=req.namespace,
@@ -117,6 +151,7 @@ async def deploy_benchmark(
         agent_name=agent_req.name,
         tool=tool_resp,
         agent=agent_resp,
+        llm=deployed_llm,
     )
 
 
@@ -155,12 +190,15 @@ async def benchmark_status(
 @router.delete("/{name}/deploy", status_code=204)
 async def teardown_benchmark(
     name: str,
+    request: Request,
     namespace: str = "team1",
     agent: str = "tool_calling",
     experiment: str = "default",
     client: RossoctlClient = Depends(bound_rossoctl_client),
+    ctx: RequestContext = Depends(require_caller_jwt),
 ) -> None:
     _definition(name)
+    request.app.state.deployments.drop((ctx.instance.iss, namespace, name, agent, experiment))
     try:
         await client.delete_agent(namespace, agent_name(name, agent, experiment))
         await client.delete_tool(namespace, tool_name(name))

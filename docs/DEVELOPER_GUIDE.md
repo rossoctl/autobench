@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-10-06T04:43:23Z
+**Last modified:** 2026-10-12T02:32:11Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -63,6 +63,7 @@ multi-turn) on OpenShift (`ykt3`) and KinD (`kind-rossoctl`).
   - [6.5 Get results (report)](#65-get-results-report)
   - [6.6 Download output files from S3](#66-download-output-files-from-s3)
   - [6.7 Tear down](#67-tear-down)
+  - [6.8 Comparing gateway × model combinations](#68-comparing-gateway--model-combinations)
 - [7. End-to-end examples (validated flows)](#7-end-to-end-examples-validated-flows)
   - [What you need on the client side](#what-you-need-on-the-client-side)
   - [7.0 Run #1 start to finish, on ykt3 (OpenShift)](#70-run-1-start-to-finish-on-ykt3-openshift)
@@ -910,6 +911,13 @@ Request fields (`DeployBenchmarkRequest`):
 | `plugins` | `null` | per-plugin policy overrides as `["NAME:POLICY"]` tokens (`POLICY` = `enforce`\|`observe`\|`off`); forwarded as `plugins`. Requires `authbridge_enabled=true` |
 | `on_error` | `null` | chain-default policy (`enforce`\|`observe`\|`off`); forwarded as `onError`. Requires `authbridge_enabled=true` |
 | `plugin_config_file` | `null` | **rejected with `422`** — a local filesystem path with no HTTP analog; use `plugin_preset`/`plugins`/`on_error` instead |
+| `llm_api_base` | `null` | this deployment's LLM gateway (an `http(s)` URL), in place of the instance's `workload_llm.api_base`. Requires `llm_gateway`. From v1.36 |
+| `llm_key_secret` | `null` → `openai-secret:apikey` | `NAME` or `NAME:KEY` of a Secret in `namespace` holding that gateway's API key. The key never passes through the Service. From v1.36 |
+| `llm_gateway` | `null` → the instance's `workload_llm.gateway_label`, else `default` | the label the artifacts publish for the gateway. The URL is never published. From v1.36 |
+
+**From v1.36 an unknown field is a `422`**, not silently ignored. The response also carries
+`llm: {gateway, model, key_secret}`, which is what the deployment will actually call. Check it,
+because an older Service answers `201` and quietly deploys on its own gateway. See §6.8.
 
 **Model swap** (run #4 pattern): the deploy endpoint always (re)creates the *shared* tool, so
 re-deploying with a new model 409s on the existing tool. Deploy the model-swapped agent alone
@@ -1202,6 +1210,58 @@ delete it with `DELETE /agents/{namespace}/{name}` (the shared tool is left for 
 experiments).
 
 ---
+
+### 6.8 Comparing gateway × model combinations
+
+Model, gateway and key are all **deploy-time** settings, so one Service can measure several
+combinations without a reinstall. Each run deploys one combination, and its artifacts say which.
+
+1. **Put each extra gateway's key in its own Secret**, once, in the workload namespace (Admin Guide
+   §3.3). The Service has no Kubernetes access and never handles the key.
+2. **Run each combination as its own deploy and run.** Give each gateway a label, which is what the
+   artifacts carry:
+
+   ```bash
+   # the instance's own gateway and default model
+   autobench-cli all --benchmark gsm8k --tasks 5 --llm-gateway ete-ext --teardown --mirror /tmp/autobench
+   # another gateway, its key Secret, and a model that key is granted
+   autobench-cli all --benchmark gsm8k --tasks 5 --teardown --mirror /tmp/autobench \
+     --llm-api-base https://litellm.cb.example.com --llm-key-secret cb-key --llm-gateway cb \
+     --model openai/rits/zai-org/glm-5-3
+   ```
+
+3. **Compare:** `python3 reference/gen-gateway-compare.py /tmp/autobench -o /tmp/compare.md`. It
+   writes one row per (benchmark, gateway, model):
+   - pass rate;
+   - tokens per task, and tasks lost before their first model call;
+   - $/task and $/pass at that gateway's posted rates;
+   - median latency.
+
+What the artifacts record:
+- **`run.json`** carries `llm: {gateway, model, key_secret}`.
+- **Every `report.ndjson` / `token_report.*` row** carries `llm_gateway`. `model` is the model the
+  agent's own spans report it actually called.
+- **The gateway URL appears nowhere.** The bucket is public.
+
+What to know:
+- **The model must be one that key is granted.** `GET /v1/models` with that key lists its grants, not
+  the gateway's whole catalogue.
+- **Prices are per gateway.** `reference/model_prices.json` → `gateways.<label>.models`.
+  - A labelled gateway with its own card is priced only from that card, and anything else on it
+    shows **unpriced**, never another gateway's price.
+  - A label with no card uses the top-level card, which is the internal ETE gateway's.
+- **One combination at a time per benchmark and namespace.** The MCP tool's name has no experiment
+  suffix, so two deployments of one benchmark share it, and with it the user simulator's gateway on
+  tau2. `all` tears down before it deploys.
+- **What follows the agent onto the gateway:** tau2's user simulator does. The IBAC judge does
+  **not**, because it is cluster-wide, so plugin legs still pay the cluster's judge gateway.
+- **The run learns the gateway from the Service's memory of the deploy.** If the Service restarted
+  between deploy and run, `llm` and `llm_gateway` are `null`; they are never guessed.
+- **The CLI trusts the deploy echo, not the status code.** If `--llm-*` comes back without an
+  `llm` echo, it stops with exit code `3`: the Service predates v1.36 and ignored the override. It
+  also refuses `--llm-*` / `--model` with `--no-deploy`, where they would have no effect.
+- **Gateway caches:** each gateway has its own completion cache, so `BM_CACHE_GAP` (§7.4) spaces
+  legs per gateway.
 
 ## 7. End-to-end examples (validated flows)
 
@@ -1570,6 +1630,9 @@ run cannot re-point them.
 | `--preset` | AuthBridge `plugin_preset`: `auth-only` \| `ibac-only` \| `full` |
 | `--plugin NAME:POLICY` | repeatable per-plugin override, e.g. `--plugin ibac:observe` |
 | `--on-error` | chain-default policy: `enforce` \| `observe` \| `off` |
+| `--llm-api-base URL` | another LLM gateway for this deployment; needs `--llm-gateway` (§6.8) |
+| `--llm-key-secret NAME[:KEY]` | the Secret in `--namespace` holding that gateway's key (default `openai-secret:apikey`) |
+| `--llm-gateway LABEL` | the label the artifacts publish for the gateway, never the URL |
 
 **`all` modifiers.**
 
@@ -1678,6 +1741,14 @@ export BM_ORDER=1,12,2,10,3,11,5,9,6,4,7,8
 
 python3 reference/run-12.py            # ~2h05m; log it: ... 2>&1 | tee /tmp/run12-ykt3.log
 ```
+
+**The whole matrix on another gateway.** Set `BM_LLM_API_BASE`, `BM_LLM_GATEWAY`,
+`BM_LLM_KEY_SECRET` and `BM_MODEL_DEFAULT` to put every leg on that gateway (§6.8).
+- **Models:** each leg keeps its `BM_MODEL_<ROLE>` if one is set; every other leg gets
+  `BM_MODEL_DEFAULT`, because the spec file's model ids belong to the gateway they were written for.
+- **One combination per execution.** Compare executions with `gen-gateway-compare.py`.
+- **The run record keeps each deploy request without `llm_api_base`.** It feeds the committed
+  reports, so the label stands in for the URL.
 
 **`BM_CACHE_GAP` defaults to `0`, and that default silently costs you two columns.** The gateway
 caches completions keyed on the request body for **~10 minutes** (measured by survival curve), and
@@ -1857,6 +1928,8 @@ byte-identical work, which a concurrent gateway load would spoil. Each exits `0`
 | Setting a workload cred via `/config` | `422` | provision it as a cluster Secret instead (§4.3) |
 | `plugin_preset`/`plugins`/`on_error` without `authbridge_enabled=true` | `422` | set `authbridge_enabled=true` so the sidecar is injected for the pipeline to take effect |
 | `plugin_config_file` on deploy | `422` | local-path input with no HTTP analog; use `plugin_preset`/`plugins`/`on_error` instead |
+| `llm_api_base` without `llm_gateway`, a malformed URL, Secret name or label, or an unknown deploy field | `422` | name the gateway; fix the value; check the field name (§6.1) |
+| Run while not Ready on another gateway | `424` | the message names the deployment's `llm_key_secret`: create that Secret (§6.8) |
 | Run before deploy | `409` | `POST …/deploy` first |
 | Run while not Ready | `424` | provision the named Secret(s), wait for Ready (§6.2) |
 | Report with MLflow unconfigured | `409` | set MLflow read creds via `PUT /config` (§4.5), then confirm with `GET /mlflow/health` (§5.1) |

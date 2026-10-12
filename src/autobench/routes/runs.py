@@ -152,15 +152,17 @@ def _definition(name: str):
     return defn
 
 
-def _secret_hint(defn, agent: str) -> str:
-    secrets = reg.required_secrets(defn, agent)
+def _secret_hint(defn, agent: str, key_secret: tuple[str, str] | None = None) -> str:
+    secrets = reg.required_secrets(defn, agent, key_secret)
     if not secrets:
         return ""
     listed = ", ".join(f"{name} (key {key})" for name, key in secrets)
     return f" This benchmark requires secret(s): {listed}."
 
 
-async def _workload_precheck(defn, req: RunRequest, client: RossoctlClient) -> None:
+async def _workload_precheck(
+    defn, req: RunRequest, client: RossoctlClient, key_secret: tuple[str, str] | None = None
+) -> None:
     """Cluster-API-free precheck of the workload's required data before job creation.
 
     The Service never invokes cluster-level APIs. Instead it verifies the declared
@@ -198,7 +200,7 @@ async def _workload_precheck(defn, req: RunRequest, client: RossoctlClient) -> N
             status_code=424,
             detail=(
                 f"cannot start run: {', '.join(not_ready)} not Ready in namespace "
-                f"'{req.namespace}'.{_secret_hint(defn, req.agent)} Ensure the required "
+                f"'{req.namespace}'.{_secret_hint(defn, req.agent, key_secret)} Ensure the required "
                 f"secrets exist and the workloads are Ready (GET /benchmarks/{defn.name}/status)."
             ),
         )
@@ -222,10 +224,15 @@ async def start_run(
         raise HTTPException(status_code=502, detail=f"upstream login failed: {exc}") from exc
 
     rossoctl_client = RossoctlClient(ctx.instance.rossoctl_base_url, token, request.app.state.http)
-    await _workload_precheck(defn, req, rossoctl_client)
+    deployed = request.app.state.deployments.get(
+        (ctx.instance.iss, req.namespace, name, req.agent, req.experiment)
+    )
+    key_secret = tuple(deployed.key_secret.split(":", 1)) if deployed else None
+    await _workload_precheck(defn, req, rossoctl_client, key_secret)
 
     runs = request.app.state.runs
     run = runs.create(benchmark=name, req=req, iss=ctx.instance.iss)
+    run.llm = deployed
     mcp_url = reg.mcp_url(defn, req.namespace, ctx.instance.mcp_endpoint_template)
     agent_url = reg.agent_url(
         defn, req.agent, req.namespace, req.experiment, ctx.instance.agent_endpoint_template
@@ -269,6 +276,7 @@ async def _maybe_export_run(request: Request, ctx: RequestContext, run: RunState
         records=records,
         run_summary=run.model_dump(mode="json", exclude={"artifacts", "artifacts_prefix"}),
         span_dicts=span_dicts,
+        llm_gateway=run.llm.gateway if run.llm else None,
     )
     run.artifacts = artifacts
     run.artifacts_prefix = s3_export.run_prefix(

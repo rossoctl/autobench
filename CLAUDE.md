@@ -19,7 +19,7 @@ non-obvious when *changing* it.
 ## Commands
 
 ```sh
-uv run pytest -q                      # 403 tests, ~60 s, no cluster required
+uv run pytest -q                      # 428 tests, ~62 s, no cluster required
 uv run autobench-service              # local service on :8000
 python3 reference/gen_toc.py <file>   # regenerate a doc's <!-- toc --> block after editing headings
 ```
@@ -53,7 +53,8 @@ Confirming a registry change against the list endpoint alone can pass while the 
 still the old value.
 
 **`InstanceConfig` takes Pydantic's default `extra="ignore"`** — unlike `DeployBenchmarkRequest`
-next to it, which sets `extra="forbid"` deliberately. So an older image accepts a new instance field
+next to it, which sets `extra="forbid"` deliberately (from v1.36; before that it ignored extras too,
+which is why the CLI checks the deploy's `llm` echo rather than trusting a `201`). So an older image accepts a new instance field
 and drops it *silently*. Adding one is never self-verifying: read the value back and confirm it took
 effect.
 

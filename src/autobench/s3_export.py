@@ -90,6 +90,7 @@ _TOKEN_KEYS = (
     "benchmark_name",
     "agent_name",
     "model",
+    "llm_gateway",
     "num_parallel",
     "experiment_name",
     "status",
@@ -232,8 +233,13 @@ async def export_run(
     records: list,
     run_summary: dict,
     span_dicts: list[dict] | None = None,
+    llm_gateway: str | None = None,
 ) -> list[RunArtifact]:
     """Upload a run's NDJSON/Parquet/summary to S3; return the object references.
+
+    `llm_gateway` is the deployment's gateway LABEL, stamped on every report and token row so a
+    cost comparison can group by (gateway, model). It is the label, never the URL: the bucket is
+    public. None (no deploy record) is written as null rather than guessed.
 
     Runs entirely on a worker thread (boto3 + pyarrow are synchronous). `records` are
     `MLflowTraceRecord`s (or anything with `.model_dump()`); they're flattened to dicts here.
@@ -241,7 +247,7 @@ async def export_run(
     span artifacts are simply omitted.
     """
     prefix = run_prefix(cfg, preferred_username, source_iss, benchmark, run_id)
-    record_dicts = [r.model_dump(mode="json") for r in records]
+    record_dicts = [{**r.model_dump(mode="json"), "llm_gateway": llm_gateway} for r in records]
     # Everything below this line is published to an anonymously-readable bucket, so the two
     # free-text fields that carry upstream error strings are classified here -- the one chokepoint
     # both record projections (ndjson, parquet, token rows) and run.json pass through. Scrubbing the

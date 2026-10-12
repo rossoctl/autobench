@@ -436,7 +436,8 @@ def sec3():
         o.append(f"- **Benchmark:** `{r['bench']}`")
         models = sorted({x.get("model") for x in rows(r, "report.ndjson") if x.get("model")})
         o.append(f"- **Model in use:** {', '.join(f'`{m}`' for m in models) or '_(no trace)_'}")
-        dep = r.get("deploy_request")
+        # Never the gateway URL: this report is committed to a public repo (llm_gateway names it).
+        dep = {k: v for k, v in (r.get("deploy_request") or {}).items() if k != "llm_api_base"}
         o.append(f"- **Deploy:** {'`'+json.dumps(dep)+'`' if dep else '_(reuses the previous deploy)_'}")
         o.append(f"- **Run request** → `POST /benchmarks/{r['bench']}/runs`:")
         o.append("```json")

@@ -152,9 +152,28 @@ def do_deploy(c: Client, a) -> dict:
     if a.on_error:
         body["authbridge_enabled"] = True
         body["on_error"] = a.on_error
+    for flag, field in (("llm_api_base", "llm_api_base"), ("llm_key_secret", "llm_key_secret"),
+                        ("llm_gateway", "llm_gateway")):
+        if getattr(a, flag):
+            body[field] = getattr(a, flag)
     log(f"POST /benchmarks/{a.benchmark}/deploy {json.dumps(body)}")
     out = c.json_api(f"/benchmarks/{a.benchmark}/deploy", body, "POST", timeout=900)
-    log("deployed")
+    llm = out.get("llm")
+    # A Service that predates per-deploy gateways answers 201 and deploys on its own gateway, so
+    # trust the echo, not the status: a comparison leg on the wrong gateway would look right.
+    asked = {k: body[k] for k in ("llm_api_base", "llm_key_secret", "llm_gateway") if k in body}
+    if asked and not llm:
+        die("the Service did not echo the deployment's llm settings — it predates per-deploy "
+            "gateways (needs v1.36+), so --llm-* was IGNORED. Tear down; upgrade the Service.", code=3)
+    if llm:
+        if a.llm_gateway and llm.get("gateway") != a.llm_gateway:
+            die(f"deployed on gateway {llm.get('gateway')!r}, not {a.llm_gateway!r}", code=3)
+        if a.model and llm.get("model") != a.model:
+            die(f"deployed with model {llm.get('model')!r}, not {a.model!r}", code=3)
+        log(f"deployed — gateway {llm.get('gateway')}, model {llm.get('model')}, "
+            f"key Secret {llm.get('key_secret')}")
+    else:
+        log("deployed")
     return out
 
 
@@ -336,6 +355,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=int, default=300, help="run timeout_seconds")
     p.add_argument("--task-timeout", type=int, default=None, help="task_timeout_seconds")
     p.add_argument("--model", default=None, help="deploy-time model override")
+    p.add_argument("--llm-api-base", default=None,
+                   help="deploy-time LLM gateway base URL (requires --llm-gateway)")
+    p.add_argument("--llm-key-secret", default=None,
+                   help="Secret NAME[:KEY] in --namespace holding that gateway's API key "
+                        "(default openai-secret:apikey)")
+    p.add_argument("--llm-gateway", default=None,
+                   help="label published for this gateway in the artifacts (never the URL)")
     p.add_argument("--preset", default=None, help="AuthBridge plugin_preset")
     p.add_argument("--plugin", action="append", default=None, help="NAME:POLICY (repeatable)")
     p.add_argument("--on-error", default=None, help="chain-default policy")
@@ -397,6 +423,13 @@ def read_password() -> str:
 
 def main(argv=None) -> int:
     a = build_parser().parse_args(argv)
+    llm_flags = [f for f in ("model", "llm_api_base", "llm_key_secret", "llm_gateway") if getattr(a, f)]
+    if llm_flags and (a.command not in ("all", "deploy") or (a.command == "all" and a.no_deploy)):
+        # They bind at deploy time; on a reused deployment they would be silently inert.
+        die(f"--{llm_flags[0].replace('_', '-')} applies at deploy time — use `deploy` or `all` "
+            "without --no-deploy")
+    if a.llm_api_base and not a.llm_gateway:
+        die("--llm-api-base needs --llm-gateway <label>: the artifacts publish the label, never the URL")
     if not a.base or not a.iss:
         die("set BM_BASE and BM_ISS (or pass --base/--iss)")
     c = Client(a.base, a.iss, a.user, a.client, read_password(), a.insecure)
