@@ -35,10 +35,11 @@ that matter when changing the code rather than using it.
 
 ## Results
 
-[docs/results/](docs/results/README.md) publishes the reports for **landmark runs** — the v1.35
+[docs/results/](docs/results/README.md) publishes the reports for **landmark runs** — the v1.36
 baseline, a 12-run pair on two single-cluster installs (OpenShift and KinD), and the designed
-AuthBridge plugin-overhead study run on the same image. All of them are generated from S3 artifacts,
-never hand-edited. Earlier versions are archived under [docs/archive/](docs/archive/2026-10-04/README.md).
+AuthBridge plugin-overhead study, run on v1.35. All of them are generated from S3 artifacts, never
+hand-edited. Earlier versions are archived under [docs/archive/](docs/archive/), most recently
+[2026-10-12](docs/archive/2026-10-12/README.md).
 
 For the plugin question specifically, read [docs/PLUGIN_OVERHEAD.md](docs/PLUGIN_OVERHEAD.md) first:
 it explains the sidecar/preset/judge vocabulary and carries the conclusions, the headline being that

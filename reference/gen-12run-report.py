@@ -472,6 +472,13 @@ def sec4():
     gone = [(r["n"], failed_tasks(r)[1], (r.get("summary") or {}).get("total")) for r in runs]
     gone = [(n, c, t) for n, c, t in gone if c]
     o.append("")
+    # A leg replaced by a re-run (merged into the run JSON under `superseded`) is part of the record:
+    # the table shows the replacement, so name the original and why it was not kept.
+    for sup in data.get("superseded") or []:
+        o.append(f"**Leg #{sup['n']} was re-run.** The table shows `{sup.get('replaced_by')}`; the "
+                 f"original `{sup['run_id']}` ({sup.get('status')}) is not used"
+                 + (f" — {sup['reason']}" if sup.get("reason") else "") + ".")
+        o.append("")
     if gone:
         o.append(f"**Tasks with no `report.ndjson` row: "
                  + ", ".join(f"#{n} ({c} of {t})" for n, c, t in gone)

@@ -12,8 +12,9 @@ Generated, never hand-edited: an edit made in PowerPoint is lost at the next bui
 the PDF come from the same run, so they cannot describe different decks.
 
 Sources, in the order they win when two disagree:
-  1. docs/results/v1.35-2026-10-04/  -- the generated 12-run and plugin-study reports. Every
-     measured figure on a results slide is copied from there, with a comment naming the report.
+  1. docs/results/v1.36-2026-10-12/ (12-run) and docs/results/v1.35-2026-10-04/ (plugin study)
+     -- the generated reports. Every measured figure on a results slide is copied from there,
+     with a comment naming the report.
   2. docs/img/takeaways.json         -- written by reference/gen-cost-charts.py from the same
      artifacts. The cost charts are drawn NATIVELY from its `data` blocks (never its PNGs), and
      their titles and take-aways are its sentences, so a slide cannot disagree with the figure.
@@ -22,7 +23,7 @@ Sources, in the order they win when two disagree:
      docs/BENCHMARKS_PRIMER.md, docs/PLUGIN_OVERHEAD.md -- the design and the prose findings.
 Figures are literals rather than read from artifacts at build time, because the deck must build
 on a machine that has never seen a run. That makes them go stale silently: when a new matrix
-supersedes v1.35, grep this file for the bare numbers, not just the version string.
+supersedes v1.36, grep this file for the bare numbers, not just the version string.
 
 The visual language (deck_kit.py's palette, used identically on every diagram):
   brain()        teal, filled    -- the A2A agent: the thing under test, doing the thinking
@@ -511,7 +512,7 @@ def s_bakes(d):
 
 
 def s_one_task(d):
-    # Latencies are medians over the v1.35 mirrors; mirrors DEVELOPER_GUIDE.md §1.
+    # Latencies are medians over the v1.36 mirrors; mirrors DEVELOPER_GUIDE.md §1.
     s = d.slide("One task, end to end: everything the agent does is one A2A turn",
                 "The same system in time, with the span each step appears as")
     table(s, 0.45, 1.45, 12.43, [
@@ -531,8 +532,8 @@ def s_one_task(d):
         ["Service", "`delete_session` → MCP pod, in a `finally`", "no span"],
     ], [1.1, 8.0, 3.3], size=11, row_h=0.36, right_from=99)
     card(s, 0.45, 5.25, 4.0, 1.3, "One A2A turn per task",
-         ["`Agent.Call` minus the agent's `POST /` span is the Service's own cost: a median 16.3 "
-          "ms of a 2.5 s gsm8k task, 15.9 ms of a 40 s tau2 one."], size=12)
+         ["`Agent.Call` minus the agent's `POST /` span is the Service's own cost: a median 16.0 "
+          "ms of a 5.7 s gsm8k task, 19.4 ms of a 104 s tau2 one."], size=12)
     card(s, 4.67, 5.25, 4.0, 1.3, "The Service issues no tool call",
          ["Its MCP traffic is the session lifecycle. `execute_tool` is the agent's call; the "
           "Service never learns a tool's name."], size=12)
@@ -542,7 +543,7 @@ def s_one_task(d):
 
 
 def s_who_decides(d):
-    # Counts over every mirrored span_report.ndjson of the v1.35 pair, both platforms.
+    # Counts over every mirrored span_report.ndjson of the v1.36 pair, both platforms.
     s = d.slide("Nobody scripts a task's trajectory: the model produces it, step by step",
                 "What each component defines, and what it does not")
     table(s, 0.45, 1.45, 12.43, [
@@ -556,12 +557,12 @@ def s_who_decides(d):
         ["the model", "every step", "—"],
     ], [2.0, 6.6, 3.8], size=12, row_h=0.52, right_from=99, bold_first_col=True)
     card(s, 0.45, 4.25, 6.1, 1.4, "Selection is deterministic; execution is not",
-         ["Same task, model and platform, two legs: tau2 task 7 took 12 chat / 12 tool in one "
-          "and 10 / 10 in the other. 14 of 20 repeated tau2 tasks and 10 of 10 appworld differ; "
+         ["Same task, model and platform, two legs: tau2 task 9 took 12 chat / 12 tool in one "
+          "and 11 / 11 in the other. 12 of 20 repeated tau2 tasks and 8 of 8 appworld differ; "
           "all 20 gsm8k agree."], size=12)
     card(s, 6.78, 4.25, 6.1, 1.4, "The stop signal comes from the MCP pod",
          ["No terminal tool name exists in the Service. gsm8k calls `submit` 172/172; appworld "
-          "`finish` 41/49; tau2 has no terminal tool, and 60/60 end on a message."], size=12)
+          "`finish` 41/47; tau2 has no terminal tool, and 60/60 end on a message."], size=12)
     card(s, 0.45, 5.9, 12.43, 0.8, "Why it matters downstream",
          ["Grading reads the final state, never a reference trajectory: per-task cost and "
           "latency are distributions, hence the CV columns in every report."], size=12)
@@ -569,9 +570,9 @@ def s_who_decides(d):
 
 # ===================================================================== 4. the three benchmarks
 def s_ladder(d):
-    # v1.35 pair, both platforms pooled: 281 task rows, none with lost telemetry.
+    # v1.36 pair, both platforms pooled: 279 task rows, none with lost telemetry.
     s = d.slide("Three rungs of a ladder, each ~an order of magnitude dearer",
-                "Per task, measured on our own v1.35 runs, both platforms pooled; not the "
+                "Per task, measured on our own v1.36 runs, both platforms pooled; not the "
                 "benchmarks' published papers")
     table(s, 0.45, 1.45, 12.43, [
         ["", "gsm8k", "tau2", "appworld"],
@@ -579,18 +580,18 @@ def s_ladder(d):
         ["its rate, in / out $ per 1M", "0.25 / 2.00", "1.52 / 7.60", "1.25 / 10.00"],
         ["what it tests", "multi-step arithmetic", "multi-turn dialogue + tools",
          "long-horizon app automation"],
-        ["task rows measured", "172 of 172", "60 of 60", "49 of 50 (1 timed out)"],
-        ["pass rate", "0.98", "0.90", "0.00"],
-        ["input / output tokens", "343 / 170", "87,935 / 2,071", "291,509 / 26,950"],
-        ["cost, at those rates", "$0.00053", "$0.149", "$0.634"],
-        ["LLM / tool calls", "1.1 / 1.1", "11.1 / 11.1", "30.2 / 14.9"],
-        ["median / slowest task", "2.5 s / 15 s", "48 s / 75 s", "222 s / 591 s"],
+        ["task rows measured", "172 of 172", "60 of 60", "47 of 50 (3 timed out)"],
+        ["pass rate", "0.98", "0.83", "0.00"],
+        ["input / output tokens", "342 / 177", "89,122 / 2,078", "268,880 / 26,382"],
+        ["cost, at those rates", "$0.00054", "$0.151", "$0.600"],
+        ["LLM / tool calls", "1.1 / 1.1", "11.2 / 11.2", "28.0 / 13.9"],
+        ["median / slowest task*", "5.7 s / 19 s", "121 s / 214 s", "298 s / 581 s"],
         ["task pool", "1,319 (main/test)", "114 (retail)", "168 (test_normal)"],
     ], [2.9, 3.17, 3.17, 3.17], size=12, row_h=0.36, right_from=99, bold_first_col=True)
     warn(s, 0.45, 5.6, 12.43, 1.25, "Read the model row before any dollar figure", [
         "The rungs do not run the same model, so no cost here transfers to another one. A tau2 "
-        "task is ~256× a gsm8k task's input tokens and 282× its dollars; appworld ~850× and "
-        "1,195×. Budget by benchmark, not by task count."], size=12)
+        "task is ~260× a gsm8k task's input tokens and 279× its dollars; appworld ~790× and "
+        "1,108×. *Latency on a slow gateway day: 2–3× v1.35's per call."], size=12)
 
 
 def s_stresses(d):
@@ -608,14 +609,14 @@ def s_stresses(d):
             "A server-side user-simulator LLM plays the customer; ~11 tool calls",
             "Retail domain (114 tasks), the library default, recorded nowhere",
             "Model choice dominates: 0.1 on gpt-5-mini, 0.9 on claude-sonnet-5, same 10 tasks",
-            "Nondeterministic: the same 10 tasks scored 0.90 and 1.00 on two clusters",
-            "22% of wall time is the simulator, whose tokens no report of ours sees",
+            "Nondeterministic: the same 10 tasks scored 0.70 and 0.90 on two clusters",
+            "23% of wall time is the simulator, whose tokens no report of ours sees",
         ]),
         ("appworld: the stress test", [
-            "Chores across simulated apps: ~30 LLM calls, ~15 tool calls, ~290 K input",
+            "Chores across simulated apps: ~28 LLM calls, ~14 tool calls, ~270 K input",
             "Graded by programmatic tests over the final app state, no LLM judge",
             "0.00 is honest: runs complete and tokens record; the job is not done",
-            "41 of 49 tasks call `finish`; the assertions disagree",
+            "41 of 47 tasks call `finish`; the assertions disagree",
             "Tool shortlisting: two model calls per tool call, 67% of the input",
         ]),
     ]):
@@ -636,7 +637,7 @@ def s_compared(d):
          "one retail customer-service conversation with a simulated user",
          "one multi-app scenario automated through an API surface"],
         ["turns", "1 model call, ~1 tool call", "~11 calls alternating with the simulator",
-         "~30 calls, each re-sending the whole conversation"],
+         "~28 calls, each re-sending the whole conversation"],
         ["ends when", "the answer is emitted", "the dialogue resolves, or policy is violated",
          "the goal state is reached, or the 600 s timeout kills it"],
         ["scored by", "exact numeric match", "completion and policy compliance",
@@ -658,11 +659,11 @@ def s_traps(d):
          "A task that errors before evaluation counts as not passed: check the error column."),
         ("2  The `llm` column changed meaning between agent versions",
          "Agents up to exgentic 0.3.5.dev131 sent a counted probe; the current one sends none "
-         "(absent across all 2,338 chat spans). Never compare across it."),
+         "(absent across all 2,179 chat spans). Never compare across it."),
         ("3  Tiny tokens are lost telemetry, and `tokens == 0` will not catch it",
          "Use the structural test: `llm` ≤ 1 with `tool` ≥ 2 is impossible."),
         ("4  Output varies more than input, in most runs",
-         "OUT CV > IN CV in 16 of 22 multi-task legs; only appworld is input-led. Read the CV."),
+         "OUT CV > IN CV in 17 of 22 multi-task legs; only appworld is input-led. Read the CV."),
         ("5  Task selection is deterministic",
          "The first `max_tasks` tasks: the same `task_id` is the same task on every cluster."),
     ]):
@@ -671,39 +672,39 @@ def s_traps(d):
 
 def s_picking(d):
     s = d.slide("Pick a benchmark by what it is for",
-                "Dollars at the rate card on the cost slides; v1.35 measured costs")
+                "Dollars at the rate card on the cost slides; v1.36 measured costs")
     table(s, 0.45, 1.45, 12.43, [
         ["if you want to …", "use", "costs"],
         ["check a cluster, deploy, auth or telemetry path works", "gsm8k, 1–10 tasks", "< $0.01"],
         ["exercise concurrency and volume cheaply", "gsm8k, 50 tasks at p=4", "$0.02"],
-        ["compare models meaningfully", "tau2: it discriminates, gsm8k saturates", "$1.60 / 10"],
-        ["stress long contexts, long tasks, timeouts", "appworld", "$3.10–3.40 / 5"],
+        ["compare models meaningfully", "tau2: it discriminates, gsm8k saturates", "$1.62 / 10"],
+        ["stress long contexts, long tasks, timeouts", "appworld", "$2.10–2.25 / 5"],
         ["get a fast signal that nothing regressed", "gsm8k: if it fails, fix infrastructure",
          "< $0.01"],
     ], [5.5, 4.6, 2.3], size=13, row_h=0.5, right_from=2)
     card(s, 0.45, 4.7, 12.43, 1.3, "Budget by benchmark, not by task count",
-         ["The eight gsm8k legs together are 0.2% of the matrix's bill on both platforms; "
-          "appworld's two legs are 78% of it on OpenShift (77% on KinD). A 50-task gsm8k leg "
-          "costs 2 cents, about a thirtieth of a single appworld task."], size=13)
+         ["The eight gsm8k legs together are 0.2–0.3% of the matrix's bill; appworld's two legs "
+          "are 75% of it on both platforms. A 50-task gsm8k leg costs 2 cents, about a "
+          "thirtieth of a single appworld task."], size=13)
 
 
 def s_leg_cost(d):
-    # Summed over the mirrored report.ndjson rows of the v1.35 pair.
+    # Summed over the mirrored report.ndjson rows of the v1.36 pair.
     s = d.slide("What each leg costs: the same work, close to the same bill",
-                "Tokens and dollars per leg, v1.35, OpenShift (OCP) and KinD")
+                "Tokens and dollars per leg, v1.36, OpenShift (OCP) and KinD")
     table(s, 0.45, 1.45, 7.0, [
         ["leg", "tok OCP", "$ OCP", "tok KinD", "$ KinD"],
-        ["#1 gsm8k, 1 task", "406", "$0.0003", "406", "$0.0003"],
-        ["#2 gsm8k, 10 tasks", "5.1 K", "$0.005", "5.1 K", "$0.005"],
+        ["#1 gsm8k, 1 task", "406", "$0.0003", "470", "$0.0004"],
+        ["#2 gsm8k, 10 tasks", "5.2 K", "$0.005", "4.8 K", "$0.004"],
         ["#3 gsm8k, 50 tasks p=4", "24 K", "$0.020", "25 K", "$0.022"],
-        ["#9 tau2, 10 tasks", "0.96 M", "$1.59", "0.94 M", "$1.56"],
-        ["#10 tau2, 20 tasks p=4", "1.74 M", "$2.88", "1.77 M", "$2.93"],
-        ["#11 appworld, 5 tasks", "1.55 M", "$3.10", "1.71 M", "$3.39"],
-        ["#12 appworld, 20 tasks p=4", "6.47 M", "$12.63", "5.87 M", "$11.94"],
-        ["**all 12 legs**", "**10.8 M**", "**$20.25**", "**10.3 M**", "**$19.87**"],
+        ["#9 tau2, 10 tasks", "0.97 M", "$1.62", "0.99 M", "$1.64"],
+        ["#10 tau2, 20 tasks p=4", "1.76 M", "$2.92", "1.75 M", "$2.89"],
+        ["#11 appworld, 5 tasks", "1.10 M", "$2.24", "1.01 M", "$2.11"],
+        ["#12 appworld, 20 tasks p=4", "5.86 M", "$11.83", "5.91 M", "$12.02"],
+        ["**all 12 legs**", "**9.7 M**", "**$18.67**", "**9.7 M**", "**$18.70**"],
     ], [2.6, 1.1, 1.1, 1.1, 1.1], size=12, row_h=0.42)
-    card(s, 7.7, 1.45, 5.18, 1.45, "Within 2%, but not by law",
-         ["The totals land within 2% ($20.25 / $19.87): the same request bodies through one "
+    card(s, 7.7, 1.45, 5.18, 1.45, "Within 0.2%, but not by law",
+         ["The totals land within 0.2% ($18.67 / $18.70): the same request bodies through one "
           "gateway. appworld turn counts are nondeterministic, so size it on your cluster."],
          size=12)
     warn(s, 7.7, 3.1, 5.18, 2.15, "The totals understate it", [
@@ -716,28 +717,28 @@ def s_leg_cost(d):
 
 # ================================================================================== 5. cost
 def s_cost_model(d):
-    # Every dollar figure: reference/gen-cost-analysis.py over the v1.35 pair × model_prices.json.
+    # Every dollar figure: reference/gen-cost-analysis.py over the v1.36 pair × model_prices.json.
     s = d.slide("Money amplifies the difficulty ladder rather than tracking it",
                 "Per task, pooled over both platforms, at our gateway's posted rates")
     table(s, 0.45, 1.45, 6.6, [
         ["per task", "gsm8k", "tau2", "appworld"],
         ["model", "gpt-5-mini", "claude-sonnet-5", "gemini-2.5-pro"],
-        ["LLM calls", "1.11", "11.10", "30.22"],
-        ["total tokens", "513", "90,006", "318,459"],
-        ["× gsm8k, in tokens", "1×", "175×", "621×"],
-        ["cost", "$0.00053", "$0.149", "$0.634"],
-        ["× gsm8k, in dollars", "1×", "282×", "1,195×"],
-        ["cost of 100 tasks", "$0.05", "$14.94", "$63.39"],
-        ["input share of tokens", "67%", "98%", "92%"],
-        ["input share of cost", "32%", "89%", "57%"],
-        ["time inside model calls", "82%", "60%", "95%"],
+        ["LLM calls", "1.11", "11.18", "28.02"],
+        ["total tokens", "519", "91,201", "295,261"],
+        ["× gsm8k, in tokens", "1×", "176×", "569×"],
+        ["cost", "$0.00054", "$0.151", "$0.600"],
+        ["× gsm8k, in dollars", "1×", "279×", "1,108×"],
+        ["cost of 100 tasks", "$0.05", "$15.13", "$59.99"],
+        ["input share of tokens", "66%", "98%", "91%"],
+        ["input share of cost", "31%", "90%", "56%"],
+        ["time inside model calls", "77%", "64%", "95%"],
     ], [2.4, 1.4, 1.5, 1.5], size=12, row_h=0.4, bold_first_col=True)
     card(s, 7.3, 1.45, 5.58, 1.3, "The formula",
          ["cost per task = (input tokens × P_in + output tokens × P_out) / 1 M. Which model is "
           "cheaper is a property of the price list, not of the models."], size=13)
     card(s, 7.3, 2.95, 5.58, 1.6, "Why money climbs faster",
-         ["The harder benchmarks also run the dearer models: tau2 is 175× a gsm8k task in tokens "
-          "but 282× in dollars, appworld 621× but 1,195×. A budget scaled off the token ratios "
+         ["The harder benchmarks also run the dearer models: tau2 is 176× a gsm8k task in tokens "
+          "but 279× in dollars, appworld 569× but 1,108×. A budget scaled off the token ratios "
           "is short by 1.6–1.9×."], size=13)
 
 
@@ -764,15 +765,15 @@ def s_dollars_wrong(d):
     warn(s, 0.45, 1.45, 6.1, 3.0, "Too low: the IBAC judge is not in our telemetry", [
         "~1 completion per authorized tool call, on Azure/gpt-4.1, the dearest model on the card",
         "a fixed 1,577-character system prompt that does not shrink with the task",
-        "≥ $0.00111 per call: 2.6× the whole gsm8k task it authorizes",
-        "1.7–3.4× the agent's own bill on legs #6–#8",
+        "≥ $0.00111 per call: 2.5× the whole gsm8k task it authorizes",
+        "1.2–2.9× the agent's own bill on legs #6–#8",
         "tau2's user simulator is invisible the same way",
     ], size=13, bullets=True)
     warn(s, 6.78, 1.45, 6.1, 3.0, "Too high: an unmodelled cache discount", [
         "the gateway reports cached input but publishes no cached-input rate",
         "`report.ndjson` stores one undifferentiated input count: no past run can be re-priced",
-        "if cached input were free: tau2 floors at $0.0157 a task (not $0.149), appworld at "
-        "$0.270 (not $0.634)",
+        "if cached input were free: tau2 floors at $0.0158 a task (not $0.151), appworld at "
+        "$0.264 (not $0.600)",
         "gsm8k barely moves: caching pays off on a long re-sent prefix",
     ], size=13, bullets=True)
 
@@ -801,7 +802,7 @@ def _takeaway(s, f, y=6.2):
 
 def s_fig_ladder(d):
     s, f = _fig(d, "ladder-amplification",
-                f"Multiple of {f_base()} per task; v1.35, both platforms pooled")
+                f"Multiple of {f_base()} per task; v1.36, both platforms pooled")
     dd = f["data"]
     bar_chart(s, 0.45, 1.4, 12.43, 4.7, dd["categories"], dd["series"],
               [TOKENS, TIME, DOLLARS], number_format='#,##0"×"', size=12)
@@ -845,7 +846,7 @@ def s_fig_model(d):
 
 def s_fig_pareto(d):
     dd = FIGS["leg-pareto"]["data"]
-    s, f = _fig(d, "leg-pareto", f"Dollars per leg, {dd['platform']} v1.35: ${dd['total']:.2f} "
+    s, f = _fig(d, "leg-pareto", f"Dollars per leg, {dd['platform']} v1.36: ${dd['total']:.2f} "
                                  f"for all twelve, the top two {dd['top2_pct']:.0f}% of it")
     gf = bar_chart(s, 0.45, 1.4, 12.43, 4.75, dd["categories"], dd["series"], [DOLLARS],
                    number_format='[>=0.01]"$"#,##0.00;"under $0.01"', size=11, gap_width=40)
@@ -884,8 +885,9 @@ def s_fig_judge(d):
 def s_matrix(d):
     s = d.slide("The canonical 12-run matrix: one fixed set of request bodies",
                 "The same 12 legs on every platform, every version",
-                notes="Driven by reference/run-12.py: about an hour of run time per platform, "
-                      "plus the deploys and ~40 min of gateway-cache gaps (BM_CACHE_GAP=900).")
+                notes="Driven by reference/run-12.py: about two hours of run time per platform on "
+                      "v1.36's slow gateway day, plus the deploys and 14-28 min of gateway-cache "
+                      "gaps (BM_CACHE_GAP=900).")
     table(s, 0.45, 1.45, 7.6, [
         ["#", "benchmark", "tasks", "parallel", "what it varies"],
         ["1", "gsm8k", "1", "1", "baseline: the smoke test"],
@@ -918,61 +920,61 @@ def s_bands(d):
         ["legs", "what they vary", "what running them established"],
         ["#1–#3", "gsm8k 1 → 10 → 50 tasks, p=1 → 4", "the pipeline is stable and deterministic: "
          "7 of 12 legs have byte-identical input tokens across two unlike clusters"],
-        ["#4", "gsm8k on Azure/gpt-4.1, identical tasks", "the one clean model comparison: 4.6× "
+        ["#4", "gsm8k on Azure/gpt-4.1, identical tasks", "the one clean model comparison: 4.0× "
          "the cost of gpt-5-mini for no pass-rate gain"],
         ["#5–#8", "AuthBridge presets, the same 5 tasks", "the cost lands in the IBAC judge: "
          "+1.36 s/task on OpenShift, +1.48 s on KinD"],
         ["#9–#10", "tau2 10 → 20 tasks, p=1 → 4", "multi-turn works end to end; pass rates carry "
-         "information (0.85–1.00)"],
-        ["#11–#12", "appworld 5 → 20 tasks, p=1 → 4", "the limits are upstream: 0.00, the only "
-         "timeout, ~77% of the bill in two legs"],
+         "information (0.70–0.90)"],
+        ["#11–#12", "appworld 5 → 20 tasks, p=1 → 4", "the limits are upstream: 0.00, all three "
+         "timeouts, ~75% of the bill in two legs"],
     ], [1.2, 4.3, 6.9], size=12, row_h=0.56, right_from=99, bold_first_col=True)
     card(s, 0.45, 5.05, 6.1, 1.3, "What the matrix as a whole is worth",
-         ["That the same 12 request bodies measure comparably on two unlike clusters: 0 of 281 "
-          "rows lost their usage, nothing lost to infrastructure, 8 of 12 pass rates identical."],
+         ["That the same 12 request bodies measure comparably on two unlike clusters: 0 of 279 "
+          "rows lost their usage, nothing lost to infrastructure, 9 of 12 pass rates identical."],
          size=12)
     warn(s, 6.78, 5.05, 6.1, 1.3, "Read the per-cause table, then the rate",
-         ["A socket loss and a wrong answer share a denominator. OCP/KinD: timeout 0/1, agent "
-          "defect 4/4, wrong answer 1/1. Latency travels only approximately (up to 1.7×)."],
+         ["A socket loss and a wrong answer share a denominator. OCP/KinD: timeout 1/2, agent "
+          "defect 3/2, wrong answer 1/0. Latency travels only approximately (up to 1.8×)."],
          size=12)
 
 
 def s_measured(d):
-    # docs/results/v1.35-2026-10-04/12run-ocp.md
+    # docs/results/v1.36-2026-10-12/12run-ocp.md
     s = d.slide("What the 12 runs measured on OpenShift",
-                "v1.35 on OpenShift (ykt3): 141 tasks, all 12 legs succeeded")
+                "v1.36 on OpenShift (ykt3): 141 tasks, all 12 legs succeeded")
     table(s, 0.45, 1.45, 6.3, [
         ["#", "bench", "pass", "err", "wall", "input tokens"],
-        ["1", "gsm8k", "1.00", "0/1", "4 s", "320"],
-        ["2", "gsm8k", "1.00", "0/10", "29 s", "3,166"],
-        ["3", "gsm8k", "1.00", "0/50", "34 s", "15,684"],
-        ["4", "gsm8k", "0.80", "0/5", "9 s", "3,908"],
-        ["5", "gsm8k", "1.00", "0/5", "6 s", "1,564"],
-        ["6", "gsm8k", "1.00", "0/5", "6 s", "1,564"],
-        ["7", "gsm8k", "0.80", "1/5", "9 s", "1,564"],
-        ["8", "gsm8k", "1.00", "0/5", "7 s", "1,564"],
-        ["9", "tau2", "0.90", "0/10", "511 s", "936,612"],
-        ["10", "tau2", "0.90", "0/20", "282 s", "1,695,959"],
-        ["11", "appworld", "0.00", "1/5", "1,284 s", "1,420,531"],
-        ["12", "appworld", "0.00", "3/20", "1,402 s", "5,949,228"],
+        ["1", "gsm8k", "1.00", "0/1", "7 s", "320"],
+        ["2", "gsm8k", "1.00", "0/10", "64 s", "3,166"],
+        ["3", "gsm8k", "1.00", "0/50", "80 s", "15,684"],
+        ["4", "gsm8k", "0.80", "0/5", "21 s", "4,404"],
+        ["5", "gsm8k", "1.00", "0/5", "9 s", "1,564"],
+        ["6", "gsm8k", "1.00", "0/5", "16 s", "1,564"],
+        ["7", "gsm8k", "0.80", "1/5", "16 s", "1,564"],
+        ["8", "gsm8k", "1.00", "0/5", "14 s", "1,564"],
+        ["9", "tau2", "0.70", "0/10", "933 s", "950,408"],
+        ["10", "tau2", "0.90", "0/20", "765 s", "1,722,097"],
+        ["11", "appworld", "0.00", "1/5", "2,280 s", "998,804"],
+        ["12", "appworld", "0.00", "3/20", "1,513 s", "5,349,737"],
     ], [0.5, 1.3, 0.9, 0.9, 1.1, 1.6], size=12, row_h=0.4, right_from=2)
     for k, (t, body) in enumerate([
         ("gsm8k nearly saturates", "6 of 8 legs at 1.00; #4 and #7 lose one task each, both the "
                                    "model's own answers."),
-        ("tau2 is the leg that moves", "0.90 and 0.90 here, 1.00 and 0.85 on KinD: at n=10 one "
+        ("tau2 is the leg that moves", "0.70 and 0.90 here, 0.90 and 0.80 on KinD: at n=10 one "
                                        "task is worth 0.10."),
-        ("appworld 0.00 is the honest result", "Runs complete and tokens record; all 4 errors are "
-                                               "the agent's own defect."),
-        ("0 tasks lost to infrastructure", "v1.35 caps an agent LLM call at 120 s, so a stalled "
-                                           "call is cut and retried."),
-        ("10.0 M input, 728 K output tokens", "over 3,583 s of run time; appworld is 73% of the "
-                                              "input on 25 of 141 rows."),
+        ("appworld 0.00 is the honest result", "Runs complete and tokens record; of its 4 errors, "
+                                               "3 are the agent's own defect, 1 the 600 s budget."),
+        ("0 tasks lost to infrastructure", "An agent LLM call is capped at 120 s (since v1.35), "
+                                           "so a stalled call is cut and retried."),
+        ("9.1 M input, 693 K output tokens", "over 5,717 s of run time; appworld is 70% of the "
+                                             "input on 24 of 140 rows."),
     ]):
         card(s, 7.0, 1.45 + k * 1.08, 5.88, 0.98, t, [body], size=12, title_size=13)
 
 
 def s_xplat(d):
-    # docs/results/v1.35-2026-10-04/12run-comparison.md
+    # docs/results/v1.36-2026-10-12/12run-comparison.md
     s = d.slide("OpenShift and KinD, like for like: seven legs match to the byte",
                 "The same 12 request bodies, Service version and instance config")
     table(s, 0.45, 1.45, 7.4, [
@@ -980,26 +982,26 @@ def s_xplat(d):
         ["1", "gsm8k", "1.00", "1.00", "320", "320"],
         ["2", "gsm8k", "1.00", "1.00", "3,166", "3,166"],
         ["3", "gsm8k", "1.00", "1.00", "15,684", "15,684"],
-        ["4", "gsm8k", "0.80", "0.80", "3,908", "4,177"],
+        ["4", "gsm8k", "0.80", "0.80", "4,404", "3,536"],
         ["5", "gsm8k", "1.00", "1.00", "1,564", "1,564"],
-        ["6", "gsm8k", "1.00", "0.80", "1,564", "1,564"],
+        ["6", "gsm8k", "1.00", "1.00", "1,564", "1,564"],
         ["7", "gsm8k", "0.80", "1.00", "1,564", "1,564"],
         ["8", "gsm8k", "1.00", "1.00", "1,564", "1,564"],
-        ["9", "tau2", "0.90", "1.00", "936,612", "916,576"],
-        ["10", "tau2", "0.90", "0.85", "1,695,959", "1,726,957"],
-        ["11", "appworld", "0.00", "0.00", "1,420,531", "1,564,276"],
-        ["12", "appworld", "0.00", "0.00", "5,949,228", "5,349,900"],
+        ["9", "tau2", "0.70", "0.90", "950,408", "965,083"],
+        ["10", "tau2", "0.90", "0.80", "1,722,097", "1,709,751"],
+        ["11", "appworld", "0.00", "0.00", "998,804", "911,103"],
+        ["12", "appworld", "0.00", "0.00", "5,349,737", "5,377,703"],
     ], [0.5, 1.3, 1.1, 1.1, 1.7, 1.7], size=12, row_h=0.4, right_from=2)
     for k, (t, body) in enumerate([
-        ("8 of 12 pass rates identical", "Each delta is one task; wrong answers 1 to 1, agent "
-                                         "defects 4 to 4."),
+        ("9 of 12 pass rates identical", "Each delta is one task; wrong answers 1 to 0, agent "
+                                         "defects 3 to 2."),
         ("7 legs byte-identical on input", "320, 3,166, 15,684 and 1,564 ×4: identical work, the "
                                            "strongest like-for-like proof."),
-        ("#6 and #7 differ in pass, not work", "Same prompts, different answers: tokens prove the "
-                                               "work matched, not that it was right."),
-        ("Wall time within 6%", "3,583 s against 3,791 s; the long legs stay within 15%."),
-        ("0 lost rows, 0 probe failures", "141 rows against 140: a KinD appworld task timed out "
-                                          "before its row was written."),
+        ("#7 differs in pass, not work", "Same prompts, different answers: tokens prove the work "
+                                         "matched, not that it was right."),
+        ("Wall time within 11%", "5,717 s against 5,165 s; the long legs stay within 40%."),
+        ("0 lost rows, 0 probe failures", "140 rows against 139: KinD's appworld lost one more "
+                                          "task to the 600 s budget before its row was written."),
     ]):
         card(s, 8.1, 1.45 + k * 1.08, 4.78, 0.98, t, [body], size=12, title_size=13)
 
@@ -1067,7 +1069,7 @@ SECTIONS = [
     ("5", "Cost", "the model, the rate card, six efficiency charts",
      [s_cost_model, s_rate_card, s_dollars_wrong, s_fig_ladder, s_fig_composition, s_fig_model,
       s_fig_pareto, s_fig_per_pass, s_fig_judge]),
-    ("6", "Results (v1.35)", "the 12-run matrix, OpenShift vs KinD, plugins",
+    ("6", "Results (v1.36)", "the 12-run matrix, OpenShift vs KinD, plugins (v1.35)",
      [s_matrix, s_bands, s_measured, s_xplat, s_plugin_cost, s_plugin_trust]),
 ]
 
@@ -1125,7 +1127,7 @@ REFUSE = [
 
 def title(d):
     d.title_slide("Architecture & design overview",
-                  f"v1.35 · OpenShift and KinD · {date.today().isoformat()}")
+                  f"v1.36 · OpenShift and KinD · {date.today().isoformat()}")
 
 
 if __name__ == "__main__":

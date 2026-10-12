@@ -2,8 +2,8 @@
   "_generated_by": "reference/gen-cost-charts.py",
   "_rate_card_date": "2026-09-17",
   "_platforms": [
-    "ykt3-v135-20261004",
-    "kind-v135-20261004"
+    "ykt3-v136-20261012",
+    "kind-v136-20261012"
   ],
   "order": [
     "ladder-amplification",
@@ -16,9 +16,9 @@
   "figures": {
     "ladder-amplification": {
       "title": "Money climbs the ladder faster than tokens",
-      "takeaway": "Money climbs the difficulty ladder faster than tokens do: tau2 is 175\u00d7 a gsm8k task in tokens but 282\u00d7 in dollars, appworld is 621\u00d7 a gsm8k task in tokens but 1,195\u00d7 in dollars \u2014 so a budget scaled off the token ratios is short by 1.6\u20131.9\u00d7.",
-      "caption": "Each rung is a different model, which is why the dollar bar outruns the token bar: climbing the ladder also buys a dearer model. Wall-clock climbs SLOWEST of the three (19\u00d7 tau2, 87\u00d7 appworld), because the harder benchmarks parallelize their turns while their bills add up.",
-      "note": "gsm8k baseline: 513 tokens, $0.00053, 2.5 s median, over 172 task rows.",
+      "takeaway": "Money climbs the difficulty ladder faster than tokens do: tau2 is 176\u00d7 a gsm8k task in tokens but 279\u00d7 in dollars, appworld is 569\u00d7 a gsm8k task in tokens but 1,108\u00d7 in dollars \u2014 so a budget scaled off the token ratios is short by 1.6\u20131.9\u00d7.",
+      "caption": "Each rung is a different model, which is why the dollar bar outruns the token bar: climbing the ladder also buys a dearer model. Wall-clock climbs SLOWEST of the three (21\u00d7 tau2, 52\u00d7 appworld), because the harder benchmarks parallelize their turns while their bills add up.",
+      "note": "gsm8k baseline: 519 tokens, $0.00054, 5.7 s median, over 172 task rows.",
       "data": {
         "categories": [
           "tau2 (claude-sonnet-5)",
@@ -26,16 +26,16 @@
         ],
         "series": {
           "tokens": [
-            175,
-            621
+            176,
+            569
           ],
           "wall-clock": [
-            19,
-            87
+            21,
+            52
           ],
           "dollars": [
-            282,
-            1195
+            279,
+            1108
           ]
         },
         "base": "one gsm8k task on gpt-5-mini"
@@ -43,7 +43,7 @@
     },
     "cost-composition": {
       "title": "Read the share of the BILL, not the share of tokens",
-      "takeaway": "Output is priced 4\u20138\u00d7 input on every model we use, so the token split misstates the bill every time: gsm8k on gpt-5-mini is 64% input by tokens and only 18% by cost.",
+      "takeaway": "Output is priced 4\u20138\u00d7 input on every model we use, so the token split misstates the bill every time: gsm8k on gpt-5-mini is 63% input by tokens and only 18% by cost.",
       "caption": "The gap is the reason a model can win on token count and lose on the invoice. It also says where to look for savings: only tau2 is genuinely input-dominated in money, so it is the one benchmark where a cheaper-input model beats a terser one \u2014 everywhere else verbosity is the thing to control.",
       "note": "Both bars are per-task means over every priced row of that benchmark and model.",
       "data": {
@@ -55,24 +55,24 @@
         ],
         "series": {
           "of the tokens": [
-            92.8,
-            64.0,
+            93.1,
+            63.0,
             97.7,
-            91.5
+            91.1
           ],
           "of the bill": [
-            76.3,
-            18.1,
-            89.5,
-            57.5
+            77.0,
+            17.5,
+            89.6,
+            56.0
           ]
         }
       }
     },
     "model-choice": {
       "title": "Model choice is settled on the input side",
-      "takeaway": "gpt-4.1 costs 4.6\u00d7 gpt-5-mini on the identical 5 gsm8k tasks, and the input side decides it alone: 21\u00d7 the input bill, against an output bill the two models split within 24%.",
-      "caption": "Mean of gpt-4.1's 2 legs against gpt-5-mini's 8; leg to leg the ratio spans 3.3\u00d7\u20136.6\u00d7, because the reasoning model's output length swings with how much it reasons. Note the shape rather than the winner: gpt-5-mini answers in one call and emits MORE output, gpt-4.1 takes ~3 tool round-trips and sends far more input. Which one is cheaper is a property of the price list, not of the models.",
+      "takeaway": "gpt-4.1 costs 4.0\u00d7 gpt-5-mini on the identical 5 gsm8k tasks, and the input side decides it alone: 20\u00d7 the input bill, against an output bill the two models split within 9%.",
+      "caption": "Mean of gpt-4.1's 2 legs against gpt-5-mini's 8; leg to leg the ratio spans 2.1\u00d7\u20135.9\u00d7, because the reasoning model's output length swings with how much it reasons. Note the shape rather than the winner: gpt-5-mini answers in one call and emits MORE output, gpt-4.1 takes ~3 tool round-trips and sends far more input. Which one is cheaper is a property of the price list, not of the models.",
       "note": "The task set is identical and task selection is deterministic, so this is the one comparison in the matrix with no workload difference to explain away.",
       "data": {
         "categories": [
@@ -82,63 +82,63 @@
         "series": {
           "paid for input": [
             7.82e-05,
-            0.001617
+            0.001588
           ],
           "paid for output": [
-            0.0003836,
-            0.0005016
+            0.00043160000000000003,
+            0.0004736
           ]
         },
         "total": [
-          0.0004618,
-          0.0021186
+          0.0005098,
+          0.0020616
         ],
         "tokens": [
           [
             313,
-            192
+            216
           ],
           [
-            808,
-            63
+            794,
+            59
           ]
         ],
         "pass_rate": [
-          0.95,
+          0.975,
           0.8
         ],
-        "ratio": 4.587700303161542,
+        "ratio": 4.043938799529227,
         "tasks": 5,
         "bench": "gsm8k"
       }
     },
     "leg-pareto": {
       "title": "Two legs of twelve are most of the bill",
-      "takeaway": "Two of the twelve legs are 78% of a matrix's bill, while all 8 gsm8k legs together are 0.2% of it \u2014 so budget by benchmark, not by task count.",
+      "takeaway": "Two of the twelve legs are 79% of a matrix's bill, while all 8 gsm8k legs together are 0.3% of it \u2014 so budget by benchmark, not by task count.",
       "caption": "The bars are log-scaled because a linear axis renders every gsm8k leg as nothing at all, which is itself the finding: there are only two legs worth watching. It is also why the cheap legs are the ones to iterate on \u2014 a full gsm8k sweep costs less than a rounding error on one appworld leg.",
       "note": "OpenShift; the ordering reproduces on the other platform, the absolute appworld figures do not (nondeterministic turn counts).",
       "data": {
         "platform": "OpenShift",
-        "total": 20.24721037,
-        "top2_pct": 77.68022588091476,
+        "total": 18.66734875,
+        "top2_pct": 79.04783313163311,
         "categories": [
           "#12 appworld",
-          "#11 appworld",
           "#10 tau2",
+          "#11 appworld",
           "#9 tau2",
           "#3 gsm8k",
           "#4 gsm8k",
           "#2 gsm8k",
-          "#5 gsm8k",
-          "#7 gsm8k",
           "#8 gsm8k",
           "#6 gsm8k",
+          "#5 gsm8k",
+          "#7 gsm8k",
           "#1 gsm8k"
         ],
         "bench": [
           "appworld",
-          "appworld",
           "tau2",
+          "appworld",
           "tau2",
           "gsm8k",
           "gsm8k",
@@ -151,17 +151,17 @@
         ],
         "series": {
           "dollars per leg": [
-            12.628705,
-            3.09937375,
-            2.88066448,
-            1.59490864,
-            0.019949,
-            0.010328,
-            0.0046895,
-            0.002533,
-            0.002277,
+            11.83124125,
+            2.92489344,
+            2.243245,
+            1.62097056,
+            0.020205,
+            0.011208,
+            0.0049455,
+            0.004453,
+            0.0020210000000000002,
+            0.002021,
             0.0018930000000000002,
-            0.001637,
             0.000252
           ]
         }
@@ -169,26 +169,26 @@
     },
     "cost-per-pass": {
       "title": "Efficiency only means anything per SUCCESS",
-      "takeaway": "Dividing by the pass rate is what turns a token count into an efficiency figure: gsm8k $0.00053 per task becomes $0.00054 per PASS; tau2 $0.1494 per task becomes $0.1660 per PASS \u2014 and appworld has no finite cost per success at all, because it passed nothing.",
+      "takeaway": "Dividing by the pass rate is what turns a token count into an efficiency figure: gsm8k $0.00054 per task becomes $0.00055 per PASS; tau2 $0.1513 per task becomes $0.1815 per PASS \u2014 and appworld has no finite cost per success at all, because it passed nothing.",
       "caption": "A change that halves your token use and halves your pass rate has gained you nothing, which is why we never quote tokens per task as an efficiency number on its own. The unbounded row is not a rendering artifact: it is the honest way to report a benchmark that runs to completion, records every token, and then fails evaluation.",
       "note": "Pass rates here are over PRICED rows; the headline rates in the reports use the tasks attempted, which is a lower number for appworld because a timed-out task leaves no row.",
       "data": {
         "rows": [
           {
             "bench": "gsm8k",
-            "per_task": 0.0005304127906976744,
-            "pass_rate": 0.9767441860465116,
-            "per_pass": 0.0005430416666666667
+            "per_task": 0.0005412383720930233,
+            "pass_rate": 0.9825581395348837,
+            "per_pass": 0.0005508461538461538
           },
           {
             "bench": "tau2",
-            "per_task": 0.14939824133333332,
-            "pass_rate": 0.9,
-            "per_pass": 0.1659980459259259
+            "per_task": 0.15126214133333332,
+            "pass_rate": 0.8333333333333334,
+            "per_pass": 0.18151456959999998
           },
           {
             "bench": "appworld",
-            "per_task": 0.6338854846938775,
+            "per_task": 0.5999160372340425,
             "pass_rate": 0.0,
             "per_pass": null
           }
@@ -197,7 +197,7 @@
     },
     "judge-overhead": {
       "title": "On the plugin legs, the check outcosts the work",
-      "takeaway": "One IBAC judge completion costs at least $0.00111 \u2014 2.6\u00d7 the entire gsm8k task on gpt-5-mini it is authorizing \u2014 so across legs #6/#7/#8 the judge bills 1.7\u20133.4\u00d7 what the agent does.",
+      "takeaway": "One IBAC judge completion costs at least $0.00111 \u2014 2.5\u00d7 the entire gsm8k task on gpt-5-mini it is authorizing \u2014 so across legs #6/#7/#8 the judge bills 1.2\u20132.9\u00d7 what the agent does.",
       "caption": "The judge runs gpt-4.1, the dearest model on our card, against a FIXED 1,577-character system prompt that does not shrink with the task \u2014 so the cheaper the work, the more lopsided this gets. None of it appears in report.ndjson: the sidecar makes the call, not the instrumented agent, which is why every other figure in this section is a FLOOR.",
       "note": "Judge cost is tool calls \u00d7 the floor per call; the proposed-action block that follows the fixed prompt is not counted. tau2's user simulator is invisible the same way, inside the uninstrumented MCP pod.",
       "data": {
@@ -211,12 +211,12 @@
         ],
         "series": {
           "the agent's own calls": [
-            0.001637,
-            0.002277,
+            0.0020210000000000002,
             0.0018930000000000002,
-            0.0017649999999999999,
-            0.003173,
-            0.002789
+            0.004453,
+            0.002405,
+            0.0020210000000000002,
+            0.003045
           ],
           "the IBAC judge (floor)": [
             0.0055425,
