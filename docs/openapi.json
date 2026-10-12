@@ -1406,6 +1406,66 @@
           }
         }
       }
+    },
+    "/mlflow/health": {
+      "get": {
+        "tags": [
+          "mlflow"
+        ],
+        "summary": "Mlflow Health",
+        "description": "Probe the caller instance's MLflow. `?round_trip=false` reads only and writes nothing.\n\nAlways HTTP 200 — the stages carry the verdict. A probe that returned 5xx on a broken MLflow\nwould be indistinguishable from a broken Service, which is the confusion this endpoint exists\nto remove.",
+        "operationId": "mlflow_health_mlflow_health_get",
+        "parameters": [
+          {
+            "name": "round_trip",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Round Trip"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MLflowHealthResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1678,7 +1738,7 @@
         "additionalProperties": false,
         "type": "object",
         "title": "ConfigUpdateRequest",
-        "description": "Benchmarker-only config update. Accepts ONLY parameters the Service can enact.\n\n`extra=\"forbid\"` is the guard: an attempt to set a workload-provided credential\n(e.g. `hf-secret`) \u2014 which the Service never sets \u2014 is rejected as 422. Workload\ncredentials are provisioned out-of-band and verified by the workload precheck."
+        "description": "Benchmarker-only config update. Accepts ONLY parameters the Service can enact.\n\n`extra=\"forbid\"` is the guard: an attempt to set a workload-provided credential\n(e.g. `hf-secret`) — which the Service never sets — is rejected as 422. Workload\ncredentials are provisioned out-of-band and verified by the workload precheck."
       },
       "DeployBenchmarkRequest": {
         "properties": {
@@ -1759,8 +1819,42 @@
               }
             ],
             "title": "Plugin Config File"
+          },
+          "llm_api_base": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Api Base"
+          },
+          "llm_key_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Key Secret"
+          },
+          "llm_gateway": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Gateway"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "title": "DeployBenchmarkRequest"
       },
@@ -1791,6 +1885,16 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Agent"
+          },
+          "llm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentLLM"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -1803,6 +1907,30 @@
           "agent"
         ],
         "title": "DeployBenchmarkResponse"
+      },
+      "DeploymentLLM": {
+        "properties": {
+          "gateway": {
+            "type": "string",
+            "title": "Gateway"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "key_secret": {
+            "type": "string",
+            "title": "Key Secret"
+          }
+        },
+        "type": "object",
+        "required": [
+          "gateway",
+          "model",
+          "key_secret"
+        ],
+        "title": "DeploymentLLM",
+        "description": "What a deployment's LLM calls go to, as far as it may be published: never the URL."
       },
       "EnvVar": {
         "properties": {
@@ -2056,6 +2184,121 @@
         "type": "object",
         "title": "MLflowConfig"
       },
+      "MLflowHealthResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "tracking_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tracking Url"
+          },
+          "credential_mode": {
+            "type": "string",
+            "title": "Credential Mode"
+          },
+          "experiment_id": {
+            "type": "string",
+            "title": "Experiment Id"
+          },
+          "workspace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace"
+          },
+          "insecure_tls": {
+            "type": "boolean",
+            "title": "Insecure Tls",
+            "default": false
+          },
+          "auth": {
+            "$ref": "#/components/schemas/MLflowHealthStage"
+          },
+          "read": {
+            "$ref": "#/components/schemas/MLflowHealthStage"
+          },
+          "write": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MLflowHealthStage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "round_trip": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MLflowHealthStage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "credential_mode",
+          "experiment_id",
+          "auth",
+          "read"
+        ],
+        "title": "MLflowHealthResponse",
+        "description": "Whether this instance's MLflow is reachable, authenticated and WRITABLE.\n\nDeliberately a whitelist of fields, the same discipline `span_report.*` follows: the probe\nhandles a bearer token and possibly a password, and neither may ever appear in a response.\n`credential_mode` names which of `auth.mlflow.mlflow_token`'s three modes the config selects\nwithout disclosing the material.\n\nFour stages, because they fail independently and a run only needs the last one to be wrong to\npublish an empty report while reporting `pass_rate 1.0`:\n\n  * `auth`       — a bearer could be minted at all\n  * `read`       — the traces API answers (this is what a report reads)\n  * `write`      — the OTLP exporter posted the probe's spans without logging an error\n  * `round_trip` — those spans came back out again\n\n`read.ok` with `write.ok` false is the exact shape of the two failures that shipped zero-byte\nreports on 2026-09-30: reads go through httpx honouring `insecure_tls`, while the span exporter\nis a separate library needing a real trust anchor and a `mlflow-operator-mlflow-integration`\ngrant. So a 200 on the read path proves nothing about the export path."
+      },
+      "MLflowHealthStage": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "title": "MLflowHealthStage",
+        "description": "One stage of the MLflow probe. `error` is a message, never a credential."
+      },
       "MLflowTraceRecord": {
         "properties": {
           "session_id": {
@@ -2265,7 +2508,7 @@
           "total_latency_s"
         ],
         "title": "MLflowTraceRecord",
-        "description": "One `Agent.Session` trace aggregated into a structured record.\n\nMirrors the upstream harness `TraceRecord`: per-session timing breakdown,\nLLM/tool latencies + token counts, infra CPU/mem, and evaluation outcome \u2014\nparsed out of the OTEL spans the workload pods export to MLflow."
+        "description": "One `Agent.Session` trace aggregated into a structured record.\n\nPer-session timing breakdown, LLM/tool latencies + token counts, infra CPU/mem,\nand evaluation outcome — parsed out of the OTEL spans the workload pods export\nto MLflow."
       },
       "NamespacesResponse": {
         "properties": {
@@ -2579,6 +2822,16 @@
             },
             "type": "array",
             "title": "Artifacts"
+          },
+          "llm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentLLM"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -2936,7 +3189,7 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT",
-        "description": "Caller JWT. Used only for attribution (preferred_username) and issuer-based routing (iss); never forwarded upstream \u2014 the Service mints its own ROPC token for Rossoctl calls."
+        "description": "Caller JWT. Used only for attribution (preferred_username) and issuer-based routing (iss); never forwarded upstream — the Service mints its own ROPC token for Rossoctl calls."
       }
     }
   },
