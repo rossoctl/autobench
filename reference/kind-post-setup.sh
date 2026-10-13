@@ -226,7 +226,7 @@ BENCH_ROLE="${BENCH_ROLE:-rossoctl-operator}"
 # registry.py injects HF_TOKEN from secret `hf-secret` (key `hf-token`) and OPENAI_API_KEY from
 # `openai-secret` (key `apikey`). A MISSING secret is fatal: the MCP pod sits in
 # CreateContainerConfigError ("secret \"hf-secret\" not found") and the agent then crash-loops
-# unable to reach it. hf-token is EMPTY on ykt2 too (the gsm8k dataset is public) — the secret
+# unable to reach it. hf-token is EMPTY on the OpenShift clusters too (the gsm8k dataset is public) — the secret
 # only has to exist. The LLM key is real and must be supplied out-of-band: export
 # BM_WORKLOAD_LLM_KEY, else it is left untouched (an existing empty apikey means every run 401s).
 #

@@ -134,6 +134,10 @@ A full 12-run takes 1–2 hours. Three rules, all learned the hard way:
 
 - **Detach in-process.** The Bash tool kills the process *group*, background or not, so wrap the
   driver in a `os.setsid()` call before importing it (macOS has no `setsid(1)`).
+- **Keep the Mac awake: exec the driver under `caffeinate -i`.** On 2026-10-12 the host slept
+  through a cache gap; on wake the KinD VM's clock lagged ~34 min, and S3 refused that leg's export
+  with `RequestTimeTooSkewed`. The run passed, its artifacts never existed, and the leg had to be
+  re-run. The tell is a `run_id` timestamp far from the driver's own log clock.
 - **One platform at a time, never in parallel.** Each platform has its *own* litellm deployment —
   hence its own completion cache and its own key table, which is why a key copied between them always
   401s — but the same upstream model providers sit behind both. Concurrent runs therefore contend

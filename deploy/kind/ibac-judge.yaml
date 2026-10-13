@@ -1,4 +1,4 @@
-# The ibac judge upstream proxy — KinD copy of the objects running on ykt2.
+# The ibac judge upstream proxy — KinD copy of the objects first run on the OpenShift ykt clusters.
 #
 # What it is for: the AuthBridge `ibac` plugin calls a judge model to decide whether a tool call is
 # allowed. The plugin's ConfigMap is cleartext, so the upstream key cannot live there; this proxy
@@ -39,7 +39,7 @@ metadata:
   labels:
     app: ibac-judge
 data:
-  # Verbatim copy of what ykt2 runs. Deliberately stdlib-only: no pip install at container start,
+  # Verbatim copy of what the OpenShift clusters ran. Deliberately stdlib-only: no pip install at container start,
   # so the pod is ready in seconds on a stock python image.
   proxy.py: |
     import os, socket, sys, time, urllib.request, urllib.error

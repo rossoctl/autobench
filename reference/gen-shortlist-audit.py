@@ -2,8 +2,8 @@
 """How much of a leg's inference goes on picking tools rather than doing the task.
 
     python3 reference/gen-shortlist-audit.py \\
-        /tmp/autobench/run12-ykt3-v135-20261004.json "OpenShift (ykt3, single-cluster)" \\
-        /tmp/autobench/run12-kind-v135-20261004.json "KinD (single-node local)"
+        /tmp/autobench/run12-ykt3-v136-20261012.json "OpenShift (ykt3, single-cluster)" \\
+        /tmp/autobench/run12-kind-v136-20261012.json "KinD (single-node local)"
 
 Writes, and owns completely, the <!-- shortlist --> block in
   docs/BENCHMARKS_PRIMER.md

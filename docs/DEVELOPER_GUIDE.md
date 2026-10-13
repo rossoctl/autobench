@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-10-13T00:34:06Z
+**Last modified:** 2026-10-13T03:33:30Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -659,9 +659,10 @@ One file per instance keys the whole thing to the `iss`. Loaded at startup from
 }
 ```
 
-- `service_credential` is the ROPC identity the Service presents to Rossoctl (must exist in
-  the realm with `firstName`/`lastName` set, or Keycloak 400s with "Account is not fully set
-  up").
+- `service_credential` is the ROPC identity the Service presents to Rossoctl. It must exist in
+  the realm with whatever profile fields the realm requires (`firstName`/`lastName`, and on some
+  realms `email`), or Keycloak 400s with "Account is not fully set up";
+  `reference/keycloak-ensure-user.sh` fills them where unset (Admin Guide §3.6).
 - `mcp_endpoint_template` / `agent_endpoint_template` stay `null` when the workloads run on the
   Service's own cluster, as in every example here: the Service reaches them over in-cluster service
   DNS. When they run on another cluster, set both to that cluster's Route shape,

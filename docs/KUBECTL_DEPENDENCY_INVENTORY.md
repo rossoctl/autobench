@@ -103,7 +103,7 @@ Legend for **Disposition**:
 | `deploy-agent.sh:826` | `kubectl patch route … /spec/port/targetPort = "http"` (Step 9.5) | `CLUSTER_MODE = openshift` |
 
 This is exactly the workaround for the OpenShift Route named-port 503 bug fixed upstream in
-`rossoctl/rossoctl` PR #2322 (issue #2191) and already deployed on ykt2/ykt3. Once the fixed
+`rossoctl/rossoctl` PR #2322 (issue #2191) and deployed on the ykt clusters since Rossoctl v0.8.0-rc.2. Once the fixed
 backend is deployed, **delete this entire step** — no API needed. Direct payoff of the fix.
 
 ### 2. MCP-tool routing & registration — OUT OF SCOPE (MCP gateway support deferred)

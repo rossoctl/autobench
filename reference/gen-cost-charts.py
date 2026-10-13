@@ -2,8 +2,8 @@
 """The efficiency figures: six charts, one take-away each, all derived from the artifacts.
 
     uv run --with matplotlib python reference/gen-cost-charts.py \\
-        /tmp/autobench/run12-ykt3-v135-20261004.json \\
-        /tmp/autobench/run12-kind-v135-20261004.json
+        /tmp/autobench/run12-ykt3-v136-20261012.json \\
+        /tmp/autobench/run12-kind-v136-20261012.json
 
 Writes, and owns completely:
 
@@ -74,12 +74,12 @@ def emit(key, fig, title, takeaway, caption, note="", data=None):
 
 
 # Keyed on a run label's first `-` field. `ykt3` is the OpenShift cluster's own name, which the
-# v1.35 matrices carry as their label (`ykt3-v135-20261004`).
+# matrices carry as their label (`ykt3-v136-20261012`).
 PLATFORM_NAME = {"ocp": "OpenShift", "ykt3": "OpenShift", "kind": "KinD"}
 
 
 def platform(label):
-    """`ykt3-v135-20261004` -> `OpenShift`. A platform label, never an endpoint: the bucket is public."""
+    """`ykt3-v136-20261012` -> `OpenShift`. A platform label, never an endpoint: the bucket is public."""
     return PLATFORM_NAME.get(label.split("-")[0], label)
 
 
