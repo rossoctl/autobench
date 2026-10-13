@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-10-12T23:49:57Z
+**Last modified:** 2026-10-13T00:34:06Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -1328,7 +1328,7 @@ uv tool list                   # the version it resolved to (the CLI has no --ve
 ```
 
 Pin instead of chasing `main` when you want reproducibility — append `@<tag-or-sha>` to the URL
-(`...autobench@fb07193`, the commit that pins image v1.36).
+(`...autobench@v1.36`: each release tag marks the commit that pins its Service image).
 
 #### Or into a venv, if you are also developing against it
 
