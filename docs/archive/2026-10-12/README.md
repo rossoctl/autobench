@@ -19,6 +19,9 @@ replaced those figures:
 [`docs/results/v1.35-2026-10-04/`](../../results/v1.35-2026-10-04/), and
 [`PLUGIN_OVERHEAD.md`](../../PLUGIN_OVERHEAD.md) still rests on it. Only the 12-run figures moved on.
 
+The S3 artifacts these reports cite (runs of 2026-10-04 and 10-05) were kept when the bucket was
+pruned on 2026-10-13, so their links still resolve.
+
 The documents link to each other with relative paths, so links that point inside this folder still
 resolve. Links to the repository's code, scripts and other docs may not: they name files as they
 were then.

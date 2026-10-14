@@ -101,3 +101,11 @@ That bucket is readable **and listable anonymously** — treat anything written 
 keys embed the caller's username and the Keycloak issuer host by design; no artifact contains task
 prompts or model outputs. Service endpoints are scrubbed from these reports (the generators emit a
 platform label instead), because those are not public.
+
+**What the bucket keeps.** On 2026-10-13 the bucket was pruned to the runs of 2026-10-01 onward,
+under the `kind/` and `ykt3/` prefixes; everything older, and every prefix of a retired cluster
+(`ykt5/`, `ykt2/`, `ykt3-to-ykt2/`, the early `benchmarker/`), was deleted. Every artifact the
+reports in this directory cite was kept. The pre-October reports in
+[`docs/archive/2026-10-04/`](../archive/2026-10-04/) now cite keys that return 404 — their numbers
+are the record. The AutoBench Service's own S3 credential can write but not delete, by design, so a
+prune is done with an administrator's credential.

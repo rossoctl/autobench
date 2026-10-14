@@ -20,6 +20,11 @@ What it covers that the current documents deliberately do not:
 | `results/v1.28-2026-09-15/`, `results/v1.33-2026-10-03/` | the landmark results published until 2026-10-04 |
 | `img/` | the cost charts those documents embed |
 
+**Their S3 artifacts are gone.** The bucket was pruned on 2026-10-13 to runs from 2026-10-01 on,
+so the object keys these reports cite (v1.28 and earlier, and the ykt3 → ykt2 runs) now return 404.
+The numbers in the reports are the remaining record. The v1.33 runs of 2026-10-01 to 10-03 were
+kept.
+
 The documents link to each other with relative paths, so links that point inside this folder
 still resolve. Links to the repository's code, scripts and other docs may not: they name files as
 they were then. `generate_pptx.py` is kept so the archived deck stays reproducible; running it writes
