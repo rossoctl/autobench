@@ -183,8 +183,10 @@ outputs — and `span_report.*` publishes a fixed whitelist of fields for that r
 
 ## Git
 
-Push directly to `main` while there is a single committer; open a PR once that changes.
-Sign off commits (DCO is enforced on the upstream repos this work feeds).
+Land every change through a pull request. `main` is protected: a PR needs one approving review and
+a passing `DCO` status check before it merges, so never push to `main` directly, even with admin
+rights that would let the push through. Sign off every commit (`git commit -s`): the `DCO` check
+fails a PR with an unsigned commit, and DCO is enforced on the upstream repos this work feeds too.
 
 Attribute AI assistance with **`Assisted-By:`**, never `Co-Authored-By:` — GitHub reads the latter as
 a structural trailer and adds a second *author* to the commit and to the repo's contributor stats.
