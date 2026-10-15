@@ -15,6 +15,8 @@ Sources, in the order they win when two disagree:
   1. docs/results/v1.36-2026-10-12/ (12-run) and docs/results/v1.35-2026-10-04/ (plugin study)
      -- the generated reports. Every measured figure on a results slide is copied from there,
      with a comment naming the report.
+  2b. docs/img/gateway-legs.json     -- written by reference/gen-gateway-legs.py: the cb vs ETE-Ext
+     comparison slides, drawn natively from it, exactly as DEVELOPER_GUIDE.md §6.8 tabulates it.
   2. docs/img/takeaways.json         -- written by reference/gen-cost-charts.py from the same
      artifacts. The cost charts are drawn NATIVELY from its `data` blocks (never its PNGs), and
      their titles and take-aways are its sentences, so a slide cannot disagree with the figure.
@@ -46,6 +48,8 @@ HERE = pathlib.Path(__file__).resolve().parent
 DOCS = HERE.parent
 OUT = DOCS / "AutoBench.pptx"
 FIGS = json.loads((DOCS / "img" / "takeaways.json").read_text())["figures"]
+# Written by reference/gen-gateway-legs.py from the same artifacts as DEVELOPER_GUIDE.md §6.8.
+GW = json.loads((DOCS / "img" / "gateway-legs.json").read_text())
 
 # Chart series colours. One per quantity, the same on every chart in the deck; teal stays the
 # agent's, so the agent's own bill is teal wherever it appears.
@@ -1006,6 +1010,66 @@ def s_xplat(d):
         card(s, 8.1, 1.45 + k * 1.08, 4.78, 0.98, t, [body], size=12, title_size=13)
 
 
+def _tok(n):
+    return f"{n / 1e6:.2f} M" if n >= 1e6 else (f"{n / 1e3:.1f} K" if n >= 1e4 else f"{n:,}")
+
+
+def _usd(x):
+    return "$0.00" if x == 0 else (f"${x:,.2f}" if x >= 1 else f"${x:.4f}")
+
+
+def s_gateway_legs(d):
+    # docs/img/gateway-legs.json; mirrors DEVELOPER_GUIDE.md §6.8 (reference/gen-gateway-legs.py)
+    la, lb = GW["labels"]
+    t = GW["totals"]
+    s = d.slide(f"{lb} vs {la}, leg by leg: {t['tokens'][1] / t['tokens'][0]:.0%} of the tokens, at "
+                f"{_usd(t['cost'][1])}",
+                f"{la}: the baseline's own models · {lb}: glm-5-3, Nemotron-3-Ultra on #4 · the IBAC "
+                f"judge on {la} for both · one KinD node, 2026-10-12",
+                notes="Tokens and wall time cover the tasks that finished: a task killed by the 600 s "
+                      "budget leaves no report row. cb's $0.00 is its posted rate (self-hosted "
+                      "hosted_vllm models, no per-token price), not its compute cost. On tau2 and "
+                      "appworld the model changes with the gateway, so those rows compare "
+                      "combinations, not gateways alone.",
+                outline=f"{lb} vs {la}, leg by leg")
+    rows = [["#", "bench", f"pass {la}", f"pass {lb}", f"tokens {la}", f"tokens {lb}",
+             f"wall {la}", f"wall {lb}", f"$ {la}", f"$ {lb}"]]
+    for g in GW["legs"]:
+        rows.append([str(g["n"]), g["bench"], f"{g['pass'][0]:.2f}", f"{g['pass'][1]:.2f}",
+                     _tok(g["tokens"][0]), _tok(g["tokens"][1]), f"{g['wall'][0]:,.0f} s",
+                     f"{g['wall'][1]:,.0f} s", _usd(g["cost"][0]), _usd(g["cost"][1])])
+    rows.append(["", "**all 12**", "", "", f"**{_tok(t['tokens'][0])}**", f"**{_tok(t['tokens'][1])}**",
+                 f"**{t['wall'][0]:,.0f} s**", f"**{t['wall'][1]:,.0f} s**",
+                 f"**{_usd(t['cost'][0])}**", f"**{_usd(t['cost'][1])}**"])
+    table(s, 0.45, 1.45, 12.43, rows, [0.55, 1.25, 1.05, 1.0, 1.45, 1.4, 1.25, 1.2, 1.18, 1.1],
+          size=11, row_h=0.355, right_from=2)
+
+
+def s_gateway_ratio(d):
+    # docs/img/gateway-legs.json: cb's per-benchmark figures as a multiple of ETE-Ext's.
+    la, lb = GW["labels"]
+    r = GW["ratio"]
+    t = GW["totals"]
+    s = d.slide(f"{lb} ÷ {la}: {r['tau2']['tokens']:.2f}× the tokens on tau2, "
+                f"{r['gsm8k']['tokens']:.2f}× on gsm8k",
+                f"1.00× = the same as {la}. Tokens per finished task; run time summed over the "
+                f"benchmark's legs",
+                outline=f"{lb} vs {la}, by benchmark")
+    bar_chart(s, 0.45, 1.4, 7.6, 4.7, GW["benches"],
+              {"tokens per finished task": [r[b]["tokens"] for b in GW["benches"]],
+               "run time": [r[b]["wall"] for b in GW["benches"]]},
+              [TOKENS, TIME], number_format='0.00"×"', size=12)
+    warn(s, 8.3, 1.45, 4.58, 1.45, "appworld lost tasks to the budget", [
+        f"{t['appworld_lost'][1]} of {t['appworld_attempted']} appworld tasks hit the 600 s "
+        f"timeout on {lb}, against {t['appworld_lost'][0]} on {la}: its token bar covers fewer "
+        f"tasks."], size=12)
+    card(s, 8.3, 3.1, 4.58, 1.3, f"$0.00 is {lb}'s posted rate", [
+        "Its models are self-hosted, with no per-token price: compute is not in it."], size=12)
+    card(s, 8.3, 4.6, 4.58, 1.3, "The model moves with the gateway", [
+        "On tau2 and appworld these are gateway × model combinations, not gateways alone."],
+         size=12)
+
+
 def s_plugin_cost(d):
     # docs/results/v1.35-2026-10-04/plugin-study-xplat.md
     s = d.slide("What AuthBridge costs: almost all of it is the judge",
@@ -1069,8 +1133,9 @@ SECTIONS = [
     ("5", "Cost", "the model, the rate card, six efficiency charts",
      [s_cost_model, s_rate_card, s_dollars_wrong, s_fig_ladder, s_fig_composition, s_fig_model,
       s_fig_pareto, s_fig_per_pass, s_fig_judge]),
-    ("6", "Results (v1.36)", "the 12-run matrix, OpenShift vs KinD, plugins (v1.35)",
-     [s_matrix, s_bands, s_measured, s_xplat, s_plugin_cost, s_plugin_trust]),
+    ("6", "Results (v1.36)", "12-run, OpenShift vs KinD, cb vs ETE-Ext, plugins",
+     [s_matrix, s_bands, s_measured, s_xplat, s_gateway_legs, s_gateway_ratio, s_plugin_cost,
+      s_plugin_trust]),
 ]
 
 # Short labels for the outline slide and the PDF bookmarks, keyed by a title's start: a full

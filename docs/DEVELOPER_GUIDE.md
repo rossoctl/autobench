@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-10-15T01:52:20Z
+**Last modified:** 2026-10-15T02:17:24Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -2135,9 +2135,9 @@ published artifacts is a manual browser print or a hand-edited table.
 | `docs/DEVELOPER_GUIDE.pdf`, `docs/ADMIN_GUIDE.pdf` | `python3 reference/gen_pdf.py` | the `.md` beside it |
 | the table of contents in this file (and in the Admin Guide) | `python3 reference/gen_toc.py docs/DEVELOPER_GUIDE.md` | that file's own headings |
 | §7.5's 12 one-line commands | `reference/run12_specs.json` | the same specs `reference/run-12.py` executes |
-| §6.8's cb vs ETE-Ext table and its two figures (`docs/img/gateway-*.png`) | `uv run --with matplotlib python reference/gen-gateway-legs.py <run.json> "ETE-Ext" <run.json> "cb"` | each leg's mirrored `run.json` + `report.ndjson`, and `model_prices.json` per gateway |
+| §6.8's cb vs ETE-Ext table, its two figures (`docs/img/gateway-*.png`) and the deck's data for them (`docs/img/gateway-legs.json`) | `uv run --with matplotlib python reference/gen-gateway-legs.py <run.json> "ETE-Ext" <run.json> "cb"` | each leg's mirrored `run.json` + `report.ndjson`, and `model_prices.json` per gateway |
 | the tool-selection table in §2 and in the primer | `python3 reference/gen-shortlist-audit.py <run12.json> "<label>" …` | `span_report.ndjson` in each leg's mirror |
-| `docs/AutoBench.pptx`, `docs/AutoBench.pdf` | `docs/deck/.venv/bin/python docs/deck/make_autobench_pptx.py` (PDF via PowerPoint; `DECK_PDF_VIA=soffice` for LibreOffice) | `docs/results/v1.36-2026-10-12/` (12-run), `docs/results/v1.35-2026-10-04/` (plugin study), `docs/img/takeaways.json` + this guide |
+| `docs/AutoBench.pptx`, `docs/AutoBench.pdf` | `docs/deck/.venv/bin/python docs/deck/make_autobench_pptx.py` (PDF via PowerPoint; `DECK_PDF_VIA=soffice` for LibreOffice) | `docs/results/v1.36-2026-10-12/` (12-run), `docs/results/v1.35-2026-10-04/` (plugin study), `docs/img/takeaways.json`, `docs/img/gateway-legs.json` (the cb vs ETE-Ext slides) + this guide |
 
 The deck has its own venv, never the project's: `python3 -m venv docs/deck/.venv && docs/deck/.venv/bin/pip install -r docs/deck/requirements.txt`. Edit the generator, never the `.pptx`; a hand edit is lost at the next build.
 

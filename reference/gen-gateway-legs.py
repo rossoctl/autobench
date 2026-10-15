@@ -9,6 +9,8 @@ Writes, and owns completely:
 
   docs/img/gateway-tokens.png   tokens per task, by benchmark, one bar pair per benchmark
   docs/img/gateway-wall.png     wall time per leg, one bar pair per leg
+  docs/img/gateway-legs.json    the same numbers, read by docs/deck/make_autobench_pptx.py, which
+                                draws its comparison slides natively from them (never the PNGs)
   the <!-- gateway-legs --> block in docs/DEVELOPER_GUIDE.md, rewritten in place the way
                                 gen_toc.py rewrites <!-- toc -->
 
@@ -221,6 +223,35 @@ def block(A, B, la, lb, tok_title, wall_title, ratios):
     return "\n".join(o) + "\n"
 
 
+def deck_data(A, B, la, lb, tok_title, wall_title):
+    """Everything the deck's two comparison slides draw, so a slide cannot drift from the guide."""
+    def wall(D, b):
+        return sum(v["wall"] for v in D.values() if v["bench"] == b)
+    ratio = {b: {"tokens": sum(per_task(B, b)) / sum(per_task(A, b)),
+                 "wall": wall(B, b) / wall(A, b)} for b in BENCHES}
+    tot = lambda D, k: sum(v[k] for v in D.values())  # noqa: E731
+    return {
+        "labels": [la, lb], "token_title": tok_title, "wall_title": wall_title,
+        "benches": list(BENCHES), "ratio": ratio,
+        "per_task_tokens": {lab: {b: sum(per_task(D, b)) for b in BENCHES}
+                            for D, lab in ((A, la), (B, lb))},
+        "legs": [{"n": n, "bench": A[n]["bench"],
+                  "models": [[model_name(m) for m in A[n]["models"]],
+                             [model_name(m) for m in B[n]["models"]]],
+                  "pass": [A[n]["pass"], B[n]["pass"]],
+                  "finished": [[A[n]["rows"], A[n]["attempted"]], [B[n]["rows"], B[n]["attempted"]]],
+                  "tokens": [A[n]["tin"] + A[n]["tout"], B[n]["tin"] + B[n]["tout"]],
+                  "wall": [A[n]["wall"], B[n]["wall"]], "cost": [A[n]["cost"], B[n]["cost"]]}
+                 for n in sorted(A)],
+        "totals": {"tokens": [tot(A, "tin") + tot(A, "tout"), tot(B, "tin") + tot(B, "tout")],
+                   "wall": [tot(A, "wall"), tot(B, "wall")], "cost": [tot(A, "cost"), tot(B, "cost")],
+                   "appworld_lost": [sum(v["attempted"] - v["rows"] for v in D.values()
+                                         if v["bench"] == "appworld") for D in (A, B)],
+                   "appworld_attempted": sum(v["attempted"] for v in A.values()
+                                             if v["bench"] == "appworld")},
+    }
+
+
 def rewrite(doc, body):
     text = doc.read_text()
     pat = re.compile(r"(<!-- gateway-legs -->\n)(.*?)(<!-- /gateway-legs -->)", re.S)
@@ -243,6 +274,9 @@ def main():
     print(f"  docs/img/gateway-tokens.png -- {tok_title}")
     print(f"  docs/img/gateway-wall.png   -- {wall_title}")
     rewrite(DOC, block(A, B, la, lb, tok_title, wall_title, ratios))
+    (IMG / "gateway-legs.json").write_text(
+        json.dumps(deck_data(A, B, la, lb, tok_title, wall_title), indent=2) + "\n")
+    print("  docs/img/gateway-legs.json")
 
 
 if __name__ == "__main__":
