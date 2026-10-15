@@ -327,3 +327,32 @@ def test_compare_groups_by_gateway_and_model(tmp_path):
     assert out["cb"]["per_task"] is None                      # cb has no rates yet: unpriced
     assert out["default"]["per_task"] == pytest.approx((100 * 2 + 10 * 8) / 1e6)
     assert "unpriced" in ggc.table(list(out.values()))
+
+
+def _load_gen(name):
+    spec = importlib.util.spec_from_file_location(name, ROOT / "reference" / f"{name}.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_gateway_legs_block_prices_cb_at_zero_and_names_no_url():
+    g = _load_gen("gen-gateway-legs")
+    def leg(bench, model, cost, rows=5, att=5):
+        return {"bench": bench, "run_id": "20261012000000-abcdef01", "models": [model], "pass": 1.0,
+                "attempted": att, "rows": rows, "tin": 1000, "tout": 100, "wall": 10.0,
+                "cost": cost, "unpriced": 0}
+    A = {1: leg("gsm8k", "openai/Azure/gpt-5-mini-2025-08-07", 0.0004),
+         2: leg("tau2", "openai/aws/claude-sonnet-5", 1.6),
+         3: leg("appworld", "openai/gemini-2.5-pro", 2.1, rows=4)}
+    B = {n: {**v, "models": ["openai/rits/zai-org/glm-5-3"], "cost": 0.0} for n, v in A.items()}
+    B[3]["rows"] = 3
+    text = g.block(A, B, "ETE-Ext", "cb", "t1", "t2", {})
+    assert "| **$0.00** |" in text and "https://" not in text
+    assert "appworld lost 1 of 5 tasks that way on ETE-Ext and 2 of 5 on cb" in text
+
+
+def test_cb_models_carry_a_zero_rate_card():
+    for m in ("openai/rits/zai-org/glm-5-3",
+              "openai/rits/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4"):
+        assert costlib.cost(m, 1e6, 1e6, "cb") == 0.0

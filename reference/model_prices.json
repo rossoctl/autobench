@@ -82,8 +82,23 @@
   "gateways": {
     "_what": "Per-gateway rate cards, keyed by the `llm_gateway` LABEL a deploy published (never a URL). A gateway listed here is priced ONLY from its own `models`; a model missing there is unpriced, never borrowed from another gateway's card. A row whose gateway is not listed (including every row before per-deploy gateways, which has none) is priced from the top-level `models` card, which is the internal ETE gateway's.",
     "cb": {
-      "_source": "rates not yet known — add input_per_1m/output_per_1m per model id as report.ndjson records it (e.g. openai/rits/zai-org/glm-5-3) to price cb rows",
-      "models": {}
+      "_source": "cb's LiteLLM admin UI, per-model pages, read 2026-10-14: both models are provider hosted_vllm (a self-hosted vLLM) with no per-token price posted, so the cost to us is $0.00 per token",
+      "models": {
+        "openai/rits/zai-org/glm-5-3": {
+          "public_name": "rits/zai-org/glm-5-3",
+          "provider": "hosted_vllm",
+          "litellm_model": "hosted_vllm/zai-org/GLM-5.3",
+          "input_per_1m": 0.0,
+          "output_per_1m": 0.0
+        },
+        "openai/rits/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4": {
+          "public_name": "rits/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4",
+          "provider": "hosted_vllm",
+          "litellm_model": "hosted_vllm/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4",
+          "input_per_1m": 0.0,
+          "output_per_1m": 0.0
+        }
+      }
     }
   }
 }

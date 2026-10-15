@@ -1,6 +1,6 @@
 # AutoBench Service — Admin Guide
 
-**Last modified:** 2026-10-12T02:32:11Z
+**Last modified:** 2026-10-15T01:52:20Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -432,7 +432,8 @@ kubectl -n team1 create secret generic cb-key --from-file=apikey=$HOME/.rossoctl
 The data key is `apikey` unless the deploy says `cb-key:<key>`. If the Secret is missing, the agent
 never becomes Ready, and the run's `424` names the Secret. To label the instance's own gateway in
 the artifacts, set `workload_llm.gateway_label` in the instance file; otherwise it is published as
-`default`.
+`default`. Developer Guide §6.8 has a measured example: the whole 12-run on KinD through cb and
+through ETE-Ext, leg by leg.
 
 ### 3.4 KinD and OpenShift differ — and the differences fail silently
 

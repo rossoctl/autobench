@@ -1,6 +1,6 @@
 # AutoBench Service — Developer Guide
 
-**Last modified:** 2026-10-13T03:33:30Z
+**Last modified:** 2026-10-15T01:52:20Z
 
 > Hand-maintained, unlike the generated `results/12run-*.md` files which stamp themselves. Bump the
 > line above when you edit this guide.
@@ -369,6 +369,10 @@ not an invoice and not a vendor's list price.**
 | `gemini-2.5-pro` | vertex_ai | 1.25 | 10.00 | 8.0× | appworld |
 | `aws/claude-sonnet-5` | bedrock | 1.52 | 7.60 | 5.0× | tau2 |
 | `Azure/gpt-4.1` | azure | 2.00 | 8.00 | 4.0× | leg #4, **and the IBAC judge** |
+
+These are the ETE-Ext gateway's rates. A second gateway gets its own card under `gateways.<label>`
+in the same file, and its rows are priced from that card alone (§6.8). cb's two models are
+self-hosted (`hosted_vllm`) with no per-token price posted, so they are carded at $0.00.
 
 ```sh
 # regenerate every dollar figure in this section rather than editing one
@@ -1274,6 +1278,83 @@ What to know:
 - **Gateway caches:** each gateway has its own completion cache, so `BM_CACHE_GAP` (§7.4) spaces
   legs per gateway.
 
+#### Measured: the whole 12-run on cb and on ETE-Ext (KinD)
+
+The canonical matrix (§7.4), run twice on one KinD node on 2026-10-12, changing only the gateway and
+its models:
+- **ETE-Ext:** the published v1.36 baseline's own models.
+- **cb:** a second LiteLLM gateway serving self-hosted models, with `rits/zai-org/glm-5-3` on every
+  leg and `NVIDIA-Nemotron-3-Ultra` on #4, the model-swap leg.
+
+Both runs kept the IBAC judge on ETE-Ext. Each deploy named its gateway by label and its key by
+Secret name (`cb-key`), so neither the URL nor the key appears in any artifact or here.
+
+<!-- gateway-legs -->
+<!-- Regenerate: uv run --with matplotlib python reference/gen-gateway-legs.py <run.json> "ETE-Ext" <run.json> "cb" -->
+
+| leg | benchmark | model on ETE-Ext | model on cb | pass ETE-Ext | pass cb | tasks finished ETE-Ext | tasks finished cb |
+|---|---|---|---|---:|---:|---:|---:|
+| #1 | gsm8k | `Azure/gpt-5-mini-2025-08-07` | `rits/zai-org/glm-5-3` | 1.00 | 1.00 | 1 / 1 | 1 / 1 |
+| #2 | gsm8k | `Azure/gpt-5-mini-2025-08-07` | `rits/zai-org/glm-5-3` | 1.00 | 1.00 | 10 / 10 | 10 / 10 |
+| #3 | gsm8k | `Azure/gpt-5-mini-2025-08-07` | `rits/zai-org/glm-5-3` | 1.00 | 0.98 | 50 / 50 | 50 / 50 |
+| #4 | gsm8k | `Azure/gpt-4.1` | `rits/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4` | 0.80 | 0.80 | 5 / 5 | 5 / 5 |
+| #5 | gsm8k | `Azure/gpt-5-mini-2025-08-07` | `rits/zai-org/glm-5-3` | 1.00 | 1.00 | 5 / 5 | 5 / 5 |
+| #6 | gsm8k | `Azure/gpt-5-mini-2025-08-07` | `rits/zai-org/glm-5-3` | 1.00 | 1.00 | 5 / 5 | 5 / 5 |
+| #7 | gsm8k | `Azure/gpt-5-mini-2025-08-07` | `rits/zai-org/glm-5-3` | 1.00 | 1.00 | 5 / 5 | 5 / 5 |
+| #8 | gsm8k | `Azure/gpt-5-mini-2025-08-07` | `rits/zai-org/glm-5-3` | 1.00 | 1.00 | 5 / 5 | 5 / 5 |
+| #9 | tau2 | `aws/claude-sonnet-5` | `rits/zai-org/glm-5-3` | 0.90 | 1.00 | 10 / 10 | 10 / 10 |
+| #10 | tau2 | `aws/claude-sonnet-5` | `rits/zai-org/glm-5-3` | 0.80 | 0.85 | 20 / 20 | 20 / 20 |
+| #11 | appworld | `gemini-2.5-pro` | `rits/zai-org/glm-5-3` | 0.00 | 0.00 | 4 / 5 | 3 / 5 |
+| #12 | appworld | `gemini-2.5-pro` | `rits/zai-org/glm-5-3` | 0.00 | 0.00 | 19 / 20 | 9 / 20 |
+
+| leg | input ETE-Ext | input cb | output ETE-Ext | output cb | total ETE-Ext | total cb | wall ETE-Ext | wall cb | cost ETE-Ext | cost cb |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| #1 gsm8k | 320 | 826 | 150 | 184 | 470 | 1,010 | 7 s | 5 s | $0.00038 | $0.00 |
+| #2 gsm8k | 3,166 | 9,276 | 1,629 | 1,587 | 4,795 | 10.9 K | 45 s | 36 s | $0.00405 | $0.00 |
+| #3 gsm8k | 15.7 K | 44.8 K | 9,166 | 21.5 K | 24.9 K | 66.3 K | 44 s | 135 s | $0.0223 | $0.00 |
+| #4 gsm8k | 3,536 | 4,303 | 292 | 225 | 3,828 | 4,528 | 19 s | 7 s | $0.00941 | $0.00 |
+| #5 gsm8k | 1,564 | 4,550 | 1,071 | 1,006 | 2,635 | 5,556 | 14 s | 10 s | $0.00253 | $0.00 |
+| #6 gsm8k | 1,564 | 4,565 | 1,007 | 752 | 2,571 | 5,317 | 14 s | 27 s | $0.00241 | $0.00 |
+| #7 gsm8k | 1,564 | 4,526 | 815 | 942 | 2,379 | 5,468 | 12 s | 21 s | $0.00202 | $0.00 |
+| #8 gsm8k | 1,564 | 4,520 | 1,327 | 804 | 2,891 | 5,324 | 17 s | 19 s | $0.00304 | $0.00 |
+| #9 tau2 | 965.1 K | 815.9 K | 22.9 K | 28.6 K | 988.0 K | 844.5 K | 705 s | 879 s | $1.64 | $0.00 |
+| #10 tau2 | 1.71 M | 1.31 M | 38.1 K | 52.4 K | 1.75 M | 1.36 M | 877 s | 441 s | $2.89 | $0.00 |
+| #11 appworld | 911.1 K | 682.0 K | 96.7 K | 77.5 K | 1.01 M | 759.5 K | 1,629 s | 2,058 s | $2.11 | $0.00 |
+| #12 appworld | 5.38 M | 2.05 M | 529.4 K | 249.0 K | 5.91 M | 2.29 M | 1,782 s | 2,482 s | $12.02 | $0.00 |
+| **all 12 legs** | **8.99 M** | **4.93 M** | **702.6 K** | **434.5 K** | **9.70 M** | **5.37 M** | **5,165 s** | **6,119 s** | **$18.70** | **$0.00** |
+
+![cb spends 2.3× ETE-Ext's tokens on gsm8k, 0.81× on tau2](img/gateway-tokens.png)
+
+**cb spends 2.3× ETE-Ext's tokens on gsm8k, 0.81× on tau2.**
+
+![Run time summed over the 12 legs: 6,119 s on cb, 5,165 s on ETE-Ext (1.18×), most of it appworld](img/gateway-wall.png)
+
+**Run time summed over the 12 legs: 6,119 s on cb, 5,165 s on ETE-Ext (1.18×), most of it appworld.**
+
+How to read it:
+
+- **Tokens and wall time cover the tasks that finished.** A task killed by the 600 s per-task budget leaves no `report.ndjson` row, so its tokens are missing here and its leg's pass rate counts it as failed. appworld lost 2 of 25 tasks that way on ETE-Ext and 13 of 25 on cb. That is most of why cb's appworld totals are lower: per finished task the two are much closer (254,517 tokens on cb against 300,646 on ETE-Ext).
+- **The model changes with the gateway on tau2 and appworld**, so those rows compare gateway × model combinations, not gateways alone. Only #4 swaps on purpose.
+- **Dollars are posted rates** from `reference/model_prices.json`, per gateway. cb's models are self-hosted (`hosted_vllm`) with no per-token price, hence $0.00; its own compute is not in that figure.
+- **The IBAC judge stayed on ETE-Ext's `Azure/gpt-4.1`** for legs #6–#8 on both runs; its calls are billed but not in the agent's telemetry (§2), so neither cost column includes them.
+- **Wall time is that day's.** Both runs were on one KinD node on 2026-10-12 (local time; the run ids are UTC), one after the other, so the comparison is fair between them; across days the gateways' latency moves (§2).
+
+| leg | run id on ETE-Ext | run id on cb |
+|---|---|---|
+| #1 | `20261012155448-8bb425fa` | `20261013003659-dfe8ddd5` |
+| #2 | `20261012162903-83d5f1e9` | `20261013012241-7655a2ae` |
+| #3 | `20261012164913-3a195d6e` | `20261013013959-67135ee4` |
+| #4 | `20261012174041-489ca9c7` | `20261013024245-ba983bcc` |
+| #5 | `20261012172122-e5a5e97e` | `20261013022045-487d12ed` |
+| #6 | `20261012173846-01c899df` | `20261013024032-e3ea02da` |
+| #7 | `20261012175611-e291172d` | `20261013025814-a1db3383` |
+| #8 | `20261012193337-2817edb7` | `20261013031549-76996256` |
+| #9 | `20261012172401-e3495925` | `20261013022336-db7a8bd7` |
+| #10 | `20261012163248-11a97e56` | `20261013012546-c492e2c1` |
+| #11 | `20261012165157-39de49ae` | `20261013014413-788ab836` |
+| #12 | `20261012155722-74b7895f` | `20261013003858-bb546fd9` |
+<!-- /gateway-legs -->
+
 ## 7. End-to-end examples (validated flows)
 
 ### What you need on the client side
@@ -2054,6 +2135,7 @@ published artifacts is a manual browser print or a hand-edited table.
 | `docs/DEVELOPER_GUIDE.pdf`, `docs/ADMIN_GUIDE.pdf` | `python3 reference/gen_pdf.py` | the `.md` beside it |
 | the table of contents in this file (and in the Admin Guide) | `python3 reference/gen_toc.py docs/DEVELOPER_GUIDE.md` | that file's own headings |
 | §7.5's 12 one-line commands | `reference/run12_specs.json` | the same specs `reference/run-12.py` executes |
+| §6.8's cb vs ETE-Ext table and its two figures (`docs/img/gateway-*.png`) | `uv run --with matplotlib python reference/gen-gateway-legs.py <run.json> "ETE-Ext" <run.json> "cb"` | each leg's mirrored `run.json` + `report.ndjson`, and `model_prices.json` per gateway |
 | the tool-selection table in §2 and in the primer | `python3 reference/gen-shortlist-audit.py <run12.json> "<label>" …` | `span_report.ndjson` in each leg's mirror |
 | `docs/AutoBench.pptx`, `docs/AutoBench.pdf` | `docs/deck/.venv/bin/python docs/deck/make_autobench_pptx.py` (PDF via PowerPoint; `DECK_PDF_VIA=soffice` for LibreOffice) | `docs/results/v1.36-2026-10-12/` (12-run), `docs/results/v1.35-2026-10-04/` (plugin study), `docs/img/takeaways.json` + this guide |
 
