@@ -324,7 +324,7 @@ def test_compare_groups_by_gateway_and_model(tmp_path):
         (d / "report.ndjson").write_text("\n".join(json.dumps(r) for r in rows))
     out = {s["gateway"]: s for s in (ggc.summarize(k, g) for k, g in ggc.group(ggc.load_runs([tmp_path])).items())}
     assert out["cb"]["tasks"] == 2 and out["cb"]["lost"] == 1 and out["cb"]["pass"] == 0.5
-    assert out["cb"]["per_task"] is None                      # cb has no rates yet: unpriced
+    assert out["cb"]["per_task"] is None                      # m1 is not on cb's card: unpriced
     assert out["default"]["per_task"] == pytest.approx((100 * 2 + 10 * 8) / 1e6)
     assert "unpriced" in ggc.table(list(out.values()))
 

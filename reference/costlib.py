@@ -34,7 +34,7 @@ PLUGIN_LEGS = (6, 7, 8)
 def money(x):
     """Dollars at a precision that does not round a real cost to zero."""
     if x == 0:
-        return "$0"
+        return "$0.00"   # an exact zero is a real rate (e.g. a self-hosted gateway), not a rounding
     if x < 0.0001:
         return f"${x:.6f}"
     if x < 0.01:

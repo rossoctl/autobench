@@ -98,8 +98,8 @@ def tok(n):
 
 
 def usd(x):
-    """A dollar figure; an exact zero reads $0.00, as the gateway's own rate is."""
-    return "$0.00" if x == 0 else costlib.money(x)
+    """A dollar figure, as costlib renders it (an exact zero reads $0.00)."""
+    return costlib.money(x)
 
 
 def secs(x):
