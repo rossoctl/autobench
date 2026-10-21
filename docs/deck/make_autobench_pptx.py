@@ -1073,7 +1073,8 @@ def s_gateway_ratio(d):
 def s_plugin_cost(d):
     # docs/results/v1.35-2026-10-04/plugin-study-xplat.md
     s = d.slide("What AuthBridge costs: almost all of it is the judge",
-                "Non-LLM seconds per task, steady state; the designed 13-leg study, n=50, v1.35")
+                "Non-LLM seconds per gsm8k task, steady state; the designed study's gsm8k legs, "
+                "n=50, two deploys each, v1.35")
     table(s, 0.45, 1.45, 7.0, [
         ["condition", "OpenShift", "KinD", "OCP step", "KinD step"],
         ["baseline (AuthBridge off)", "0.168", "0.097", "—", "—"],
@@ -1087,7 +1088,6 @@ def s_plugin_cost(d):
         ["which layer costs anything", "the judge", "the judge", "yes"],
         ["serial tool calls judged (p=1)", "10 / 10", "10 / 10", "yes"],
         ["judged / tool-call ratio, n=50", "0.94–1.00", "0.96–1.02", "yes"],
-        ["tau2 measured / projected", "1.66×", "2.01×", "partly"],
     ], [2.9, 1.4, 1.4, 1.3], size=12, row_h=0.46)
     card(s, 7.7, 1.45, 5.18, 1.55, "The judge is the cost, on both clusters",
          ["+1.36 s/task on OpenShift, +1.48 s on KinD. The sidecar's presence costs 0.03–0.05 s, "
@@ -1095,6 +1095,12 @@ def s_plugin_cost(d):
     warn(s, 7.7, 3.2, 5.18, 1.3, "Still name the cluster", [
         "The between-deploy noise floor is 0.02 s on OpenShift and 0.12 s on KinD, and ~0.26 s "
         "of each judged call on KinD is the node's DNS being retried."], size=12)
+    # docs/results/v1.35-2026-10-04/plugin-study-{ocp,kind}.md, "the tau2 linearity test" (#112/#113).
+    # The ratio itself (1.66x / 2.01x) is instance-specific, so the slide states the lesson instead.
+    warn(s, 7.7, 4.7, 5.18, 1.75, "gsm8k does not predict a harder benchmark", [
+        "AuthBridge's cost on a more complex benchmark cannot be estimated well from gsm8k: on "
+        "tau2, scaling gsm8k's cost per tool call under-shot the measured cost on both "
+        "clusters. Measure the benchmark itself: two legs, AuthBridge off and on."], size=12)
 
 
 def s_plugin_trust(d):
