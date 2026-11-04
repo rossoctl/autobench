@@ -354,5 +354,6 @@ def test_gateway_legs_block_prices_cb_at_zero_and_names_no_url():
 
 def test_cb_models_carry_a_zero_rate_card():
     for m in ("openai/rits/zai-org/glm-5-3",
-              "openai/rits/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4"):
+              "openai/rits/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4",
+              "openai/rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"):
         assert costlib.cost(m, 1e6, 1e6, "cb") == 0.0
